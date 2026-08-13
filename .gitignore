@@ -5,7 +5,11 @@
 /.pnp
 .pnp.js
 .yarn/install-state.gz
-env.ts
+# NOTE: a bare `env.ts` used to be ignored here (another leftover from the same
+# scaffold as the `/tests/` note below). It silently excluded src/config/env.ts —
+# the env schema every module imports — so a fresh clone could not build. Secrets
+# live in `.env`, which is ignored further down; env.ts itself is source.
+
 # testing
 /coverage
 
