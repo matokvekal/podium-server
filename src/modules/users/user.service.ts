@@ -1,0 +1,65 @@
+import type { AuthProviderType, User } from "../../db/types.js";
+import { logger } from "../../lib/logger.js";
+import {
+  insertUserWithIdentity,
+  selectIdentity,
+  selectUserById,
+  updateIdentityLastUsed,
+  updateUserLastLogin,
+  updateUserProfile,
+} from "./user.queries.js";
+
+export async function findUserByIdentity(
+  provider: AuthProviderType,
+  providerUserId: string,
+): Promise<User | null> {
+  const identity = await selectIdentity(provider, providerUserId);
+  if (!identity) return null;
+  return selectUserById(identity.userId);
+}
+
+export function createUserWithIdentity(input: {
+  provider: AuthProviderType;
+  providerUserId: string;
+  email: string | null;
+  phone: string | null;
+}): Promise<User> {
+  return insertUserWithIdentity({ ...input, now: new Date() });
+}
+
+export async function touchLastLogin(userId: number): Promise<User> {
+  const user = await updateUserLastLogin(userId, new Date());
+  if (!user) throw new Error(`touchLastLogin: user ${userId} not found`);
+  return user;
+}
+
+export function touchIdentityLastUsed(
+  provider: AuthProviderType,
+  providerUserId: string,
+): Promise<void> {
+  return updateIdentityLastUsed(provider, providerUserId, new Date());
+}
+
+/** True when required profile fields are missing. emergencyPhone is intentionally excluded. */
+export function needsProfile(user: User): boolean {
+  return !user.firstName || !user.lastName || !user.nickname;
+}
+
+export async function updateProfile(
+  userId: number,
+  input: Partial<Pick<User, "firstName" | "lastName" | "nickname" | "emergencyPhone">>,
+): Promise<User> {
+  const user = await updateUserProfile(userId, {
+    firstName: input.firstName ?? undefined,
+    lastName: input.lastName ?? undefined,
+    nickname: input.nickname ?? undefined,
+    emergencyPhone: input.emergencyPhone ?? undefined,
+  });
+  if (!user) throw new Error(`updateProfile: user ${userId} not found`);
+  logger.info({ userId, fields: Object.keys(input) }, "profile updated");
+  return user;
+}
+
+export function findUserById(userId: number): Promise<User | null> {
+  return selectUserById(userId);
+}

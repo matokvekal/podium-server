@@ -1,0 +1,10 @@
+{
+  // Build config: src only, emitted flat into dist/ so `node dist/server.js` works.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}
