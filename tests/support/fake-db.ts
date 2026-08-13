@@ -262,6 +262,15 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     row.updated_at = at;
     return [row];
   }
+  // ⚠ TEMPORARY: supports the developer sign-in — remove with it (see README.md).
+  if (sql.startsWith("UPDATE users SET role")) {
+    const [id, role] = p as [number, Role];
+    const row = users.find((u) => u.id === id);
+    if (!row) return [];
+    row.role = role;
+    row.updated_at = new Date();
+    return [row];
+  }
   if (sql.startsWith("UPDATE users SET first_name")) {
     const [id, firstName, lastName, nickname, emergencyPhone] = p as [
       number,

@@ -118,6 +118,7 @@ does on Docker Desktop.
 | `AUTH_PROVIDERS`         | no               | Comma-separated, defaults to `GOOGLE`. Controls both `GET /auth/config` and which providers' endpoints accept requests. |
 | `CORS_ORIGINS`           | yes              | Comma-separated allowed browser origins for the web dashboard.           |
 | `LOG_LEVEL`              | no               | Pino level, defaults to `info`.                                          |
+| `DEV_LOGIN_ENABLED`      | no               | ⚠ **Temporary.** Defaults to on outside production, and is forced off when `NODE_ENV=production`. Enables `POST /auth/dev-login`, a passwordless sign-in as a fake user. [Delete it before production](#-developer-sign-in--temporary-delete-before-production). |
 
 Startup fails fast (`process.exit(1)`) on invalid config: unknown `AUTH_PROVIDERS` values, or
 missing/short `JWT_*_SECRET` in production.
@@ -182,7 +183,8 @@ Google/SMS only establish identity; they are never accepted by any other route.
 
 1. `GET /api/v1/auth/config` — public. Returns `{ "providers": ["GOOGLE", "SMS"] }` (whatever's
    enabled via `AUTH_PROVIDERS`). Clients call this before rendering the login screen and only
-   show the returned methods.
+   show the returned methods. It also carries `devLogin: true` while the temporary developer
+   sign-in is live — see [Developer sign-in](#-developer-sign-in--temporary-delete-before-production).
 2. `POST /api/v1/auth/google` — body `{ "idToken": "<google-id-token>" }`. Verifies the token once,
    finds-or-creates the user, returns `{ user, accessToken, refreshToken, requiresProfile }`.
 3. `POST /api/v1/auth/sms/request` — body `{ "phone": "+15551234567" }` (E.164). Returns
@@ -213,6 +215,45 @@ Google/SMS only establish identity; they are never accepted by any other route.
 New users always get `role: "RIDER"`; there's no client-controlled path to `COMMISSAIRE` — promote
 a user by editing the database directly until a real admin flow exists. A disabled account
 (`users.is_active = false`) is rejected at sign-in and at refresh time.
+
+## ⚠ Developer sign-in — TEMPORARY, DELETE BEFORE PRODUCTION
+
+`POST /api/v1/auth/dev-login` signs in as a fake user **with no credential of any kind** and
+returns the same real `{ user, accessToken, refreshToken, requiresProfile }` as a genuine
+sign-in. It exists so the web client can be worked on without a Google client id or a real
+phone, and for nothing else.
+
+Body (both optional): `{ "role": "COMMISSAIRE" | "RIDER", "key": "<slug>" }` — defaults
+`COMMISSAIRE` and `default`. Each `key` maps to its own fake account
+(`auth_identities.provider = 'EMAIL_PASSWORD'`, `provider_user_id = 'dev-<key>'`, no password
+hash), so two developers — or a commissaire and a rider in two browsers — do not share one
+user. The fake user's profile is filled in automatically so it lands in the app rather than the
+profile-setup screen.
+
+It is off in production three times over: `DEV_LOGIN_ENABLED` is forced to `false` when
+`NODE_ENV=production` (`src/config/env.ts`), the `requireDevLoginEnabled` guard 404s the route,
+and the service re-checks before minting a session. `GET /auth/config` reports
+`devLogin: true` only when it is live, which is how the client decides whether to show the
+button. Set `DEV_LOGIN_ENABLED=false` to switch it off in development too.
+
+**None of that is a substitute for deleting it.** Removal checklist — server:
+
+- `src/modules/auth/auth.routes.ts` — the `/dev-login` route
+- `src/modules/auth/auth.controller.ts` — `devLogin`, and `devLogin` from the `config` response
+- `src/modules/auth/auth.service.ts` — `authenticateAsDevUser`
+- `src/modules/auth/auth.schemas.ts` — `devLoginSchema`
+- `src/modules/auth/auth-providers.ts` — `requireDevLoginEnabled`
+- `src/config/env.ts` — `DEV_LOGIN_ENABLED`, its production override and its startup warning
+- `src/modules/users/user.service.ts` / `user.queries.ts` — `setUserRole` / `updateUserRole`
+- `.env`, `.env.example` — the `DEV_LOGIN_ENABLED` entry
+- delete the fake rows:
+  `DELETE FROM users WHERE id IN (SELECT user_id FROM auth_identities WHERE provider_user_id LIKE 'dev-%');`
+
+and client (`podium-client`):
+
+- `src/pages/LoginPage.tsx` — the developer sign-in block, `devSignIn`, `serverDevLogin`
+- `src/auth/AuthContext.tsx` — `signInAsDevUser`
+- `src/lib/config.ts` — `devLoginEnabled`
 
 ## Testing and quality
 

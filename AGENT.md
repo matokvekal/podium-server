@@ -108,6 +108,19 @@ checks that cannot be automated here — with the **real Android app**:
 
 Check 3 is the one that catches timestamp regressions.
 
+## ⚠ Temporary code that must be deleted before production
+
+`POST /api/v1/auth/dev-login` is a passwordless sign-in as a fake user, added purely so the
+web client can be developed without a Google client id or a real phone. It issues **real**
+sessions. It is disabled in production by `NODE_ENV` and by the `requireDevLoginEnabled`
+guard, but it is still a door that should not exist in a shipped build.
+
+Every piece of it is commented `TEMPORARY DEVELOPMENT AID — DELETE BEFORE PRODUCTION`, and
+the full removal checklist (server **and** client) is in
+[README.md > Developer sign-in](README.md#-developer-sign-in--temporary-delete-before-production).
+If you are preparing a production release, work through that checklist first. Do not build
+anything else on top of it.
+
 ## What this server does not do yet
 
 Event ownership (`events` still has no `owner_id` in the live database), per-event roles,
