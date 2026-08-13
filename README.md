@@ -108,7 +108,7 @@ does on Docker Desktop.
 
 | Variable                | Required        | Notes                                                                 |
 | ------------------------ | ---------------- | ------------------------------------------------------------------------ |
-| `PORT`                   | no               | Defaults to `5000`                                                       |
+| `PORT`                   | no               | `.env.example` sets `6500`. The built-in fallback if the variable is absent entirely is still `5000` (`src/config/env.ts`). |
 | `DATABASE_URL`           | no*              | Postgres connection string. *Required for any `/api/v1/auth/*` or `/api/v1/users/*` route to work. Defaults in `.env.example` to the Docker container: `postgresql://podium:podium@localhost:5432/podium`. |
 | `JWT_ACCESS_SECRET`      | yes in production | Min 32 chars. Insecure dev default used automatically outside production. Signs the access token only — refresh tokens are opaque random values, not JWTs, so there's no `JWT_REFRESH_SECRET`. |
 | `JWT_ACCESS_EXPIRES_IN`  | no               | Defaults to `15m`.                                                       |
@@ -151,7 +151,7 @@ npm run db:psql   # psql shell inside the container
 the server really reached the container — the code comes from `sql/seed.sql`:
 
 ```bash
-curl http://localhost:5000/api/v1/events/by-code/74291
+curl http://localhost:6500/api/v1/events/by-code/74291
 ```
 
 ## Database
