@@ -1,4 +1,5 @@
-import type { AuthProviderType, User } from "../../db/types.js";
+import { env } from "../../config/env.js";
+import type { AuthProviderType, Role, User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
 import { verifyGoogleIdToken } from "../../lib/google-auth.js";
 import { signAccessToken } from "../../lib/jwt.js";
@@ -9,8 +10,10 @@ import {
   findUserById,
   findUserByIdentity,
   needsProfile,
+  setUserRole,
   touchIdentityLastUsed,
   touchLastLogin,
+  updateProfile,
 } from "../users/user.service.js";
 import {
   findSessionByRefreshToken,
@@ -93,6 +96,56 @@ export async function verifySmsOtp(
 ): Promise<AuthResult> {
   const phone = await verifyOtp(challengeId, code);
   const user = await resolveUser("SMS", phone, null, phone);
+  return buildAuthResult(user, context);
+}
+
+/**
+ * ⚠ TEMPORARY DEVELOPMENT AID — DELETE BEFORE PRODUCTION.
+ * See README.md > Developer sign-in for the full removal checklist.
+ *
+ * Signs in as a fake user with no credential of any kind, and returns exactly the same
+ * AuthResult as a real sign-in: a genuine access token and a genuine session row. That is
+ * the point — the rest of the app then behaves identically to a real login, so nothing
+ * downstream needs a "pretend" code path.
+ *
+ * The route is unreachable in production (see requireDevLoginEnabled); this second check
+ * exists because the cost of it being wrong is an open door to every account.
+ */
+export async function authenticateAsDevUser(
+  input: { role: Role; key: string },
+  context: SessionContext,
+): Promise<AuthResult> {
+  if (!env.DEV_LOGIN_ENABLED || env.NODE_ENV === "production") {
+    throw new ApiError(404, "Not found");
+  }
+
+  // EMAIL_PASSWORD with no password hash: it cannot collide with a real GOOGLE or SMS
+  // identity, and it is inert — no other code path can authenticate this identity.
+  const providerUserId = `dev-${input.key.toLowerCase()}`;
+  let user = await resolveUser(
+    "EMAIL_PASSWORD",
+    providerUserId,
+    `${providerUserId}@podium.local`,
+    null,
+  );
+
+  // Fill the profile so the fake user lands in the app instead of the profile-setup screen.
+  if (needsProfile(user)) {
+    user = await updateProfile(user.id, {
+      firstName: "Dev",
+      lastName: input.key === "default" ? "User" : input.key,
+      nickname: providerUserId,
+    });
+  }
+
+  if (user.role !== input.role) {
+    user = await setUserRole(user.id, input.role);
+  }
+
+  logger.warn(
+    { userId: user.id, role: user.role, key: input.key },
+    "DEV LOGIN USED — passwordless sign-in, development only",
+  );
   return buildAuthResult(user, context);
 }
 

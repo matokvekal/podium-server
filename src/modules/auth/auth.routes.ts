@@ -3,6 +3,7 @@ import { rateLimit } from "express-rate-limit";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import {
   config,
+  devLogin,
   google,
   logout,
   logoutAll,
@@ -10,7 +11,7 @@ import {
   smsRequest,
   smsVerify,
 } from "./auth.controller.js";
-import { requireProviderEnabled } from "./auth-providers.js";
+import { requireDevLoginEnabled, requireProviderEnabled } from "./auth-providers.js";
 
 export const authRouter = Router();
 
@@ -38,3 +39,10 @@ authRouter.post("/sms/verify", smsVerifyLimiter, requireProviderEnabled("SMS"), 
 authRouter.post("/refresh", refresh);
 authRouter.post("/logout", requireAuth, logout);
 authRouter.post("/logout-all", requireAuth, logoutAll);
+
+// ⚠⚠⚠ TEMPORARY DEVELOPMENT AID — DELETE THIS BLOCK BEFORE PRODUCTION ⚠⚠⚠
+// Passwordless sign-in as a fake user. requireDevLoginEnabled 404s it unless
+// DEV_LOGIN_ENABLED is on AND NODE_ENV is not production, but the only way to be certain
+// it can never be reached is for this route to not exist.
+// Full removal checklist: README.md > Developer sign-in.
+authRouter.post("/dev-login", requireDevLoginEnabled, devLogin);

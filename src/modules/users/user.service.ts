@@ -1,4 +1,4 @@
-import type { AuthProviderType, User } from "../../db/types.js";
+import type { AuthProviderType, Role, User } from "../../db/types.js";
 import { logger } from "../../lib/logger.js";
 import {
   insertUserWithIdentity,
@@ -7,6 +7,7 @@ import {
   updateIdentityLastUsed,
   updateUserLastLogin,
   updateUserProfile,
+  updateUserRole,
 } from "./user.queries.js";
 
 export async function findUserByIdentity(
@@ -57,6 +58,17 @@ export async function updateProfile(
   });
   if (!user) throw new Error(`updateProfile: user ${userId} not found`);
   logger.info({ userId, fields: Object.keys(input) }, "profile updated");
+  return user;
+}
+
+/**
+ * ⚠ Used only by the TEMPORARY developer sign-in — DELETE BEFORE PRODUCTION along with it.
+ * See README.md > Developer sign-in.
+ */
+export async function setUserRole(userId: number, role: Role): Promise<User> {
+  const user = await updateUserRole(userId, role);
+  if (!user) throw new Error(`setUserRole: user ${userId} not found`);
+  logger.info({ userId, role }, "user role set");
   return user;
 }
 

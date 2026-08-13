@@ -1,11 +1,14 @@
 import type { NextFunction, Request, Response } from "express";
+import { env } from "../../config/env.js";
 import {
+  devLoginSchema,
   googleAuthSchema,
   refreshSchema,
   smsRequestSchema,
   smsVerifySchema,
 } from "./auth.schemas.js";
 import {
+  authenticateAsDevUser,
   authenticateWithGoogle,
   logoutAll as logoutAllSessions,
   logout as logoutSession,
@@ -79,5 +82,23 @@ export async function logoutAll(req: Request, res: Response, next: NextFunction)
 }
 
 export function config(_req: Request, res: Response) {
-  res.status(200).json({ providers: enabledAuthProviders });
+  // `devLogin` tells the client whether to offer the developer shortcut, so the button
+  // disappears by itself against any server that does not have it switched on.
+  // ⚠ Remove `devLogin` with the rest of the dev sign-in — see README.md.
+  res.status(200).json({ providers: enabledAuthProviders, devLogin: env.DEV_LOGIN_ENABLED });
+}
+
+/**
+ * ⚠ TEMPORARY DEVELOPMENT AID — DELETE BEFORE PRODUCTION. See README.md > Developer sign-in.
+ * Mounted behind requireDevLoginEnabled, which 404s unless dev login is on and this is not
+ * production.
+ */
+export async function devLogin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { role, key } = devLoginSchema.parse(req.body ?? {});
+    const result = await authenticateAsDevUser({ role, key }, sessionContext(req));
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
 }

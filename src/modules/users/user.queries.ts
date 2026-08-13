@@ -161,3 +161,16 @@ export async function updateUserProfile(
   );
   return rows[0] ? mapUser(rows[0]) : null;
 }
+
+/**
+ * ⚠ Written for the TEMPORARY developer sign-in — DELETE BEFORE PRODUCTION along with it.
+ * See README.md > Developer sign-in. There is deliberately no HTTP route that reaches this:
+ * role is not something a user may change about themselves.
+ */
+export async function updateUserRole(userId: number, role: Role): Promise<User | null> {
+  const rows = await query<UserRow>(
+    "UPDATE users SET role = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+    [userId, role],
+  );
+  return rows[0] ? mapUser(rows[0]) : null;
+}
