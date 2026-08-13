@@ -5,8 +5,29 @@ import { logger } from "./lib/logger.js";
 
 const app = createApp();
 
+// The listen callback fires even when the bind FAILED (server.listening === false,
+// address() === null), so it cannot be trusted as proof of a successful start. Without
+// the `error` handler below, a port clash printed "listening on port N" and then exited 0
+// as the event loop drained — a dead server that looked like a healthy one.
 const server = app.listen(env.PORT, () => {
+  if (!server.listening) return;
   logger.info(`Commissaire server listening on port ${env.PORT} (${env.NODE_ENV})`);
+});
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  // console, not logger: this is a startup fatal, and pino's file stream is async — a
+  // process.exit() here can discard a buffered log line. Matches config/env.ts.
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${env.PORT} is already in use — another server is still running.\n` +
+        `  Find it:  netstat -ano | findstr :${env.PORT}\n` +
+        `  Stop it:  taskkill /PID <pid> /F\n` +
+        `  Or start this one on a different port: PORT=6501 npm run serve`,
+    );
+  } else {
+    console.error(`HTTP server failed to start: ${err.code ?? ""} ${err.message}`);
+  }
+  process.exit(1);
 });
 
 async function shutdown(signal: string) {
