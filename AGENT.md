@@ -44,7 +44,25 @@ src/
     sms/     OTP challenge lifecycle and the SMS provider
 sql/                       the hand-owned schema. Run by hand, never by a tool
 tests/                     vitest, with an in-memory stand-in for the pool
+docker/postgres/Dockerfile local Postgres 17 with the fresh-database sql/ files baked in
+docker-compose.yml         `docker compose up -d db` — the local database, nothing else
 ```
+
+## The local database
+
+```bash
+docker compose up -d db     # Postgres 17 on localhost:5432, schema already applied
+docker compose down -v      # delete it, so the next `up` rebuilds from sql/
+docker exec -it podium-db psql -U podium -d podium
+```
+
+`podium` / `podium` / `podium`, and `.env.example` already carries the matching
+`DATABASE_URL`. The image bakes in the fresh-database order from `sql/README.md` (001→006,
+then `seed.sql`); `007` and the destructive `900` are deliberately excluded. Init scripts
+only run on an **empty** volume — a new `sql/` file needs a `COPY` line in the Dockerfile
+*and* `docker compose down -v`, or a hand-run `psql` against the running container. This is
+a convenience for local dev only; it does not make the schema tool-managed, and nothing
+about the "run by hand" rule for real databases changes.
 
 Every module has the same five files:
 
