@@ -71,6 +71,10 @@ const envSchema = z.object({
   // participant_tracks have not been written — losing a track is the one thing the design
   // exists to prevent.
   LOCATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+
+  // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
+  // On by default so it's visible without any setup; set to "false" to go quiet.
+  CONSOLE_TRACE: boolFlag(true),
 });
 
 const parsed = envSchema.safeParse(process.env);

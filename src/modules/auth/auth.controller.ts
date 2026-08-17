@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { env } from "../../config/env.js";
+import { traceLog } from "../../lib/trace-log.js";
 import {
   devLoginSchema,
   googleAuthSchema,
@@ -24,6 +25,7 @@ function sessionContext(req: Request): SessionContext {
 }
 
 export async function google(req: Request, res: Response, next: NextFunction) {
+  traceLog("auth.controller.google");
   try {
     const { idToken } = googleAuthSchema.parse(req.body);
     const result = await authenticateWithGoogle(idToken, sessionContext(req));
@@ -36,6 +38,7 @@ export async function google(req: Request, res: Response, next: NextFunction) {
 export async function smsRequest(req: Request, res: Response, next: NextFunction) {
   try {
     const { phone } = smsRequestSchema.parse(req.body);
+    traceLog("auth.controller.smsRequest", { phone });
     const result = await requestSmsOtp(phone, req.ip ?? null);
     res.status(200).json(result);
   } catch (err) {
@@ -46,6 +49,7 @@ export async function smsRequest(req: Request, res: Response, next: NextFunction
 export async function smsVerify(req: Request, res: Response, next: NextFunction) {
   try {
     const { challengeId, code } = smsVerifySchema.parse(req.body);
+    traceLog("auth.controller.smsVerify", { challengeId });
     const result = await verifySmsOtp(challengeId, code, sessionContext(req));
     res.status(200).json(result);
   } catch (err) {
@@ -54,6 +58,7 @@ export async function smsVerify(req: Request, res: Response, next: NextFunction)
 }
 
 export async function refresh(req: Request, res: Response, next: NextFunction) {
+  traceLog("auth.controller.refresh");
   try {
     const { refreshToken } = refreshSchema.parse(req.body);
     const tokens = await refreshTokens(refreshToken, sessionContext(req));
@@ -64,6 +69,7 @@ export async function refresh(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function logout(req: Request, res: Response, next: NextFunction) {
+  traceLog("auth.controller.logout", { sessionId: req.auth!.sessionId });
   try {
     await logoutSession(req.auth!.sessionId);
     res.status(204).send();
@@ -73,6 +79,7 @@ export async function logout(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function logoutAll(req: Request, res: Response, next: NextFunction) {
+  traceLog("auth.controller.logoutAll", { userId: req.auth!.userId });
   try {
     await logoutAllSessions(req.auth!.userId);
     res.status(204).send();
@@ -82,6 +89,7 @@ export async function logoutAll(req: Request, res: Response, next: NextFunction)
 }
 
 export function config(_req: Request, res: Response) {
+  traceLog("auth.controller.config");
   // `devLogin` tells the client whether to offer the developer shortcut, so the button
   // disappears by itself against any server that does not have it switched on.
   // ⚠ Remove `devLogin` with the rest of the dev sign-in — see README.md.
@@ -96,6 +104,7 @@ export function config(_req: Request, res: Response) {
 export async function devLogin(req: Request, res: Response, next: NextFunction) {
   try {
     const { role, key } = devLoginSchema.parse(req.body ?? {});
+    traceLog("auth.controller.devLogin", { role });
     const result = await authenticateAsDevUser({ role, key }, sessionContext(req));
     res.status(200).json(result);
   } catch (err) {

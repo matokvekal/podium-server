@@ -2,17 +2,24 @@ import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
+import { traceLog } from "../lib/trace-log.js";
 
 // Express 5 recognizes this by arity (4 params), so keep all four even though `next` is unused.
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  traceLog("middleware.errorHandler", {
+    method: req.method,
+    path: req.path,
+    errName: err instanceof Error ? err.name : typeof err,
+  });
   if (err instanceof ZodError) {
-    return res.status(400).json({ error: "Invalid request", details: err.flatten() });
+    const message = err.issues[0]?.message ?? "Invalid request";
+    return res.status(400).json({ error: "Invalid request", message, details: err.flatten() });
   }
 
   if (err instanceof ApiError) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: err.message, message: err.message });
   }
-  ////////
+
   logger.error({ err, path: req.path }, "Unhandled error");
-  res.status(500).json({ error: "Internal server error" });
+  res.status(500).json({ error: "Internal server error", message: "Internal server error" });
 }

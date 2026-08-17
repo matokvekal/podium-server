@@ -4,6 +4,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFakeDb, seedEvent, storedLocationPoints } from "./support/fake-db.js";
+import { haversineDistanceKm } from "../src/lib/geo.js";
 
 const mocks = vi.hoisted(() => ({
   verifyGoogleIdToken: vi.fn(),
@@ -267,5 +268,213 @@ describe("POST /api/v1/events/:eventId/locations/batch", () => {
       .post(`/api/v1/events/${RIDE_ID}/locations/batch`)
       .send({ participantId: 1, points: [] });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/v1/events/:eventId/live", () => {
+  async function createLiveEvent(app: ReturnType<typeof createApp>, ownerToken: string) {
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Live tracking test", visibility: "public" });
+    await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ showLiveLocations: true });
+    for (const status of ["published", "registration_open", "ready", "live"]) {
+      await request(app)
+        .patch(`/api/v1/events/${created.body.data.id}/status`)
+        .set("Authorization", `Bearer ${ownerToken}`)
+        .send({ status });
+    }
+    return created.body.data;
+  }
+
+  it("reports a rider's latest position and running distance after two batches", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-1");
+    const riderToken = await signIn(app, "live-rider-1");
+    const event = await createLiveEvent(app, ownerToken);
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+    const participantId = join.body.participantId as number;
+
+    const first = { lat: 32.08, lng: 34.78 };
+    const second = { lat: 32.09, lng: 34.79 };
+    await request(app)
+      .post(`/api/v1/events/${event.id}/locations/batch`)
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ participantId, points: [{ ...first, recordedAt: "2026-08-13T09:00:00.000Z" }] });
+    await request(app)
+      .post(`/api/v1/events/${event.id}/locations/batch`)
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ participantId, points: [{ ...second, recordedAt: "2026-08-13T09:05:00.000Z" }] });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.paused).toBe(false);
+    expect(res.body.data.riders).toHaveLength(1);
+    const rider = res.body.data.riders[0];
+    expect(rider.participantId).toBe(participantId);
+    expect(rider.lat).toBeCloseTo(second.lat);
+    expect(rider.lng).toBeCloseTo(second.lng);
+    expect(rider.distanceKm).toBeCloseTo(haversineDistanceKm(first, second), 5);
+  });
+
+  it("caps a non-owner's selection to 5 riders even if more are requested", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-2");
+    const event = await createLiveEvent(app, ownerToken);
+
+    const participantIds: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const riderToken = await signIn(app, `live-rider-cap-${i}`);
+      const join = await request(app)
+        .post("/api/v1/events/join")
+        .set("Authorization", `Bearer ${riderToken}`)
+        .send({ eventCode: event.code });
+      const participantId = join.body.participantId as number;
+      participantIds.push(participantId);
+      await request(app)
+        .post(`/api/v1/events/${event.id}/locations/batch`)
+        .set("Authorization", `Bearer ${riderToken}`)
+        .send({
+          participantId,
+          points: [{ lat: 32 + i * 0.001, lng: 34.7, recordedAt: "2026-08-13T09:00:00.000Z" }],
+        });
+    }
+
+    const viewerToken = await signIn(app, "live-viewer-cap");
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live?riders=${participantIds.join(",")}`)
+      .set("Authorization", `Bearer ${viewerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.riders.length).toBeLessThanOrEqual(5);
+  });
+
+  it("owner sees every rider, unrestricted", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-3");
+    const event = await createLiveEvent(app, ownerToken);
+
+    for (let i = 0; i < 6; i++) {
+      const riderToken = await signIn(app, `live-rider-owner-${i}`);
+      const join = await request(app)
+        .post("/api/v1/events/join")
+        .set("Authorization", `Bearer ${riderToken}`)
+        .send({ eventCode: event.code });
+      await request(app)
+        .post(`/api/v1/events/${event.id}/locations/batch`)
+        .set("Authorization", `Bearer ${riderToken}`)
+        .send({
+          participantId: join.body.participantId,
+          points: [{ lat: 32 + i * 0.001, lng: 34.7, recordedAt: "2026-08-13T09:00:00.000Z" }],
+        });
+    }
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(res.body.data.riders).toHaveLength(6);
+  });
+
+  it("returns nothing to a non-owner who hasn't selected any riders yet", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-4");
+    const event = await createLiveEvent(app, ownerToken);
+    const viewerToken = await signIn(app, "live-viewer-4");
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live`)
+      .set("Authorization", `Bearer ${viewerToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.riders).toHaveLength(0);
+  });
+
+  it("403s a non-owner when show_live_locations is off", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-5");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "No live sharing", visibility: "public" });
+    for (const status of ["published", "registration_open", "ready", "live"]) {
+      await request(app)
+        .patch(`/api/v1/events/${created.body.data.id}/status`)
+        .set("Authorization", `Bearer ${ownerToken}`)
+        .send({ status });
+    }
+
+    const viewerToken = await signIn(app, "live-viewer-5");
+    const res = await request(app)
+      .get(`/api/v1/events/${created.body.data.id}/live`)
+      .set("Authorization", `Bearer ${viewerToken}`);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("PATCH /api/v1/events/:eventId/pause", () => {
+  it("toggles isPaused and never rejects location ingest while paused", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "pause-owner-1");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Pausable" });
+    for (const status of ["published", "registration_open", "ready", "live"]) {
+      await request(app)
+        .patch(`/api/v1/events/${created.body.data.id}/status`)
+        .set("Authorization", `Bearer ${ownerToken}`)
+        .send({ status });
+    }
+
+    const paused = await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/pause`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ paused: true });
+    expect(paused.status).toBe(200);
+    expect(paused.body.data.isPaused).toBe(true);
+
+    const riderToken = await signIn(app, "pause-rider-1");
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: created.body.data.code });
+    const ingest = await request(app)
+      .post(`/api/v1/events/${created.body.data.id}/locations/batch`)
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({
+        participantId: join.body.participantId,
+        points: [{ lat: 32.1, lng: 34.8, recordedAt: "2026-08-13T09:00:00.000Z" }],
+      });
+    expect(ingest.status).toBe(200); // pause never drops or rejects real GPS ingest
+
+    const resumed = await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/pause`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ paused: false });
+    expect(resumed.body.data.isPaused).toBe(false);
+  });
+
+  it("400s pausing an event that isn't live", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "pause-owner-2");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Still a draft" });
+
+    const res = await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/pause`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ paused: true });
+    expect(res.status).toBe(400);
   });
 });

@@ -1,4 +1,0 @@
-# The Postgres image only needs sql/. Keep the build context small and secrets out of it.
-*
-!sql
-sql/README.md

@@ -1,15 +1,38 @@
-import type { Event, EventParticipant } from "../../db/types.js";
+import { randomUUID } from "node:crypto";
+import type {
+  DisplayMode,
+  Event,
+  EventParticipant,
+  EventStatus,
+  EventType,
+  EventVisibility,
+  RegistrationStatus,
+} from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
+import { haversineDistanceKm } from "../../lib/geo.js";
 import { logger } from "../../lib/logger.js";
-import { datePrefix, letterSuffix } from "./event-code.js";
+import { selectParticipantsForEvent } from "../participants/participants.queries.js";
 import {
+  insertEvent,
   insertLocationPoints,
   type LocationPointInput,
   selectActiveEventByCode,
+  selectEventById,
   selectEventCodesWithPrefix,
+  selectEventsForUser,
+  selectLastLocation,
+  selectLastLocationsForEvent,
+  selectLiveEventForOwner,
   selectParticipantForUser,
+  selectPublicEvents,
+  type UpdateEventInput,
+  updateEvent,
+  updateEventPaused,
+  updateEventStatus,
   upsertParticipant,
+  upsertParticipantLastLocation,
 } from "./event.queries.js";
+import { datePrefix, letterSuffix } from "./event-code.js";
 
 export async function findActiveEventByCode(code: string): Promise<Event | null> {
   return selectActiveEventByCode(code);
@@ -60,7 +83,10 @@ export async function joinEvent(
     throw new ApiError(400, "This event requires a bib number");
   }
 
-  const participant = await upsertParticipant({ eventId: event.id, userId, bib });
+  const initialStatus: RegistrationStatus = event.requiresApproval
+    ? "waiting_approval"
+    : "registered";
+  const participant = await upsertParticipant({ eventId: event.id, userId, bib, initialStatus });
   logger.info({ eventId: event.id, userId, participantId: participant.id }, "user joined event");
 
   return { event, participant };
@@ -73,11 +99,291 @@ export async function findParticipantForUser(
   return selectParticipantForUser(participantId, userId);
 }
 
+/**
+ * Ingest always writes the raw points; here we also keep participant_last_location current so
+ * GET /:eventId/live has something to read (see sql/005-tracking.sql — that table is the only
+ * one the live map queries). Only the batch's newest point moves the marker; distance travelled
+ * is a running total against whatever position was there before.
+ */
 export async function saveLocationBatch(
+  eventId: string,
   participantId: number,
   points: LocationPointInput[],
 ): Promise<number> {
   const saved = await insertLocationPoints(participantId, points);
+
+  const lastPoint = points.reduce((latest, point) =>
+    point.recordedAt.getTime() > latest.recordedAt.getTime() ? point : latest,
+  );
+  const prior = await selectLastLocation(eventId, participantId);
+  const priorDistance = prior?.distanceTravelledKm ?? 0;
+  const delta =
+    prior?.lat != null && prior?.lng != null
+      ? haversineDistanceKm(
+          { lat: prior.lat, lng: prior.lng },
+          { lat: lastPoint.lat, lng: lastPoint.lng },
+        )
+      : 0;
+  await upsertParticipantLastLocation(eventId, participantId, lastPoint, priorDistance + delta);
+
   logger.info({ participantId, saved }, "location batch saved");
   return saved;
+}
+
+// ---------------------------------------------------------------------------------------
+// Ownership, CRUD and the status workflow — milestone 2.
+// ---------------------------------------------------------------------------------------
+
+export function assertOwner(event: Event, userId: number): void {
+  if (event.ownerId !== userId) {
+    throw new ApiError(403, "Only the event owner may do this");
+  }
+}
+
+/** draft -> published -> registration_open -> ready -> live -> finished. Any non-terminal
+ * state may move to cancelled. finished and cancelled are terminal. */
+const ALLOWED_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
+  draft: ["published", "cancelled"],
+  published: ["registration_open", "cancelled"],
+  registration_open: ["ready", "cancelled"],
+  ready: ["live", "cancelled"],
+  live: ["finished", "cancelled"],
+  finished: [],
+  cancelled: [],
+};
+
+function isActiveForStatus(status: EventStatus): boolean {
+  return status !== "draft" && status !== "cancelled" && status !== "finished";
+}
+
+export async function createEvent(
+  ownerId: number,
+  input: {
+    name: string;
+    type: EventType;
+    requiresBib: boolean;
+    startsAt?: Date;
+    endsAt?: Date;
+    displayMode: DisplayMode;
+    visibility: EventVisibility;
+    description?: string;
+    location?: string;
+    requiresApproval: boolean;
+  },
+): Promise<Event> {
+  const code = await generateEventCode();
+  const event = await insertEvent({
+    id: randomUUID(),
+    code,
+    name: input.name,
+    type: input.type,
+    requiresBib: input.requiresBib,
+    startsAt: input.startsAt ?? null,
+    endsAt: input.endsAt ?? null,
+    ownerId,
+    displayMode: input.displayMode,
+    visibility: input.visibility,
+    description: input.description ?? null,
+    location: input.location ?? null,
+    requiresApproval: input.requiresApproval,
+  });
+  logger.info({ eventId: event.id, ownerId }, "event created");
+  return event;
+}
+
+export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past";
+
+const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
+
+export async function listMyEvents(userId: number, filter: EventsFilter): Promise<Event[]> {
+  const events = await selectEventsForUser(userId);
+  switch (filter) {
+    case "mine":
+      return events.filter((event) => event.ownerId === userId);
+    case "joined":
+      return events.filter((event) => event.ownerId !== userId);
+    case "upcoming":
+      return events.filter((event) => UPCOMING_STATUSES.includes(event.status));
+    case "live":
+      return events.filter((event) => event.status === "live");
+    case "past":
+      return events.filter((event) => event.status === "finished");
+    default:
+      return events;
+  }
+}
+
+export function listPublicEvents(limit: number, offset: number): Promise<Event[]> {
+  return selectPublicEvents(limit, offset);
+}
+
+/**
+ * Private events are visible only to their owner; public events to anyone, signed in or not
+ * — the home screen's guest browsing reads public events without an account, and tapping
+ * into one should not suddenly demand a login just to look.
+ */
+export async function getEventForViewer(eventId: string, viewerId: number | null): Promise<Event> {
+  const event = await selectEventById(eventId);
+  if (!event) throw new ApiError(404, "Event not found");
+  if (event.visibility === "private" && (viewerId === null || event.ownerId !== viewerId)) {
+    throw new ApiError(403, "This event is private");
+  }
+  return event;
+}
+
+export async function updateEventDetails(
+  eventId: string,
+  userId: number,
+  input: UpdateEventInput,
+): Promise<Event> {
+  const event = await selectEventById(eventId);
+  if (!event) throw new ApiError(404, "Event not found");
+  assertOwner(event, userId);
+  // Once live, general details are locked — only the Manage view (add/remove riders,
+  // pause/stop) may touch a live event, and a finished one is never editable again.
+  if (event.status === "live" || event.status === "finished") {
+    throw new ApiError(400, `Cannot edit event details while status is ${event.status}`);
+  }
+
+  const updated = await updateEvent(eventId, input);
+  if (!updated) throw new Error(`updateEventDetails: event ${eventId} not found after update`);
+  logger.info({ eventId, userId }, "event updated");
+  return updated;
+}
+
+/**
+ * Validates the transition graph and keeps is_active in sync. Callers that need to react to
+ * a specific transition (e.g. writing participant_tracks when an event finishes) do so by
+ * checking the returned event's status — see the tracking module.
+ */
+export async function changeEventStatus(
+  eventId: string,
+  userId: number,
+  nextStatus: EventStatus,
+): Promise<Event> {
+  const event = await selectEventById(eventId);
+  if (!event) throw new ApiError(404, "Event not found");
+  assertOwner(event, userId);
+
+  const allowed = ALLOWED_STATUS_TRANSITIONS[event.status];
+  if (!allowed.includes(nextStatus)) {
+    throw new ApiError(400, `Cannot move an event from ${event.status} to ${nextStatus}`);
+  }
+
+  if (nextStatus === "live") {
+    const existingLive = await selectLiveEventForOwner(userId);
+    if (existingLive && existingLive.id !== eventId) {
+      throw new ApiError(409, "You already have another event live — stop it first");
+    }
+  }
+
+  const finishedAt = nextStatus === "finished" ? new Date() : event.finishedAt;
+  const updated = await updateEventStatus(
+    eventId,
+    nextStatus,
+    isActiveForStatus(nextStatus),
+    finishedAt,
+  );
+  if (!updated) throw new Error(`changeEventStatus: event ${eventId} not found after update`);
+  logger.info({ eventId, userId, from: event.status, to: nextStatus }, "event status changed");
+  return updated;
+}
+
+/** Soft delete: events are kept forever (plan/02-database-schema.md retention table). */
+export function cancelEvent(eventId: string, userId: number): Promise<Event> {
+  return changeEventStatus(eventId, userId, "cancelled");
+}
+
+/** Pause/resume only ever changes is_paused — it never touches status, and never rejects or
+ * drops incoming location batches; it only freezes what GET /:eventId/live reports. */
+export async function pauseEvent(eventId: string, userId: number, paused: boolean): Promise<Event> {
+  const event = await selectEventById(eventId);
+  if (!event) throw new ApiError(404, "Event not found");
+  assertOwner(event, userId);
+  if (event.status !== "live") {
+    throw new ApiError(400, "Only a live event can be paused or resumed");
+  }
+  const updated = await updateEventPaused(eventId, paused);
+  if (!updated) throw new Error(`pauseEvent: event ${eventId} not found after update`);
+  logger.info({ eventId, userId, paused }, "event pause toggled");
+  return updated;
+}
+
+/**
+ * "Effectively over" without a cron job ever touching the real status — mirrors the
+ * display-only isPastDue calc EventDetailPage.tsx already does client-side, so every client
+ * agrees on the same answer instead of each recomputing it slightly differently.
+ */
+const ONGOING_STATUSES: EventStatus[] = ["published", "registration_open", "ready", "live"];
+
+export function computeEffectiveStatus(event: Event, now = new Date()): EventStatus {
+  if (
+    ONGOING_STATUSES.includes(event.status) &&
+    event.endsAt &&
+    event.endsAt.getTime() < now.getTime()
+  ) {
+    return "finished";
+  }
+  return event.status;
+}
+
+export const MAX_LIVE_RIDERS_FOR_VIEWER = 5;
+
+export interface LiveRider {
+  participantId: number;
+  name: string;
+  bib: string | null;
+  lat: number | null;
+  lng: number | null;
+  recordedAt: Date | null;
+  emergency: boolean;
+  distanceKm: number | null;
+}
+
+/**
+ * The owner sees every rider, unrestricted. Anyone else must pick specific riders (at most 5
+ * at a time — confirmed directly, firm) and sees nothing until they do; the server clamps
+ * rather than rejecting an over-long selection so the read never fails outright.
+ */
+export async function getLiveRiders(
+  eventId: string,
+  viewerId: number | null,
+  requestedRiderIds: number[] | null,
+): Promise<{ riders: LiveRider[]; paused: boolean }> {
+  const event = await getEventForViewer(eventId, viewerId); // 403s a private event for a stranger
+  const isOwner = viewerId !== null && event.ownerId === viewerId;
+
+  if (!isOwner && !event.showLiveLocations) {
+    throw new ApiError(403, "Live locations are not shared for this event");
+  }
+
+  let riderIds: number[] | null = requestedRiderIds;
+  if (!isOwner) {
+    riderIds = (requestedRiderIds ?? []).slice(0, MAX_LIVE_RIDERS_FOR_VIEWER);
+    if (riderIds.length === 0) {
+      return { riders: [], paused: event.isPaused };
+    }
+  }
+
+  const [locations, participants] = await Promise.all([
+    selectLastLocationsForEvent(eventId, riderIds),
+    selectParticipantsForEvent(eventId),
+  ]);
+  const participantById = new Map(participants.map((p) => [p.id, p]));
+
+  const riders: LiveRider[] = locations.map((loc) => {
+    const participant = participantById.get(loc.participantId);
+    return {
+      participantId: loc.participantId,
+      name: participant?.name ?? "Rider",
+      bib: participant?.bib ?? null,
+      lat: loc.lat,
+      lng: loc.lng,
+      recordedAt: loc.recordedAt,
+      emergency: loc.emergency,
+      distanceKm: loc.distanceTravelledKm,
+    };
+  });
+
+  return { riders, paused: event.isPaused };
 }

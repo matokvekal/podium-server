@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
+import { traceLog } from "../../lib/trace-log.js";
 import { updateProfileSchema } from "./user.schemas.js";
 import { findUserById, needsProfile, updateProfile } from "./user.service.js";
 
@@ -21,6 +22,7 @@ function toProfile(user: User) {
  * the rider yet. Additive to the frozen contract — the Android app does not call it.
  */
 export async function getMe(req: Request, res: Response, next: NextFunction) {
+  traceLog("user.controller.getMe", { userId: req.auth!.userId });
   try {
     const user = await findUserById(req.auth!.userId);
     if (!user) {
@@ -28,17 +30,18 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
       // is what is gone, so make them sign in again.
       throw new ApiError(401, "This account no longer exists");
     }
-    res.status(200).json(toProfile(user));
+    res.status(200).json({ data: toProfile(user) });
   } catch (err) {
     next(err);
   }
 }
 
 export async function updateMe(req: Request, res: Response, next: NextFunction) {
+  traceLog("user.controller.updateMe", { userId: req.auth!.userId });
   try {
     const input = updateProfileSchema.parse(req.body);
     const user = await updateProfile(req.auth!.userId, input);
-    res.status(200).json(toProfile(user));
+    res.status(200).json({ data: toProfile(user) });
   } catch (err) {
     next(err);
   }

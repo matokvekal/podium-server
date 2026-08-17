@@ -13,6 +13,43 @@ export type AuthProviderType = (typeof AUTH_PROVIDER_TYPES)[number];
 export const EVENT_TYPES = ["RIDE", "RACE"] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
+export const EVENT_STATUSES = [
+  "draft",
+  "published",
+  "registration_open",
+  "ready",
+  "live",
+  "finished",
+  "cancelled",
+] as const;
+export type EventStatus = (typeof EVENT_STATUSES)[number];
+
+export const EVENT_VISIBILITIES = ["public", "private"] as const;
+export type EventVisibility = (typeof EVENT_VISIBILITIES)[number];
+
+export const DISPLAY_MODES = ["standard", "competition"] as const;
+export type DisplayMode = (typeof DISPLAY_MODES)[number];
+
+export const REGISTRATION_STATUSES = [
+  "registered",
+  "waiting_approval",
+  "approved",
+  "rejected",
+] as const;
+export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
+
+export const ATTENDANCE_STATUSES = ["unknown", "present", "dns", "started"] as const;
+export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+
+export const RESULT_STATUSES = ["none", "finished", "dnf", "stopped", "unknown"] as const;
+export type ResultStatus = (typeof RESULT_STATUSES)[number];
+
+export const ROUTE_TYPES = ["road", "gravel", "mtb", "mixed"] as const;
+export type RouteType = (typeof ROUTE_TYPES)[number];
+
+export const ROUTE_SOURCES = ["gpx", "tcx", "geojson", "json", "drawn", "copied"] as const;
+export type RouteSource = (typeof ROUTE_SOURCES)[number];
+
 export interface User {
   id: number;
   firstName: string | null;
@@ -63,6 +100,24 @@ export interface Event {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+
+  ownerId: number | null;
+  displayMode: DisplayMode;
+  status: EventStatus;
+  visibility: EventVisibility;
+  description: string | null;
+  location: string | null;
+  finishedAt: Date | null;
+  requiresApproval: boolean; // self-join sets registration_status=waiting_approval instead of registered
+  isPaused: boolean; // live display frozen; never affects location ingest — see event.service.ts
+
+  // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
+  showEventInfo: boolean;
+  showParticipants: boolean;
+  showRoute: boolean;
+  showLiveLocations: boolean;
+  showHistoryLocations: boolean;
+  showResults: boolean;
 }
 
 export interface EventParticipant {
@@ -72,6 +127,107 @@ export interface EventParticipant {
   bib: string | null; // ⚠ sent by Android on join
   joinedAt: Date;
   leftAt: Date | null;
+
+  // For participants with no linked user account (manual entry, Excel import).
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  category: string | null;
+
+  // THREE INDEPENDENT AXES — do not merge. See plan/02-database-schema.md.
+  registrationStatus: RegistrationStatus;
+  attendanceStatus: AttendanceStatus;
+  resultStatus: ResultStatus;
+
+  finishedAt: Date | null;
+  finishPosition: number | null;
+}
+
+/** A point on a route or a saved track. `ele` is present only when the source data had it. */
+export interface TrackPoint {
+  lat: number;
+  lng: number;
+  ele?: number | null;
+}
+
+export interface RouteMarker {
+  lat: number;
+  lng: number;
+  label: string;
+  type?: "start" | "finish" | "feed" | "point";
+}
+
+/**
+ * Stored independently of any event so one route can serve many and be published to the
+ * public library. Everything from distanceKm down is computed once, at creation — never on
+ * read. See plan/08-routes-and-maps.md.
+ */
+export interface Route {
+  id: number;
+  ownerId: number | null;
+  name: string | null;
+  routeType: RouteType | null;
+  source: RouteSource | null;
+  distanceKm: number | null;
+  elevationM: number | null;
+  trackPoints: TrackPoint[] | null;
+  markers: RouteMarker[] | null;
+  /** Simplified geometry — what the public browser renders. Full geometry is trackPoints. */
+  previewPoints: TrackPoint[] | null;
+  pointCount: number | null;
+  isPublic: boolean;
+  placeName: string | null;
+  startLat: number | null;
+  startLon: number | null;
+  endLat: number | null;
+  endLon: number | null;
+  bboxMinLat: number | null;
+  bboxMinLon: number | null;
+  bboxMaxLat: number | null;
+  bboxMaxLon: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** A route attached to an event. Attaching copies nothing — this just points at the route. */
+export interface EventRoute {
+  id: number;
+  eventId: string;
+  routeId: number;
+  createdAt: Date;
+}
+
+/**
+ * Where one rider is *right now*. Upserted on every location batch; only a newer point may
+ * overwrite. This is the only table the live map reads.
+ */
+export interface ParticipantLastLocation {
+  eventId: string;
+  participantId: number;
+  recordedAt: Date | null;
+  lat: number | null;
+  lng: number | null;
+  accuracy: number | null;
+  emergency: boolean;
+  distanceTravelledKm: number | null;
+  updatedAt: Date;
+}
+
+/**
+ * Written once, when an event finishes: one rider's ride reduced to a simplified line. Never
+ * purged — this is what the History screen draws.
+ */
+export interface ParticipantTrack {
+  id: number;
+  eventId: string;
+  participantId: number;
+  points: TrackPoint[] | null;
+  pointCount: number | null;
+  distanceKm: number | null;
+  startedAt: Date | null;
+  endedAt: Date | null;
+  hadEmergency: boolean;
+  createdAt: Date;
 }
 
 export interface OtpChallenge {

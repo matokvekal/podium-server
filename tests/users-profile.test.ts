@@ -50,9 +50,9 @@ describe("PATCH /api/v1/users/me", () => {
       .set("Authorization", `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.id).toEqual(expect.any(Number));
-    expect(res.body.role).toBe("RIDER");
-    expect(res.body.requiresProfile).toBe(true);
+    expect(res.body.data.id).toEqual(expect.any(Number));
+    expect(res.body.data.role).toBe("RIDER");
+    expect(res.body.data.requiresProfile).toBe(true);
   });
 
   it("starts with requiresProfile true and flips to false once fields are complete", async () => {
@@ -64,16 +64,16 @@ describe("PATCH /api/v1/users/me", () => {
       .set("Authorization", `Bearer ${accessToken}`)
       .send({ firstName: "Ada" });
     expect(partial.status).toBe(200);
-    expect(partial.body.requiresProfile).toBe(true);
+    expect(partial.body.data.requiresProfile).toBe(true);
 
     const complete = await request(app)
       .patch("/api/v1/users/me")
       .set("Authorization", `Bearer ${accessToken}`)
       .send({ lastName: "Lovelace", nickname: "Ada" });
     expect(complete.status).toBe(200);
-    expect(complete.body.requiresProfile).toBe(false);
-    expect(complete.body.firstName).toBe("Ada");
-    expect(complete.body.lastName).toBe("Lovelace");
+    expect(complete.body.data.requiresProfile).toBe(false);
+    expect(complete.body.data.firstName).toBe("Ada");
+    expect(complete.body.data.lastName).toBe("Lovelace");
   });
 
   it("leaves emergencyPhone optional", async () => {
@@ -86,7 +86,7 @@ describe("PATCH /api/v1/users/me", () => {
       .send({ firstName: "Ada", lastName: "Lovelace", nickname: "Ada" });
 
     expect(res.status).toBe(200);
-    expect(res.body.requiresProfile).toBe(false);
-    expect(res.body.emergencyPhone).toBeNull();
+    expect(res.body.data.requiresProfile).toBe(false);
+    expect(res.body.data.emergencyPhone).toBeNull();
   });
 });

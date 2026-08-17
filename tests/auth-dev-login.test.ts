@@ -53,7 +53,7 @@ describe("developer sign-in (temporary)", () => {
       .get("/api/v1/users/me")
       .set("Authorization", `Bearer ${res.body.accessToken}`);
     expect(me.status).toBe(200);
-    expect(me.body.role).toBe("COMMISSAIRE");
+    expect(me.body.data.role).toBe("COMMISSAIRE");
   });
 
   it("honours the requested role", async () => {

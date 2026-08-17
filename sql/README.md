@@ -15,6 +15,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 ```
 001-init.sql   002-events-podium.sql   003-participants.sql
 004-routes.sql 005-tracking.sql        006-client-actions.sql
+008-registration-and-live.sql
 ```
 
 007 is already included in 001 — skip it.
@@ -29,6 +30,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 005-tracking.sql
 006-client-actions.sql
 007-users-avatar.sql
+008-registration-and-live.sql
 ```
 
 Skip 001 — those tables already exist.
@@ -44,6 +46,7 @@ Skip 001 — those tables already exist.
 | `005-tracking.sql` | `participant_last_location`, `participant_tracks` | yes — new tables |
 | `006-client-actions.sql` | offline de-duplication | yes — new table |
 | `007-users-avatar.sql` | `users.avatar_url` | yes — additive |
+| `008-registration-and-live.sql` | `requires_approval`, `is_paused`, one-live-event-per-owner index | yes — additive |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

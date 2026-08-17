@@ -12,6 +12,19 @@
 type Role = "RIDER" | "COMMISSAIRE";
 type AuthProviderType = "GOOGLE" | "SMS" | "EMAIL_PASSWORD";
 type EventType = "RIDE" | "RACE";
+type EventStatus =
+  | "draft"
+  | "published"
+  | "registration_open"
+  | "ready"
+  | "live"
+  | "finished"
+  | "cancelled";
+type EventVisibility = "public" | "private";
+type DisplayMode = "standard" | "competition";
+type RegistrationStatus = "registered" | "waiting_approval" | "approved" | "rejected";
+type AttendanceStatus = "unknown" | "present" | "dns" | "started";
+type ResultStatus = "none" | "finished" | "dnf" | "stopped" | "unknown";
 
 interface UserRow {
   id: number;
@@ -75,6 +88,33 @@ interface EventRow {
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
+  owner_id: number | null;
+  display_mode: DisplayMode;
+  status: EventStatus;
+  visibility: EventVisibility;
+  description: string | null;
+  location: string | null;
+  finished_at: Date | null;
+  requires_approval: boolean;
+  is_paused: boolean;
+  show_event_info: boolean;
+  show_participants: boolean;
+  show_route: boolean;
+  show_live_locations: boolean;
+  show_history_locations: boolean;
+  show_results: boolean;
+}
+
+interface ParticipantLastLocationRow {
+  event_id: string;
+  participant_id: number;
+  recorded_at: Date | null;
+  lat: number | null;
+  lng: number | null;
+  accuracy: number | null;
+  emergency: boolean;
+  distance_travelled_km: number | null;
+  updated_at: Date;
 }
 
 interface EventParticipantRow {
@@ -84,6 +124,15 @@ interface EventParticipantRow {
   bib: string | null;
   joined_at: Date;
   left_at: Date | null;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  category: string | null;
+  registration_status: RegistrationStatus;
+  attendance_status: AttendanceStatus;
+  result_status: ResultStatus;
+  finished_at: Date | null;
+  finish_position: number | null;
 }
 
 interface LocationPointRow {
@@ -104,6 +153,7 @@ const otpChallenges: OtpChallengeRow[] = [];
 const events: EventRow[] = [];
 const eventParticipants: EventParticipantRow[] = [];
 const locationPoints: LocationPointRow[] = [];
+const participantLastLocations: ParticipantLastLocationRow[] = [];
 
 const nextId = {
   user: 1,
@@ -122,6 +172,7 @@ export function resetFakeDb() {
   events.length = 0;
   eventParticipants.length = 0;
   locationPoints.length = 0;
+  participantLastLocations.length = 0;
   nextId.user = 1;
   nextId.identity = 1;
   nextId.session = 1;
@@ -130,7 +181,11 @@ export function resetFakeDb() {
   nextId.point = 1;
 }
 
-/** Test-only helper: there is no create-event endpoint yet (milestone 2). */
+/**
+ * Test-only helper for seeding an event directly, without going through POST /events — handy
+ * for tests that are about something downstream of event creation (joining, location ingest)
+ * rather than creation itself.
+ */
 export function seedEvent(input: {
   id: string;
   code: string;
@@ -138,8 +193,12 @@ export function seedEvent(input: {
   type?: EventType;
   requiresBib?: boolean;
   isActive?: boolean;
+  ownerId?: number | null;
+  status?: EventStatus;
+  visibility?: EventVisibility;
 }): EventRow {
   const now = new Date();
+  const isActive = input.isActive ?? true;
   const row: EventRow = {
     id: input.id,
     code: input.code,
@@ -148,9 +207,24 @@ export function seedEvent(input: {
     requires_bib: input.requiresBib ?? false,
     starts_at: null,
     ends_at: null,
-    is_active: input.isActive ?? true,
+    is_active: isActive,
     created_at: now,
     updated_at: now,
+    owner_id: input.ownerId ?? null,
+    display_mode: "standard",
+    status: input.status ?? (isActive ? "published" : "draft"),
+    visibility: input.visibility ?? "private",
+    description: null,
+    location: null,
+    finished_at: null,
+    requires_approval: false,
+    is_paused: false,
+    show_event_info: true,
+    show_participants: false,
+    show_route: true,
+    show_live_locations: false,
+    show_history_locations: false,
+    show_results: true,
   };
   events.push(row);
   return row;
@@ -211,19 +285,31 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
   }
   if (sql.startsWith("UPDATE otp_challenges SET code_hash")) {
     const [id, codeHash] = p as [number, string];
-    const row = requireRow(otpChallenges.find((c) => c.id === id), "otp_challenges", id);
+    const row = requireRow(
+      otpChallenges.find((c) => c.id === id),
+      "otp_challenges",
+      id,
+    );
     row.code_hash = codeHash;
     return [row];
   }
   if (sql.startsWith("UPDATE otp_challenges SET attempt_count")) {
     const [id] = p as [number];
-    const row = requireRow(otpChallenges.find((c) => c.id === id), "otp_challenges", id);
+    const row = requireRow(
+      otpChallenges.find((c) => c.id === id),
+      "otp_challenges",
+      id,
+    );
     row.attempt_count += 1;
     return [row];
   }
   if (sql.startsWith("UPDATE otp_challenges SET consumed_at")) {
     const [id, consumedAt] = p as [number, Date];
-    const row = requireRow(otpChallenges.find((c) => c.id === id), "otp_challenges", id);
+    const row = requireRow(
+      otpChallenges.find((c) => c.id === id),
+      "otp_challenges",
+      id,
+    );
     row.consumed_at = consumedAt;
     return [row];
   }
@@ -397,13 +483,190 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     const [code] = p as [string];
     return events.filter((e) => e.code === code && e.is_active).slice(0, 1);
   }
+  if (sql.startsWith("SELECT * FROM events WHERE id")) {
+    const [id] = p as [string];
+    return events.filter((e) => e.id === id);
+  }
+  if (sql.startsWith("SELECT * FROM events WHERE owner_id")) {
+    const [ownerId] = p as [number];
+    return events.filter((e) => e.owner_id === ownerId && e.status === "live").slice(0, 1);
+  }
+  if (sql.startsWith("SELECT DISTINCT e.* FROM events e")) {
+    const [userId] = p as [number];
+    const joinedEventIds = new Set(
+      eventParticipants.filter((ep) => ep.user_id === userId).map((ep) => ep.event_id),
+    );
+    return events.filter(
+      (e) => (e.owner_id === userId || joinedEventIds.has(e.id)) && e.status !== "cancelled",
+    );
+  }
+  if (sql.startsWith("SELECT * FROM events WHERE visibility")) {
+    const [limit, offset] = p as [number, number];
+    return events
+      .filter((e) => e.visibility === "public" && e.status !== "cancelled" && e.status !== "draft")
+      .slice(offset, offset + limit);
+  }
   if (sql.startsWith("SELECT code FROM events WHERE code LIKE")) {
     const [pattern] = p as [string];
     const prefix = pattern.replace(/%$/, "");
     return events.filter((e) => e.code.startsWith(prefix)).map((e) => ({ code: e.code }));
   }
-  if (sql.startsWith("INSERT INTO event_participants")) {
-    const [eventId, userId, bib] = p as [string, number, string | null];
+  if (sql.startsWith("INSERT INTO events")) {
+    const [
+      id,
+      code,
+      name,
+      type,
+      requiresBib,
+      startsAt,
+      endsAt,
+      ownerId,
+      displayMode,
+      visibility,
+      description,
+      location,
+      requiresApproval,
+    ] = p as [
+      string,
+      string,
+      string,
+      EventType,
+      boolean,
+      Date | null,
+      Date | null,
+      number,
+      DisplayMode,
+      EventVisibility,
+      string | null,
+      string | null,
+      boolean,
+    ];
+    const now = new Date();
+    const row: EventRow = {
+      id,
+      code,
+      name,
+      type,
+      requires_bib: requiresBib,
+      starts_at: startsAt,
+      ends_at: endsAt,
+      is_active: false,
+      created_at: now,
+      updated_at: now,
+      owner_id: ownerId,
+      display_mode: displayMode,
+      status: "draft",
+      visibility,
+      description,
+      location,
+      finished_at: null,
+      requires_approval: requiresApproval,
+      is_paused: false,
+      show_event_info: true,
+      show_participants: false,
+      show_route: true,
+      show_live_locations: false,
+      show_history_locations: false,
+      show_results: true,
+    };
+    events.push(row);
+    return [row];
+  }
+  if (sql.startsWith("UPDATE events SET name = COALESCE")) {
+    const [
+      id,
+      name,
+      type,
+      requiresBib,
+      startsAt,
+      endsAt,
+      displayMode,
+      visibility,
+      description,
+      location,
+      showEventInfo,
+      showParticipants,
+      showRoute,
+      showLiveLocations,
+      showHistoryLocations,
+      showResults,
+      requiresApproval,
+    ] = p as [
+      string,
+      string | null,
+      EventType | null,
+      boolean | null,
+      Date | null,
+      Date | null,
+      DisplayMode | null,
+      EventVisibility | null,
+      string | null,
+      string | null,
+      boolean | null,
+      boolean | null,
+      boolean | null,
+      boolean | null,
+      boolean | null,
+      boolean | null,
+      boolean | null,
+    ];
+    const row = requireRow(
+      events.find((e) => e.id === id),
+      "events",
+      id,
+    );
+    row.name = name ?? row.name;
+    row.type = type ?? row.type;
+    row.requires_bib = requiresBib ?? row.requires_bib;
+    row.starts_at = startsAt ?? row.starts_at;
+    row.ends_at = endsAt ?? row.ends_at;
+    row.display_mode = displayMode ?? row.display_mode;
+    row.visibility = visibility ?? row.visibility;
+    row.description = description ?? row.description;
+    row.location = location ?? row.location;
+    row.show_event_info = showEventInfo ?? row.show_event_info;
+    row.show_participants = showParticipants ?? row.show_participants;
+    row.show_route = showRoute ?? row.show_route;
+    row.show_live_locations = showLiveLocations ?? row.show_live_locations;
+    row.show_history_locations = showHistoryLocations ?? row.show_history_locations;
+    row.show_results = showResults ?? row.show_results;
+    row.requires_approval = requiresApproval ?? row.requires_approval;
+    row.updated_at = new Date();
+    return [row];
+  }
+  if (sql.startsWith("UPDATE events SET is_paused")) {
+    const [id, isPaused] = p as [string, boolean];
+    const row = requireRow(
+      events.find((e) => e.id === id),
+      "events",
+      id,
+    );
+    row.is_paused = isPaused;
+    row.updated_at = new Date();
+    return [row];
+  }
+  if (sql.startsWith("UPDATE events SET status = $2")) {
+    const [id, status, isActive, finishedAt] = p as [string, EventStatus, boolean, Date | null];
+    const row = requireRow(
+      events.find((e) => e.id === id),
+      "events",
+      id,
+    );
+    row.status = status;
+    row.is_active = isActive;
+    row.finished_at = finishedAt;
+    row.updated_at = new Date();
+    return [row];
+  }
+  if (
+    sql.startsWith("INSERT INTO event_participants (event_id, user_id, bib, registration_status)")
+  ) {
+    const [eventId, userId, bib, initialStatus] = p as [
+      string,
+      number,
+      string | null,
+      RegistrationStatus,
+    ];
     const existing = eventParticipants.find(
       (row) => row.event_id === eventId && row.user_id === userId,
     );
@@ -419,13 +682,160 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       bib,
       joined_at: new Date(),
       left_at: null,
+      name: null,
+      email: null,
+      phone: null,
+      category: null,
+      registration_status: initialStatus,
+      attendance_status: "unknown",
+      result_status: "none",
+      finished_at: null,
+      finish_position: null,
     };
     eventParticipants.push(row);
     return [row];
   }
+  if (sql.startsWith("INSERT INTO event_participants (event_id, name")) {
+    const [eventId, name, email, phone, category, bib] = p as [
+      string,
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+    ];
+    const row: EventParticipantRow = {
+      id: nextId.participant++,
+      event_id: eventId,
+      user_id: null,
+      bib,
+      joined_at: new Date(),
+      left_at: null,
+      name,
+      email,
+      phone,
+      category,
+      registration_status: "approved",
+      attendance_status: "unknown",
+      result_status: "none",
+      finished_at: null,
+      finish_position: null,
+    };
+    eventParticipants.push(row);
+    return [row];
+  }
+  // More specific "WHERE id = $1 AND event_id" must be checked before the plain "WHERE id"
+  // branch below — the latter's prefix is a substring of the former's SQL text, and
+  // startsWith dispatch checks in order, so the narrower pattern has to win first.
+  if (sql.startsWith("SELECT * FROM event_participants WHERE id = $1 AND event_id")) {
+    const [id, eventId] = p as [number, string];
+    return eventParticipants.filter((row) => row.id === id && row.event_id === eventId);
+  }
   if (sql.startsWith("SELECT * FROM event_participants WHERE id")) {
     const [id, userId] = p as [number, number];
     return eventParticipants.filter((row) => row.id === id && row.user_id === userId);
+  }
+  if (sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 AND user_id")) {
+    const [eventId, userId] = p as [string, number];
+    return eventParticipants.filter((row) => row.event_id === eventId && row.user_id === userId);
+  }
+  if (sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 ORDER BY")) {
+    const [eventId] = p as [string];
+    return eventParticipants
+      .filter((row) => row.event_id === eventId)
+      .sort((a, b) => a.joined_at.getTime() - b.joined_at.getTime());
+  }
+  if (sql.startsWith("UPDATE event_participants SET name = COALESCE")) {
+    const [id, eventId, name, email, phone, category, bib] = p as [
+      number,
+      string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
+    ];
+    const row = eventParticipants.find((r) => r.id === id && r.event_id === eventId);
+    if (!row) return [];
+    row.name = name ?? row.name;
+    row.email = email ?? row.email;
+    row.phone = phone ?? row.phone;
+    row.category = category ?? row.category;
+    row.bib = bib ?? row.bib;
+    return [row];
+  }
+  if (sql.startsWith("UPDATE event_participants SET registration_status")) {
+    const [id, eventId, status] = p as [number, string, RegistrationStatus];
+    const row = eventParticipants.find((r) => r.id === id && r.event_id === eventId);
+    if (!row) return [];
+    row.registration_status = status;
+    return [row];
+  }
+  if (sql.startsWith("DELETE FROM event_participants WHERE id")) {
+    const [id, eventId] = p as [number, string];
+    const idx = eventParticipants.findIndex((r) => r.id === id && r.event_id === eventId);
+    if (idx === -1) return [];
+    const [removed] = eventParticipants.splice(idx, 1);
+    return [removed];
+  }
+
+  // ---- participant_last_location --------------------------------------------------------
+  if (
+    sql.startsWith("SELECT * FROM participant_last_location WHERE event_id = $1 AND participant_id")
+  ) {
+    const [eventId, participantId] = p as [string, number];
+    return participantLastLocations.filter(
+      (row) => row.event_id === eventId && row.participant_id === participantId,
+    );
+  }
+  if (sql.startsWith("SELECT * FROM participant_last_location WHERE event_id = $1 AND ($2")) {
+    const [eventId, riderIds] = p as [string, number[] | null];
+    return participantLastLocations
+      .filter(
+        (row) =>
+          row.event_id === eventId && (riderIds === null || riderIds.includes(row.participant_id)),
+      )
+      .sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime());
+  }
+  if (sql.startsWith("INSERT INTO participant_last_location")) {
+    const [eventId, participantId, recordedAt, lat, lng, accuracy, emergency, distanceKm] = p as [
+      string,
+      number,
+      Date,
+      number,
+      number,
+      number | null,
+      boolean,
+      number,
+    ];
+    const existing = participantLastLocations.find(
+      (row) => row.event_id === eventId && row.participant_id === participantId,
+    );
+    if (!existing) {
+      participantLastLocations.push({
+        event_id: eventId,
+        participant_id: participantId,
+        recorded_at: recordedAt,
+        lat,
+        lng,
+        accuracy,
+        emergency,
+        distance_travelled_km: distanceKm,
+        updated_at: new Date(),
+      });
+    } else if (
+      existing.recorded_at === null ||
+      existing.recorded_at.getTime() < recordedAt.getTime()
+    ) {
+      existing.recorded_at = recordedAt;
+      existing.lat = lat;
+      existing.lng = lng;
+      existing.accuracy = accuracy;
+      existing.emergency = emergency;
+      existing.distance_travelled_km = distanceKm;
+      existing.updated_at = new Date();
+    }
+    return [];
   }
 
   // ---- location_points ----------------------------------------------------
