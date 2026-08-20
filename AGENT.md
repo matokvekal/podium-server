@@ -1,5 +1,11 @@
 # Bike Podium server — start here
 
+> **Cross-repo lead-agent state lives here:** [TASKS.md](TASKS.md) (running task list)
+> and [CONTEXT.md](CONTEXT.md) (durable knowledge, verified API-contract findings).
+> They cover **both** `podium-server` and `podium-client` — they live in this repo only
+> because the workspace root is not under git. Agent definitions are in
+> `.claude/agents/`.
+
 Express 5 + TypeScript + PostgreSQL. **Live in production**, and the Android transmitter
 talks to it today.
 
