@@ -1,7 +1,22 @@
 import { Router } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
+import { deduplicateClientAction } from "../../middleware/clientActions.js";
 import { optionalAuth, requireAuth } from "../../middleware/requireAuth.js";
+import {
+  assignRidersHandler,
+  createGroupHandler,
+  deleteGroupHandler,
+  listGroupsHandler,
+  updateGroupHandler,
+} from "../groups/group.controller.js";
 import { participantsRouter } from "../participants/participants.routes.js";
+import {
+  getParticipantTrackHandler,
+  getResultsHandler,
+  getTracksHandler,
+} from "../results/results.controller.js";
+import { attachRouteHandler, detachRouteHandler } from "../routes/route.controller.js";
+import { linkEventTeamHandler } from "../teams/team.controller.js";
 import {
   cancelEventHandler,
   changeEventStatusHandler,
@@ -65,16 +80,62 @@ eventRouter.get("/:eventId/live", optionalAuth, liveLimiter, getLiveHandler);
 
 // Ownership, CRUD and the status workflow — milestone 2. "/public" is registered before the
 // single-segment "/:eventId" so a request for it is never swallowed by the param route.
-eventRouter.post("/", requireAuth, createEventHandler);
+//
+// deduplicateClientAction sits on the mutations below, never on the three frozen Android
+// endpoints above: join is idempotent by upsert and location ingest is idempotent by nature.
+eventRouter.post("/", requireAuth, deduplicateClientAction, createEventHandler);
 eventRouter.get("/", requireAuth, listEventsHandler);
 eventRouter.get("/public", listPublicEventsHandler);
 // Optional auth, not required: a public event is viewable by a stranger, same as its card
 // on the guest home screen. getEventForViewer still 403s a private event for anyone but its
 // owner — this only widens who is *allowed to ask*, not what a private event reveals.
 eventRouter.get("/:eventId", optionalAuth, getEventHandler);
-eventRouter.patch("/:eventId", requireAuth, updateEventHandler);
-eventRouter.patch("/:eventId/status", requireAuth, changeEventStatusHandler);
-eventRouter.patch("/:eventId/pause", requireAuth, pauseEventHandler);
-eventRouter.delete("/:eventId", requireAuth, cancelEventHandler);
+eventRouter.patch("/:eventId", requireAuth, deduplicateClientAction, updateEventHandler);
+eventRouter.patch(
+  "/:eventId/status",
+  requireAuth,
+  deduplicateClientAction,
+  changeEventStatusHandler,
+);
+eventRouter.patch("/:eventId/pause", requireAuth, deduplicateClientAction, pauseEventHandler);
+eventRouter.delete("/:eventId", requireAuth, deduplicateClientAction, cancelEventHandler);
+
+// Results and history. optionalAuth, same as the event detail: a public ride's results are
+// readable by anyone the organizer has opened them to, and getEventResults does the tiering.
+eventRouter.get("/:eventId/results", optionalAuth, getResultsHandler);
+eventRouter.get("/:eventId/tracks", optionalAuth, getTracksHandler);
+eventRouter.get("/:eventId/tracks/:participantId", optionalAuth, getParticipantTrackHandler);
+
+// The track an organizer picked, uploaded or copied from another ride. Owner-only: the route
+// itself lives in the routes module, this only says which one this event runs on.
+eventRouter.post("/:eventId/route", requireAuth, deduplicateClientAction, attachRouteHandler);
+eventRouter.delete("/:eventId/route", requireAuth, deduplicateClientAction, detachRouteHandler);
+
+// Ride groups: one event ridden as 2-4 groups. Reading follows the riders-list rules; every
+// mutation is owner-only.
+eventRouter.get("/:eventId/groups", optionalAuth, listGroupsHandler);
+eventRouter.post("/:eventId/groups", requireAuth, deduplicateClientAction, createGroupHandler);
+eventRouter.patch(
+  "/:eventId/groups/:groupId",
+  requireAuth,
+  deduplicateClientAction,
+  updateGroupHandler,
+);
+eventRouter.delete(
+  "/:eventId/groups/:groupId",
+  requireAuth,
+  deduplicateClientAction,
+  deleteGroupHandler,
+);
+// Bulk by design — the client has always assigned riders to a group many at a time.
+eventRouter.post(
+  "/:eventId/groups/assign",
+  requireAuth,
+  deduplicateClientAction,
+  assignRidersHandler,
+);
+
+// Links this ride into a team's schedule (or unlinks it with teamId: null).
+eventRouter.patch("/:eventId/team", requireAuth, deduplicateClientAction, linkEventTeamHandler);
 
 eventRouter.use("/:eventId/participants", participantsRouter);

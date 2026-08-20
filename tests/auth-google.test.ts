@@ -19,8 +19,15 @@ const GOOGLE_IDENTITY = {
   subject: "google-subject-1",
   email: "rider@example.com",
   emailVerified: true,
-  name: "Rider One",
+  firstName: "Rider",
+  lastName: "One",
+  displayName: "Rider One",
+  picture: "https://lh3.googleusercontent.com/a/rider-one",
 };
+
+function getMe(app: ReturnType<typeof createApp>, accessToken: string) {
+  return request(app).get("/api/v1/users/me").set("Authorization", `Bearer ${accessToken}`);
+}
 
 beforeEach(() => {
   resetFakeDb();
@@ -51,6 +58,70 @@ describe("POST /api/v1/auth/google", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(second.body.user.id).toBe(first.body.user.id);
+  });
+
+  it("stores the profile the ID token already carried, on the first sign-in", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue(GOOGLE_IDENTITY);
+    const app = createApp();
+
+    const signIn = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await getMe(app, signIn.body.accessToken);
+
+    expect(me.status).toBe(200);
+    expect(me.body.data.firstName).toBe("Rider");
+    expect(me.body.data.lastName).toBe("One");
+    expect(me.body.data.avatarUrl).toBe("https://lh3.googleusercontent.com/a/rider-one");
+    // `name` is not written to nickname on purpose — the rider still picks their own, so
+    // profile setup must still be required.
+    expect(me.body.data.nickname).toBeNull();
+    expect(me.body.data.requiresProfile).toBe(true);
+  });
+
+  it("leaves the fields NULL when Google sent no profile", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue({
+      subject: "google-subject-2",
+      email: "bare@example.com",
+      emailVerified: true,
+      firstName: null,
+      lastName: null,
+      displayName: null,
+      picture: null,
+    });
+    const app = createApp();
+
+    const signIn = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await getMe(app, signIn.body.accessToken);
+
+    expect(me.body.data.firstName).toBeNull();
+    expect(me.body.data.avatarUrl).toBeNull();
+    expect(me.body.data.requiresProfile).toBe(true);
+  });
+
+  it("never overwrites an existing user's profile on a later Google sign-in", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue(GOOGLE_IDENTITY);
+    const app = createApp();
+
+    const first = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+
+    // The rider renames themselves, then Google reports something different next time.
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${first.body.accessToken}`)
+      .send({ firstName: "Ada", lastName: "Lovelace", nickname: "ada" });
+
+    mocks.verifyGoogleIdToken.mockResolvedValue({
+      ...GOOGLE_IDENTITY,
+      firstName: "Renamed",
+      lastName: "ByGoogle",
+      picture: "https://lh3.googleusercontent.com/a/changed",
+    });
+    const second = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await getMe(app, second.body.accessToken);
+
+    expect(second.body.user.id).toBe(first.body.user.id);
+    expect(me.body.data.firstName).toBe("Ada");
+    expect(me.body.data.lastName).toBe("Lovelace");
+    expect(me.body.data.avatarUrl).toBe("https://lh3.googleusercontent.com/a/rider-one");
   });
 
   it("rejects an invalid Google ID token", async () => {

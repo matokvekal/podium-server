@@ -15,7 +15,9 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 ```
 001-init.sql   002-events-podium.sql   003-participants.sql
 004-routes.sql 005-tracking.sql        006-client-actions.sql
-008-registration-and-live.sql
+008-registration-and-live.sql          009-results.sql
+010-event-profile.sql                  011-client-action-results.sql
+012-ride-groups.sql                    013-teams-and-follows.sql
 ```
 
 007 is already included in 001 — skip it.
@@ -31,6 +33,11 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 006-client-actions.sql
 007-users-avatar.sql
 008-registration-and-live.sql
+009-results.sql
+010-event-profile.sql
+011-client-action-results.sql
+012-ride-groups.sql
+013-teams-and-follows.sql
 ```
 
 Skip 001 — those tables already exist.
@@ -47,6 +54,11 @@ Skip 001 — those tables already exist.
 | `006-client-actions.sql` | offline de-duplication | yes — new table |
 | `007-users-avatar.sql` | `users.avatar_url` | yes — additive |
 | `008-registration-and-live.sql` | `requires_approval`, `is_paused`, one-live-event-per-owner index | yes — additive |
+| `009-results.sql` | `event_participants.team` / `country_code`, finisher index | yes — additive |
+| `010-event-profile.sql` | `events.activity_type` / `level` / `organizer_group`, browse index | yes — additive |
+| `011-client-action-results.sql` | `client_actions.response_status` / `response_body` | yes — additive |
+| `012-ride-groups.sql` | `event_groups`, `event_participants.group_id` | yes — additive |
+| `013-teams-and-follows.sql` | `teams`, `team_members`, `user_follows`, `events.team_id` | yes — additive |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

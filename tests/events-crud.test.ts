@@ -122,7 +122,9 @@ describe("GET /api/v1/events/public", () => {
 });
 
 describe("GET /api/v1/events/:eventId", () => {
-  it("403s a private event for a non-owner", async () => {
+  // 404 rather than 403: a private event's id is shared as a link/QR and is itself the
+  // secret, so the reply must not distinguish "exists but not yours" from "does not exist".
+  it("404s a private event for someone with no participant row", async () => {
     const app = createApp();
     const ownerToken = await signIn(app, "owner-4");
     const otherToken = await signIn(app, "other-4");
@@ -135,7 +137,7 @@ describe("GET /api/v1/events/:eventId", () => {
     const res = await request(app)
       .get(`/api/v1/events/${created.body.data.id}`)
       .set("Authorization", `Bearer ${otherToken}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
   it("404s an unknown event", async () => {
@@ -163,7 +165,7 @@ describe("GET /api/v1/events/:eventId", () => {
     expect(res.body.data.isOwner).toBe(false);
   });
 
-  it("still 403s a private event for an anonymous viewer", async () => {
+  it("still hides a private event from an anonymous viewer", async () => {
     const app = createApp();
     const ownerToken = await signIn(app, "owner-7");
     const created = await request(app)
@@ -172,7 +174,210 @@ describe("GET /api/v1/events/:eventId", () => {
       .send({ name: "Private Event", visibility: "private" });
 
     const res = await request(app).get(`/api/v1/events/${created.body.data.id}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+  });
+
+  // These used to be stripped by zod (absent from createEventSchema), so the organizer's
+  // "riders can see the list" choice was lost until they happened to open Edit.
+  it("honours the visibility flags sent at create time", async () => {
+    const app = createApp();
+    const token = await signIn(app, "owner-flags");
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Open list", showParticipants: true, showRoute: false });
+
+    expect(created.body.data.showParticipants).toBe(true);
+    expect(created.body.data.showRoute).toBe(false);
+  });
+
+  it("leaves the column defaults alone for flags the form did not send", async () => {
+    const app = createApp();
+    const token = await signIn(app, "owner-flags-2");
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Defaults" });
+
+    expect(created.body.data.showEventInfo).toBe(true);
+    expect(created.body.data.showParticipants).toBe(false);
+    expect(created.body.data.showResults).toBe(true);
+    expect(created.body.data.showLiveLocations).toBe(false);
+  });
+
+  // Sharing switches are not ride details. The natural moment to open the tracks or the
+  // results is after the ride — which the blanket "no edits once live" lock made impossible.
+  it("still accepts the sharing flags on a finished ride, but not its details", async () => {
+    const app = createApp();
+    const token = await signIn(app, "owner-late-share");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Done and dusted" });
+    for (const status of ["published", "registration_open", "ready", "live", "finished"]) {
+      await request(app)
+        .patch(`/api/v1/events/${created.body.data.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status });
+    }
+
+    const sharing = await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ showHistoryLocations: true, showResults: true });
+    expect(sharing.status).toBe(200);
+    expect(sharing.body.data.showHistoryLocations).toBe(true);
+
+    // The date and place still cannot move out from under everyone who rode it.
+    const details = await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Actually it was somewhere else" });
+    expect(details.status).toBe(400);
+  });
+
+  it("reports the viewer's own tier", async () => {
+    const app = createApp();
+    const token = await signIn(app, "owner-tier");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Mine" });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${token}`);
+    expect(res.body.data.viewerTier).toBe("owner");
+    expect(res.body.data.canViewEventInfo).toBe(true);
+  });
+});
+
+// The closed-ride story: the organizer shares a link, the rider asks to join and waits with
+// almost nothing, and approval is what turns the details on.
+describe("GET /api/v1/events/:eventId — a private ride a rider asked to join", () => {
+  async function privateEventAwaitingApproval() {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-closed");
+    const riderToken = await signIn(app, "rider-closed");
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        name: "Closed Ride",
+        visibility: "private",
+        requiresApproval: true,
+        location: "Galilee",
+        description: "Meet at the car park",
+        startsAt: "2026-09-01T05:00:00.000Z",
+      });
+
+    // Published so the by-code lookup is live, exactly as a shared QR would find it.
+    await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/status`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ status: "published" });
+
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: created.body.data.code });
+
+    return { app, ownerToken, riderToken, eventId: created.body.data.id as string };
+  }
+
+  it("lets a waiting rider see the ride, but not when or where it is", async () => {
+    const { app, riderToken, eventId } = await privateEventAwaitingApproval();
+
+    const res = await request(app)
+      .get(`/api/v1/events/${eventId}`)
+      .set("Authorization", `Bearer ${riderToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.viewerTier).toBe("pending");
+    expect(res.body.data.canViewEventInfo).toBe(false);
+    expect(res.body.data.name).toBe("Closed Ride");
+    expect(res.body.data.myParticipant.registrationStatus).toBe("waiting_approval");
+    expect(res.body.data.startsAt).toBeNull();
+    expect(res.body.data.location).toBeNull();
+    expect(res.body.data.description).toBeNull();
+  });
+
+  it("shows the whole ride once the organizer approves them", async () => {
+    const { app, ownerToken, riderToken, eventId } = await privateEventAwaitingApproval();
+
+    const list = await request(app)
+      .get(`/api/v1/events/${eventId}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    await request(app)
+      .post(`/api/v1/events/${eventId}/participants/${list.body.data[0].id}/approve`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    const res = await request(app)
+      .get(`/api/v1/events/${eventId}`)
+      .set("Authorization", `Bearer ${riderToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.viewerTier).toBe("approved");
+    expect(res.body.data.location).toBe("Galilee");
+    expect(res.body.data.description).toBe("Meet at the car park");
+    expect(res.body.data.startsAt).not.toBeNull();
+  });
+
+  it("shuts a rejected rider back out entirely", async () => {
+    const { app, ownerToken, riderToken, eventId } = await privateEventAwaitingApproval();
+
+    const list = await request(app)
+      .get(`/api/v1/events/${eventId}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    await request(app)
+      .post(`/api/v1/events/${eventId}/participants/${list.body.data[0].id}/reject`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    const detail = await request(app)
+      .get(`/api/v1/events/${eventId}`)
+      .set("Authorization", `Bearer ${riderToken}`);
+    expect(detail.status).toBe(404);
+
+    // ...and the ride stops counting as one of theirs.
+    const mine = await request(app)
+      .get("/api/v1/events?filter=joined")
+      .set("Authorization", `Bearer ${riderToken}`);
+    expect(mine.body.data).toHaveLength(0);
+  });
+
+  it("still shows time and place to a rider waiting on a PUBLIC ride", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-openpending");
+    const riderToken = await signIn(app, "rider-openpending");
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({
+        name: "Open Ride",
+        visibility: "public",
+        requiresApproval: true,
+        location: "Ashkelon",
+      });
+    await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/status`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ status: "published" });
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: created.body.data.code });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${riderToken}`);
+
+    // Waiting on a public ride must never leave them worse off than a passing stranger.
+    expect(res.body.data.viewerTier).toBe("pending");
+    expect(res.body.data.location).toBe("Ashkelon");
   });
 });
 

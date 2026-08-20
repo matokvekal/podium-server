@@ -232,3 +232,117 @@ describe("GET /api/v1/events/:eventId/participants — the riders-list-open gate
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * A rider who joins through the app never writes `event_participants.name` — only the
+ * organizer's manual-add path does. The name has to be resolved from the linked user at read
+ * time, or the whole start list, waiting list and live map are blanks.
+ */
+describe("participant display names", () => {
+  async function signInWithProfile(
+    app: ReturnType<typeof createApp>,
+    subject: string,
+    profile: { firstName: string | null; lastName: string | null; picture?: string | null },
+  ) {
+    mocks.verifyGoogleIdToken.mockResolvedValue({
+      subject,
+      email: `${subject}@example.com`,
+      emailVerified: true,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      displayName: null,
+      picture: profile.picture ?? null,
+    });
+    const res = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    return res.body.accessToken as string;
+  }
+
+  it("resolves a self-joined rider's name and avatar from their account", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-names");
+    const event = await createAndPublish(app, ownerToken);
+    const riderToken = await signInWithProfile(app, "rider-names", {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      picture: "https://lh3.googleusercontent.com/a/ada",
+    });
+
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    expect(res.body.data[0].name).toBe("Ada Lovelace");
+    expect(res.body.data[0].avatarUrl).toBe("https://lh3.googleusercontent.com/a/ada");
+  });
+
+  it("keeps the name when the organizer approves them", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-names-2");
+    const event = await createAndPublish(app, ownerToken, { requiresApproval: true });
+    const riderToken = await signInWithProfile(app, "rider-names-2", {
+      firstName: "Ada",
+      lastName: "Lovelace",
+    });
+
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+    const list = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    // The approve response is swapped straight into the client's list, so it must carry the
+    // resolved name too — a bare RETURNING * would blank it out on screen.
+    const approved = await request(app)
+      .post(`/api/v1/events/${event.id}/participants/${list.body.data[0].id}/approve`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(approved.body.data.name).toBe("Ada Lovelace");
+  });
+
+  it("falls back to the nickname when the account has no first/last name", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-names-3");
+    const event = await createAndPublish(app, ownerToken);
+    const riderToken = await signInWithProfile(app, "rider-names-3", {
+      firstName: null,
+      lastName: null,
+    });
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ nickname: "speedy" });
+
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(res.body.data[0].name).toBe("speedy");
+  });
+
+  it("leaves a manually added rider's own name alone", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-names-4");
+    const event = await createAndPublish(app, ownerToken);
+
+    await request(app)
+      .post(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Walk-up Rider" });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(res.body.data[0].name).toBe("Walk-up Rider");
+    expect(res.body.data[0].avatarUrl).toBeNull();
+  });
+});

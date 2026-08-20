@@ -1,7 +1,10 @@
 # CONTEXT — durable knowledge for the lead agent
 
 Everything a cold session needs that is **not** obvious from the code, plus findings
-that cost real work to produce. Running task list lives in [TASKS.md](TASKS.md).
+that cost real work to produce. Running task list lives in [TASKS.md](TASKS.md);
+the reasoning behind each server decision, the caveats and what is deliberately undone
+live in [NOTES.md](NOTES.md); the client-vs-server walkthrough of the whole product
+story is [CLIENT-SERVER-AUDIT.md](CLIENT-SERVER-AUDIT.md).
 
 **Last updated:** 2026-08-20
 
@@ -189,7 +192,50 @@ recolours hazard markers.
 
 ---
 
-## 5. Open questions
+## 5. Google sign-in — what the ID token gives us (verified 2026-08-20)
+
+The Google flow is **ID-token only** — no OAuth code exchange, no client secret, no
+refresh from Google. `google.accounts.id` hands the browser a Google-signed JWT, the
+client POSTs it once to `/auth/google`, and `google-auth-library` checks signature, `iss`,
+`exp` and — the load-bearing one — that `aud` is in `GOOGLE_CLIENT_IDS` (a CSV, because
+the PWA and the Android app have different client ids).
+
+**Everything Google will ever tell us is already inside that token.** `sub`, `email`,
+`email_verified`, `given_name`, `family_name`, `name`, `picture`. Reaching for the People
+API or extra scopes to get a name or avatar is wasted work.
+
+What we do with it (`auth.service.ts` → `resolveUser`):
+
+| Token claim | Stored as | When |
+|---|---|---|
+| `sub` | `auth_identities.provider_user_id` | always — **the identity key**, never email |
+| `email` | `auth_identities.email` | at creation. `users` has **no email column** |
+| `given_name` | `users.first_name` | creation only |
+| `family_name` | `users.last_name` | creation only |
+| `picture` | `users.avatar_url` | creation only |
+| `name` | *nothing* | read, deliberately dropped — see below |
+
+**Creation only, on purpose.** `resolveUser()`'s profile argument is passed to
+`createUserWithIdentity` and is unreachable from the existing-user branch. A rider who
+renames themselves must not have it undone by their next sign-in.
+
+**`name` is deliberately not stored.** The only column it could land in is `nickname`, and
+`needsProfile()` is `!firstName || !lastName || !nickname` — filling it would satisfy the
+check and silently skip the profile-setup screen. So after a first Google sign-in
+`requiresProfile` is still `true`, which is what the client expects.
+
+**Gotcha:** Google identities and SMS identities are separate rows keyed on different
+`provider_user_id`s, so the same human signing in both ways gets **two accounts**. There
+is no identity-linking logic. Deliberate for now.
+
+**Column widths bite.** `first_name`/`last_name` are `VARCHAR(200)`, `avatar_url` is
+`VARCHAR(500)`. Google documents no ceiling, and an over-long value would make the INSERT
+throw — which fails the whole sign-in. `fitColumn()` in `auth.service.ts` trims, clamps,
+and turns blank into NULL.
+
+---
+
+## 6. Open questions
 
 - **Which list should filtering target?** Events/rides, participants, or something
   else. Asked; not yet answered. Blocks T-002.

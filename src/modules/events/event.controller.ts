@@ -1,7 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
-import type { Event, EventParticipant } from "../../db/types.js";
+import type { Event, EventParticipant, User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
 import { traceLog } from "../../lib/trace-log.js";
+import { toRouteSummary } from "../routes/route.controller.js";
+import type { RouteWithOwner } from "../routes/route.queries.js";
+import { getEventRoute } from "../routes/route.service.js";
+import { selectUserById } from "../users/user.queries.js";
 import { selectParticipantByEventAndUser } from "./event.queries.js";
 import {
   changeEventStatusSchema,
@@ -16,8 +20,12 @@ import {
   publicEventsQuerySchema,
   updateEventSchema,
 } from "./event.schemas.js";
+import { EVENT_CAPABILITIES } from "../../authz/capabilities.js";
+import { eventCapabilitiesFor } from "../../authz/policy.js";
 import {
   cancelEvent,
+  canViewEventInfo,
+  canViewRoute,
   changeEventStatus,
   computeEffectiveStatus,
   createEvent,
@@ -30,8 +38,10 @@ import {
   listPublicEvents,
   pauseEvent,
   saveLocationBatch,
+  type EventView,
   toEventConfig,
   updateEventDetails,
+  type ViewerTier,
 } from "./event.service.js";
 
 function toEventSummary(event: Event) {
@@ -47,18 +57,57 @@ function toEventSummary(event: Event) {
     endsAt: event.endsAt,
     location: event.location,
     ownerId: event.ownerId,
+    // On the SUMMARY, not just the detail: these are exactly what a rider filters and scans
+    // the "Find Rides" list by, and a list must not need a detail call per card to show them.
+    activityType: event.activityType,
+    level: event.level,
+    organizerGroup: event.organizerGroup,
+    teamId: event.teamId,
   };
 }
 
+/**
+ * `tier` decides what is actually filled in, not just what the flags claim. Defaults to
+ * "owner" because every other caller of this function is an owner-only mutation (create,
+ * update, status, pause, cancel) that has already passed assertOwner.
+ *
+ * Redaction is deliberately narrow: only the fields that answer "when and where is this
+ * ride" — which is exactly what an unapproved rider must not have. Name, type and status
+ * stay visible for everyone, so a pending rider still sees which ride they are waiting on.
+ */
 function toEventDetail(
   event: Event,
   viewerId: number | null,
   myParticipant: EventParticipant | null = null,
+  tier: ViewerTier = "owner",
+  route: RouteWithOwner | null = null,
+  owner: User | null = null,
+  view: EventView | null = null,
+  canSeeInfoOverride: boolean | null = null,
 ) {
+  const canSeeInfo = canSeeInfoOverride ?? true;
+  const summary = toEventSummary(event);
   return {
-    ...toEventSummary(event),
+    ...summary,
+    startsAt: canSeeInfo ? summary.startsAt : null,
+    endsAt: canSeeInfo ? summary.endsAt : null,
+    location: canSeeInfo ? summary.location : null,
     requiresBib: event.requiresBib,
-    description: event.description,
+    description: canSeeInfo ? event.description : null,
+    /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
+     *  is waiting on the organizer, and the fields above are nulled for them on purpose.
+     *  @deprecated read `capabilities` instead — see AUTHORIZATION.md. */
+    viewerTier: tier,
+    /** @deprecated equivalent to capabilities including "event:view_details". */
+    canViewEventInfo: canSeeInfo,
+    /**
+     * THE CONTRACT WITH THE CLIENT. What this caller may do with this ride, already decided.
+     * The client hides what is not in this list and never re-derives a rule; when a rule
+     * changes, only the server changes. See AUTHORIZATION.md.
+     */
+    capabilities: view
+      ? eventCapabilitiesFor(view.actor, view.context, EVENT_CAPABILITIES)
+      : [...EVENT_CAPABILITIES],
     finishedAt: event.finishedAt,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
@@ -72,6 +121,22 @@ function toEventDetail(
     showLiveLocations: event.showLiveLocations,
     showHistoryLocations: event.showHistoryLocations,
     showResults: event.showResults,
+    /** Preview geometry only — the full line is GET /routes/:routeId, the same second call
+     *  the browse cards make. Null when the event has no route, or this viewer may not see it. */
+    route: route ? toRouteSummary(route) : null,
+    /** Who is running this ride. Until now the payload carried only `ownerId`, so the client
+     *  displayed a fake name invented from the event id (event-visuals.ts's mockOrganizerName)
+     *  — every ride in the app showed an organizer who does not exist. */
+    owner: owner
+      ? {
+          id: owner.id,
+          name:
+            [owner.firstName, owner.lastName].filter(Boolean).join(" ").trim() ||
+            owner.nickname ||
+            null,
+          avatarUrl: owner.avatarUrl,
+        }
+      : null,
     myParticipant: myParticipant
       ? {
           id: myParticipant.id,
@@ -80,6 +145,46 @@ function toEventDetail(
         }
       : null,
   };
+}
+
+/**
+ * Every response that returns an event detail goes through here, so the route is present on
+ * all of them. Skipping it on the mutation replies would have been one query cheaper and a
+ * real bug: EventDetailPage swaps a PATCH response straight into its state, so the map would
+ * vanish the moment an organizer renamed their ride.
+ */
+/**
+ * Every response that returns an event detail goes through here, so the route, the owner and
+ * the capability list are present on all of them. Skipping any of them on the mutation replies
+ * would be a real bug: EventDetailPage swaps a PATCH response straight into its state, so the
+ * map — or the buttons — would vanish the moment an organizer renamed their ride.
+ */
+async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
+  const { event } = view;
+  const canSeeRoute = canViewRoute(view);
+  const [route, owner, myParticipant] = await Promise.all([
+    canSeeRoute ? getEventRoute(event.id) : Promise.resolve(null),
+    event.ownerId === null ? Promise.resolve(null) : selectUserById(event.ownerId),
+    viewerId === null
+      ? Promise.resolve(null)
+      : selectParticipantByEventAndUser(event.id, viewerId),
+  ]);
+  return toEventDetail(
+    event,
+    viewerId,
+    myParticipant,
+    view.tier,
+    route,
+    owner,
+    view,
+    canViewEventInfo(view),
+  );
+}
+
+/** Owner-only mutations already know who the caller is; re-resolve so the reply is consistent. */
+async function ownerDetail(event: Event, userId: number) {
+  const view = await getEventForViewer(event.id, userId);
+  return eventDetailWithRoute(view, userId);
 }
 
 export async function getEventByCode(req: Request, res: Response, next: NextFunction) {
@@ -153,7 +258,7 @@ export async function pauseEventHandler(req: Request, res: Response, next: NextF
     const { paused } = pauseEventSchema.parse(req.body);
     traceLog("event.controller.pauseEventHandler", { eventId, userId: req.auth!.userId, paused });
     const event = await pauseEvent(eventId, req.auth!.userId, paused);
-    res.status(200).json({ data: toEventDetail(event, req.auth!.userId) });
+    res.status(200).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {
     next(err);
   }
@@ -167,7 +272,7 @@ export async function createEventHandler(req: Request, res: Response, next: Next
       name: input.name,
     });
     const event = await createEvent(req.auth!.userId, input);
-    res.status(201).json({ data: toEventDetail(event, req.auth!.userId) });
+    res.status(201).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {
     next(err);
   }
@@ -186,10 +291,17 @@ export async function listEventsHandler(req: Request, res: Response, next: NextF
 
 export async function listPublicEventsHandler(req: Request, res: Response, next: NextFunction) {
   try {
-    const { limit, offset } = publicEventsQuerySchema.parse(req.query);
-    traceLog("event.controller.listPublicEventsHandler", { limit, offset });
-    const events = await listPublicEvents(limit, offset);
-    res.status(200).json({ data: events.map(toEventSummary) });
+    const filters = publicEventsQuerySchema.parse(req.query);
+    traceLog("event.controller.listPublicEventsHandler", filters);
+    const { events, total } = await listPublicEvents(filters);
+    // `total` is what lets a client page correctly instead of guessing when to stop —
+    // previously it had no way to know a second page existed.
+    res.status(200).json({
+      data: events.map(toEventSummary),
+      total,
+      limit: filters.limit,
+      offset: filters.offset,
+    });
   } catch (err) {
     next(err);
   }
@@ -200,10 +312,8 @@ export async function getEventHandler(req: Request, res: Response, next: NextFun
     const { eventId } = eventIdParamSchema.parse(req.params);
     const viewerId = req.auth?.userId ?? null;
     traceLog("event.controller.getEventHandler", { eventId, viewerId });
-    const event = await getEventForViewer(eventId, viewerId);
-    const myParticipant =
-      viewerId !== null ? await selectParticipantByEventAndUser(eventId, viewerId) : null;
-    res.status(200).json({ data: toEventDetail(event, viewerId, myParticipant) });
+    const view = await getEventForViewer(eventId, viewerId);
+    res.status(200).json({ data: await eventDetailWithRoute(view, viewerId) });
   } catch (err) {
     next(err);
   }
@@ -215,7 +325,7 @@ export async function updateEventHandler(req: Request, res: Response, next: Next
     const input = updateEventSchema.parse(req.body);
     traceLog("event.controller.updateEventHandler", { eventId, userId: req.auth!.userId });
     const event = await updateEventDetails(eventId, req.auth!.userId, input);
-    res.status(200).json({ data: toEventDetail(event, req.auth!.userId) });
+    res.status(200).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {
     next(err);
   }
@@ -231,7 +341,7 @@ export async function changeEventStatusHandler(req: Request, res: Response, next
       status,
     });
     const event = await changeEventStatus(eventId, req.auth!.userId, status);
-    res.status(200).json({ data: toEventDetail(event, req.auth!.userId) });
+    res.status(200).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {
     next(err);
   }
@@ -242,7 +352,7 @@ export async function cancelEventHandler(req: Request, res: Response, next: Next
     const { eventId } = eventIdParamSchema.parse(req.params);
     traceLog("event.controller.cancelEventHandler", { eventId, userId: req.auth!.userId });
     const event = await cancelEvent(eventId, req.auth!.userId);
-    res.status(200).json({ data: toEventDetail(event, req.auth!.userId) });
+    res.status(200).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {
     next(err);
   }

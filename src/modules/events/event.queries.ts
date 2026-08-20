@@ -6,6 +6,7 @@
 
 import { execute, query, queryOne } from "../../db/pool.js";
 import type {
+  ActivityType,
   DisplayMode,
   Event,
   EventParticipant,
@@ -14,6 +15,7 @@ import type {
   EventVisibility,
   ParticipantLastLocation,
   RegistrationStatus,
+  RiderLevel,
 } from "../../db/types.js";
 
 interface EventRow {
@@ -34,6 +36,10 @@ interface EventRow {
   description: string | null;
   location: string | null;
   finished_at: Date | null;
+  activity_type: ActivityType | null;
+  level: RiderLevel | null;
+  organizer_group: string | null;
+  team_id: number | null;
   requires_approval: boolean;
   is_paused: boolean;
   show_event_info: boolean;
@@ -55,12 +61,37 @@ interface EventParticipantRow {
   email: string | null;
   phone: string | null;
   category: string | null;
+  team: string | null;
+  country_code: string | null;
+  group_id: number | null;
   registration_status: EventParticipant["registrationStatus"];
   attendance_status: EventParticipant["attendanceStatus"];
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
+
+  // Only present on the queries that join `users` — see PARTICIPANT_DISPLAY_COLUMNS. A plain
+  // `SELECT *` leaves both undefined, which mapParticipant treats as "nothing to fall back to".
+  display_name?: string | null;
+  avatar_url?: string | null;
 }
+
+/**
+ * A participant who joined through the app has no `event_participants.name` — that column is
+ * only filled in by the organizer's manual-add path. sql/003-participants.sql states the rule:
+ * the row's own name when set, otherwise the linked user's. Resolved here at read time rather
+ * than copied at join time, so a rider who later corrects their profile is corrected in every
+ * event they have ever ridden.
+ *
+ * Any query selecting participants for display must join `users AS u` and include this.
+ */
+export const PARTICIPANT_DISPLAY_COLUMNS = `
+  COALESCE(
+    ep.name,
+    NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+    u.nickname
+  ) AS display_name,
+  u.avatar_url`;
 
 function mapEvent(row: EventRow): Event {
   return {
@@ -81,6 +112,10 @@ function mapEvent(row: EventRow): Event {
     description: row.description,
     location: row.location,
     finishedAt: row.finished_at,
+    activityType: row.activity_type,
+    level: row.level,
+    organizerGroup: row.organizer_group,
+    teamId: row.team_id,
     requiresApproval: row.requires_approval,
     isPaused: row.is_paused,
     showEventInfo: row.show_event_info,
@@ -101,10 +136,16 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
     bib: row.bib,
     joinedAt: row.joined_at,
     leftAt: row.left_at,
-    name: row.name,
+    // display_name is undefined on queries that did not join `users`; the row's own name is
+    // still the right answer there (manual entries always have one).
+    name: row.display_name ?? row.name,
+    avatarUrl: row.avatar_url ?? null,
     email: row.email,
     phone: row.phone,
     category: row.category,
+    team: row.team,
+    countryCode: row.country_code,
+    groupId: row.group_id,
     registrationStatus: row.registration_status,
     attendanceStatus: row.attendance_status,
     resultStatus: row.result_status,
@@ -142,8 +183,12 @@ export async function selectLiveEventForOwner(ownerId: number): Promise<Event | 
  */
 export async function selectEventsForUser(userId: number): Promise<Event[]> {
   const rows = await query<EventRow>(
+    // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
+    // events this user OWNS but was rejected from, which cannot happen today but is exactly
+    // the kind of thing that starts happening once co-organizers land.
     `SELECT DISTINCT e.* FROM events e
-       LEFT JOIN event_participants ep ON ep.event_id = e.id AND ep.user_id = $1
+       LEFT JOIN event_participants ep
+              ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
       WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
       ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
     [userId],
@@ -151,14 +196,115 @@ export async function selectEventsForUser(userId: number): Promise<Event[]> {
   return rows.map(mapEvent);
 }
 
-export async function selectPublicEvents(limit: number, offset: number): Promise<Event[]> {
+/**
+ * Upcoming public rides by organizers this user follows, and by teams they belong to — the
+ * "may see next future rides" half of following someone. Public only: following a person is
+ * not an invitation to their private rides.
+ */
+export async function selectUpcomingEventsForFollowed(userId: number): Promise<Event[]> {
   const rows = await query<EventRow>(
-    `SELECT * FROM events WHERE visibility = 'public' AND status NOT IN ('cancelled', 'draft')
-      ORDER BY starts_at ASC NULLS LAST
-      LIMIT $1 OFFSET $2`,
-    [limit, offset],
+    `SELECT DISTINCT e.* FROM events e
+       LEFT JOIN user_follows f ON f.followee_id = e.owner_id AND f.follower_id = $1
+       LEFT JOIN team_members tm
+              ON tm.team_id = e.team_id AND tm.user_id = $1 AND tm.status = 'approved'
+      WHERE e.visibility = 'public'
+        AND e.status IN ('published', 'registration_open', 'ready', 'live')
+        AND e.owner_id <> $1
+        AND (f.follower_id IS NOT NULL OR tm.user_id IS NOT NULL)
+      ORDER BY e.starts_at ASC NULLS LAST`,
+    [userId],
   );
   return rows.map(mapEvent);
+}
+
+/** Rides this user created in the last 7 days — the free plan's rolling window. */
+export async function countEventsCreatedSince(ownerId: number, since: Date): Promise<number> {
+  const row = await queryOne<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM events WHERE owner_id = $1 AND created_at >= $2",
+    [ownerId, since],
+  );
+  return Number(row?.count ?? 0);
+}
+
+/**
+ * Layer 3 of AUTHORIZATION.md. Idempotent, because event creation may be retried and a
+ * duplicate member row would be a unique-index violation rather than a no-op.
+ */
+export async function insertEventMember(
+  eventId: string,
+  userId: number,
+  role: "owner" | "operator" | "viewer",
+): Promise<void> {
+  await execute(
+    `INSERT INTO event_members (event_id, user_id, role) VALUES ($1, $2, $3)
+      ON CONFLICT (event_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+    [eventId, userId, role],
+  );
+}
+
+export interface PublicEventFilters {
+  q?: string;
+  type?: EventType;
+  bucket?: "live" | "upcoming" | "finished";
+  activityType?: ActivityType;
+  level?: RiderLevel;
+  sort: "soonest" | "latest" | "newest";
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Same "$n IS NULL OR <test>" shape as selectPublicRoutes: one constant statement rather than
+ * SQL assembled at runtime, so the fake DB and a reader can both check it and Postgres can
+ * cache one plan.
+ *
+ * The `finished` bucket deliberately also catches an event whose end time has passed while its
+ * stored status never moved — nothing flips that automatically (see computeEffectiveStatus),
+ * and a rider looking for last Saturday's ride does not care which of those it is.
+ */
+export async function selectPublicEvents(
+  filters: PublicEventFilters,
+): Promise<{ events: Event[]; total: number }> {
+  const where = `visibility = 'public'
+        AND status NOT IN ('cancelled', 'draft')
+        AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR location ILIKE '%' || $1 || '%')
+        AND ($2::text IS NULL OR type = $2)
+        AND ($3::text IS NULL OR activity_type = $3)
+        AND ($4::text IS NULL OR level = $4)
+        AND (
+          $5::text IS NULL
+          OR ($5 = 'live' AND status = 'live')
+          OR ($5 = 'upcoming'
+              AND status IN ('published', 'registration_open', 'ready')
+              AND (ends_at IS NULL OR ends_at >= NOW()))
+          OR ($5 = 'finished'
+              AND (status = 'finished' OR (ends_at IS NOT NULL AND ends_at < NOW())))
+        )`;
+
+  const params = [
+    filters.q ?? null,
+    filters.type ?? null,
+    filters.activityType ?? null,
+    filters.level ?? null,
+    filters.bucket ?? null,
+  ];
+
+  // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream.
+  const orderBy = {
+    soonest: "starts_at ASC NULLS LAST",
+    latest: "starts_at DESC NULLS LAST",
+    newest: "created_at DESC",
+  }[filters.sort];
+
+  const rows = await query<EventRow>(
+    `SELECT * FROM events WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
+    [...params, filters.limit, filters.offset],
+  );
+  const countRow = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM events WHERE ${where}`,
+    params,
+  );
+  return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
 }
 
 export interface CreateEventInput {
@@ -174,16 +320,35 @@ export interface CreateEventInput {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
+  activityType: ActivityType | null;
+  level: RiderLevel | null;
+  organizerGroup: string | null;
   requiresApproval: boolean;
+  /** null for any of these means "leave the column default alone" — see the COALESCEs below. */
+  showEventInfo: boolean | null;
+  showParticipants: boolean | null;
+  showRoute: boolean | null;
+  showLiveLocations: boolean | null;
+  showHistoryLocations: boolean | null;
+  showResults: boolean | null;
 }
 
 /** New events always start as a draft, and a draft is never is_active — see event.service.ts. */
 export async function insertEvent(input: CreateEventInput): Promise<Event> {
   const row = await queryOne<EventRow>(
+    // The COALESCE defaults repeat sql/002-events-podium.sql's column defaults on purpose: an
+    // explicit INSERT column list cannot fall back to DEFAULT per-row, and the caller passes
+    // null for anything the create form did not ask about.
     `INSERT INTO events
         (id, code, name, type, requires_bib, starts_at, ends_at, is_active,
-         owner_id, display_mode, status, visibility, description, location, requires_approval)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13)
+         owner_id, display_mode, status, visibility, description, location, requires_approval,
+         show_event_info, show_participants, show_route,
+         show_live_locations, show_history_locations, show_results,
+         activity_type, level, organizer_group)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13,
+              COALESCE($14, TRUE), COALESCE($15, FALSE), COALESCE($16, TRUE),
+              COALESCE($17, FALSE), COALESCE($18, FALSE), COALESCE($19, TRUE),
+              $20, $21, $22)
       RETURNING *`,
     [
       input.id,
@@ -199,6 +364,15 @@ export async function insertEvent(input: CreateEventInput): Promise<Event> {
       input.description,
       input.location,
       input.requiresApproval,
+      input.showEventInfo,
+      input.showParticipants,
+      input.showRoute,
+      input.showLiveLocations,
+      input.showHistoryLocations,
+      input.showResults,
+      input.activityType,
+      input.level,
+      input.organizerGroup,
     ],
   );
   if (!row) throw new Error("insertEvent returned no row");
@@ -222,6 +396,9 @@ export interface UpdateEventInput {
   showHistoryLocations?: boolean;
   showResults?: boolean;
   requiresApproval?: boolean;
+  activityType?: ActivityType;
+  level?: RiderLevel;
+  organizerGroup?: string;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -244,6 +421,9 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             show_history_locations = COALESCE($15, show_history_locations),
             show_results = COALESCE($16, show_results),
             requires_approval = COALESCE($17, requires_approval),
+            activity_type = COALESCE($18, activity_type),
+            level = COALESCE($19, level),
+            organizer_group = COALESCE($20, organizer_group),
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
@@ -265,6 +445,9 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
       input.showHistoryLocations ?? null,
       input.showResults ?? null,
       input.requiresApproval ?? null,
+      input.activityType ?? null,
+      input.level ?? null,
+      input.organizerGroup ?? null,
     ],
   );
   return rows[0] ? mapEvent(rows[0]) : null;

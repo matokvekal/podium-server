@@ -24,7 +24,14 @@ export const EVENT_STATUSES = [
 ] as const;
 export type EventStatus = (typeof EVENT_STATUSES)[number];
 
-export const EVENT_VISIBILITIES = ["public", "private"] as const;
+/**
+ * Layer 5 of AUTHORIZATION.md — separate from roles and from plans.
+ *   public      anyone, including a signed-out guest
+ *   registered  any signed-in user
+ *   private     only someone with a participation row or an event role; 404 to everyone else
+ * Orthogonal to the six show_* flags, which say how MUCH a permitted viewer sees.
+ */
+export const EVENT_VISIBILITIES = ["public", "registered", "private"] as const;
 export type EventVisibility = (typeof EVENT_VISIBILITIES)[number];
 
 export const DISPLAY_MODES = ["standard", "competition"] as const;
@@ -44,6 +51,21 @@ export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 export const RESULT_STATUSES = ["none", "finished", "dnf", "stopped", "unknown"] as const;
 export type ResultStatus = (typeof RESULT_STATUSES)[number];
 
+/** What kind of riding an event is. Matches the client's SurfaceType picker. Distinct from
+ *  EVENT_TYPES (RIDE | RACE), which is the frozen Android field. */
+export const ACTIVITY_TYPES = ["road", "mtb", "gravel", "running", "hiking"] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+/** One difficulty label for a whole ride — not per ride-group. */
+export const RIDER_LEVELS = [
+  "beginner",
+  "intermediate",
+  "masters",
+  "elite",
+  "world_tour",
+] as const;
+export type RiderLevel = (typeof RIDER_LEVELS)[number];
+
 export const ROUTE_TYPES = ["road", "gravel", "mtb", "mixed"] as const;
 export type RouteType = (typeof ROUTE_TYPES)[number];
 
@@ -56,6 +78,9 @@ export interface User {
   lastName: string | null;
   nickname: string | null;
   emergencyPhone: string | null;
+  /** users.avatar_url — the Google profile picture, filled in at sign-up when Google
+   *  supplied one. Never overwritten by a later login. */
+  avatarUrl: string | null;
   role: Role;
   isActive: boolean;
   createdAt: Date;
@@ -108,6 +133,14 @@ export interface Event {
   description: string | null;
   location: string | null;
   finishedAt: Date | null;
+
+  // Collected by the create form since long before the server could store any of them.
+  activityType: ActivityType | null;
+  level: RiderLevel | null;
+  /** Free-text club name shown as "Organized by". Superseded by teamId when one is linked. */
+  organizerGroup: string | null;
+  /** Links this ride into a team's schedule. */
+  teamId: number | null;
   requiresApproval: boolean; // self-join sets registration_status=waiting_approval instead of registered
   isPaused: boolean; // live display frozen; never affects location ingest — see event.service.ts
 
@@ -128,11 +161,20 @@ export interface EventParticipant {
   joinedAt: Date;
   leftAt: Date | null;
 
-  // For participants with no linked user account (manual entry, Excel import).
+  /** The row's own name (manual entry, Excel import) when set, otherwise the linked user's —
+   *  resolved at read time by PARTICIPANT_DISPLAY_COLUMNS, not stored twice. */
   name: string | null;
+  /** The linked user's `users.avatar_url`. Always null for a participant with no account. */
+  avatarUrl: string | null;
   email: string | null;
   phone: string | null;
   category: string | null;
+  /** Free text, shown on the results row. Not linked to the teams feature. */
+  team: string | null;
+  /** ISO 3166-1 alpha-2, stored uppercase. */
+  countryCode: string | null;
+  /** Which ride group they are in, if the organizer uses groups at all. */
+  groupId: number | null;
 
   // THREE INDEPENDENT AXES — do not merge. See plan/02-database-schema.md.
   registrationStatus: RegistrationStatus;
@@ -141,6 +183,56 @@ export interface EventParticipant {
 
   finishedAt: Date | null;
   finishPosition: number | null;
+}
+
+/**
+ * 2-4 groups riding ONE event together, each optionally with its own start time and track.
+ * Not a results concept: `category` is which class you are scored in, a group is who you ride
+ * with. See sql/012-ride-groups.sql.
+ */
+export interface EventGroup {
+  id: number;
+  eventId: string;
+  name: string;
+  /** null means "starts with the event". */
+  startsAt: Date | null;
+  /** null means "uses the event's route". */
+  routeId: number | null;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const TEAM_MEMBER_STATUSES = [
+  "invited",
+  "waiting_approval",
+  "approved",
+  "rejected",
+] as const;
+export type TeamMemberStatus = (typeof TEAM_MEMBER_STATUSES)[number];
+
+/** A club. Its rides gather under one name, which a free-text organizer string cannot do. */
+export interface Team {
+  id: number;
+  name: string;
+  ownerId: number;
+  avatarUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Mirrors EventParticipant: a member may have no account yet. */
+export interface TeamMember {
+  id: number;
+  teamId: number;
+  userId: number | null;
+  /** Resolved at read time from the linked account when the row has no name of its own. */
+  name: string | null;
+  avatarUrl: string | null;
+  email: string | null;
+  phone: string | null;
+  status: TeamMemberStatus;
+  createdAt: Date;
 }
 
 /** A point on a route or a saved track. `ele` is present only when the source data had it. */
