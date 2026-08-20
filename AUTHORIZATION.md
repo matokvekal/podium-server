@@ -80,7 +80,7 @@ role here ("premium", "organizer") belongs in layer 3 or 4.
 the limits their plan gives them. The pricing table's "Organizer Free" and "Organizer Pro" are
 the same *role* on different *plans* — layer 4.
 
-## Layer 3 — Event role
+## Layer 3 — Event role11
 
 Two separate relations, deliberately not merged:
 
