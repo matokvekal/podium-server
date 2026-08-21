@@ -17,9 +17,15 @@ import {
 } from "./participants.queries.js";
 
 /**
- * Owner sees everyone. Otherwise: only a registered/approved rider may look, and only once
- * the organizer has opened the list (`show_participants`) — mirrors "if riders list is open I
- * will see, else no" from the product ask.
+ * Owner sees everyone, including who's still waiting on approval or was rejected — they need
+ * the full picture to actually act on it. Otherwise: only a registered/approved rider may look
+ * at all, and only once the organizer has opened the list (`show_participants`) — mirrors "if
+ * riders list is open I will see, else no" from the product ask — and even then the list itself
+ * is trimmed to other registered/approved riders only. An event that requires approval is
+ * mutual: an approved rider doesn't see who's still pending, and a still-pending rider can't
+ * see the roster at all yet (the isRegistered check above already blocks them outright) —
+ * asked for directly ("he dont se the not appruved at ride and that user will not see him at
+ * the ride").
  */
 export async function listParticipantsForViewer(
   eventId: string,
@@ -27,24 +33,34 @@ export async function listParticipantsForViewer(
 ): Promise<EventParticipant[]> {
   const event = await getEventForViewer(eventId, viewerId); // 403s a private event for a stranger
   const isOwner = viewerId !== null && event.ownerId === viewerId;
-  if (!isOwner) {
-    const myParticipant =
-      viewerId !== null ? await selectParticipantByEventAndUser(eventId, viewerId) : null;
-    const isRegistered =
-      myParticipant !== null &&
-      (myParticipant.registrationStatus === "registered" ||
-        myParticipant.registrationStatus === "approved");
-    if (!isRegistered) {
-      throw new ApiError(
-        403,
-        "Only a registered rider or the organizer may view the participants list",
-      );
-    }
-    if (!event.showParticipants) {
-      throw new ApiError(403, "The participants list is not open for this event");
-    }
+  if (isOwner) {
+    return selectParticipantsForEvent(eventId);
   }
-  return selectParticipantsForEvent(eventId);
+
+  const myParticipant =
+    viewerId !== null
+      ? await selectParticipantByEventAndUser(eventId, viewerId)
+      : null;
+  const isRegistered =
+    myParticipant !== null &&
+    (myParticipant.registrationStatus === "registered" ||
+      myParticipant.registrationStatus === "approved");
+  if (!isRegistered) {
+    throw new ApiError(
+      403,
+      "Only a registered rider or the organizer may view the participants list",
+    );
+  }
+  if (!event.showParticipants) {
+    throw new ApiError(403, "The participants list is not open for this event");
+  }
+
+  const all = await selectParticipantsForEvent(eventId);
+  return all.filter(
+    (p) =>
+      p.registrationStatus === "registered" ||
+      p.registrationStatus === "approved",
+  );
 }
 
 async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
@@ -55,7 +71,13 @@ async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
 export async function addParticipant(
   eventId: string,
   userId: number,
-  input: { name: string; email?: string; phone?: string; category?: string; bib?: string },
+  input: {
+    name: string;
+    email?: string;
+    phone?: string;
+    category?: string;
+    bib?: string;
+  },
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
   const participant = await insertManualParticipant(eventId, {
@@ -65,7 +87,10 @@ export async function addParticipant(
     category: input.category ?? null,
     bib: input.bib ?? null,
   });
-  logger.info({ eventId, userId, participantId: participant.id }, "participant added manually");
+  logger.info(
+    { eventId, userId, participantId: participant.id },
+    "participant added manually",
+  );
   return participant;
 }
 
@@ -73,7 +98,13 @@ export async function editParticipant(
   eventId: string,
   userId: number,
   participantId: number,
-  input: { name?: string; email?: string; phone?: string; category?: string; bib?: string },
+  input: {
+    name?: string;
+    email?: string;
+    phone?: string;
+    category?: string;
+    bib?: string;
+  },
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
   const updated = await updateParticipantRow(participantId, eventId, input);
@@ -100,11 +131,21 @@ async function setRegistrationStatus(
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
   const existing = await selectParticipantByIdForEvent(participantId, eventId);
-  if (!existing) throw new ApiError(404, "Participant not found for this event");
-  const updated = await updateRegistrationStatus(participantId, eventId, status);
+  if (!existing)
+    throw new ApiError(404, "Participant not found for this event");
+  const updated = await updateRegistrationStatus(
+    participantId,
+    eventId,
+    status,
+  );
   if (!updated)
-    throw new Error(`setRegistrationStatus: participant ${participantId} not found after update`);
-  logger.info({ eventId, userId, participantId, status }, "registration status changed");
+    throw new Error(
+      `setRegistrationStatus: participant ${participantId} not found after update`,
+    );
+  logger.info(
+    { eventId, userId, participantId, status },
+    "registration status changed",
+  );
   return updated;
 }
 

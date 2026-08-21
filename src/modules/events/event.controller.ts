@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import type { Event, EventParticipant } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
 import { traceLog } from "../../lib/trace-log.js";
-import { selectParticipantByEventAndUser } from "./event.queries.js";
+import { selectActiveParticipantByEventAndUser } from "./event.queries.js";
 import {
   changeEventStatusSchema,
   createEventSchema,
@@ -26,6 +26,7 @@ import {
   getEventForViewer,
   getLiveRiders,
   joinEvent,
+  leaveEvent,
   listMyEvents,
   listPublicEvents,
   pauseEvent,
@@ -46,6 +47,7 @@ function toEventSummary(event: Event) {
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     location: event.location,
+    area: event.area,
     ownerId: event.ownerId,
   };
 }
@@ -202,8 +204,19 @@ export async function getEventHandler(req: Request, res: Response, next: NextFun
     traceLog("event.controller.getEventHandler", { eventId, viewerId });
     const event = await getEventForViewer(eventId, viewerId);
     const myParticipant =
-      viewerId !== null ? await selectParticipantByEventAndUser(eventId, viewerId) : null;
+      viewerId !== null ? await selectActiveParticipantByEventAndUser(eventId, viewerId) : null;
     res.status(200).json({ data: toEventDetail(event, viewerId, myParticipant) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function leaveEventHandler(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { eventId } = eventIdParamSchema.parse(req.params);
+    traceLog("event.controller.leaveEventHandler", { eventId, userId: req.auth!.userId });
+    const participant = await leaveEvent(eventId, req.auth!.userId);
+    res.status(200).json({ participantId: participant.id, leftAt: participant.leftAt });
   } catch (err) {
     next(err);
   }

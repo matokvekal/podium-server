@@ -27,9 +27,10 @@ interface EventParticipantRow {
   finish_position: number | null;
 }
 
+/** Default roster: a rider who left drops off automatically (left_at IS NULL). */
 export async function selectParticipantsForEvent(eventId: string): Promise<EventParticipant[]> {
   const rows = await query<EventParticipantRow>(
-    "SELECT * FROM event_participants WHERE event_id = $1 ORDER BY joined_at ASC",
+    "SELECT * FROM event_participants WHERE event_id = $1 AND left_at IS NULL ORDER BY joined_at ASC",
     [eventId],
   );
   return rows.map(mapParticipant);

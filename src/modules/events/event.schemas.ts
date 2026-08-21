@@ -19,6 +19,7 @@ export const createEventSchema = z.object({
   visibility: z.enum(EVENT_VISIBILITIES).optional().default("private"),
   description: z.string().max(4000).optional(),
   location: z.string().max(255).optional(),
+  area: z.string().max(255).optional(),
   requiresApproval: z.boolean().optional().default(false),
 });
 
@@ -32,6 +33,7 @@ export const updateEventSchema = z.object({
   visibility: z.enum(EVENT_VISIBILITIES).optional(),
   description: z.string().max(4000).optional(),
   location: z.string().max(255).optional(),
+  area: z.string().max(255).optional(),
   showEventInfo: z.boolean().optional(),
   showParticipants: z.boolean().optional(),
   showRoute: z.boolean().optional(),

@@ -107,6 +107,7 @@ export interface Event {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
+  area: string | null;
   finishedAt: Date | null;
   requiresApproval: boolean; // self-join sets registration_status=waiting_approval instead of registered
   isPaused: boolean; // live display frozen; never affects location ingest — see event.service.ts

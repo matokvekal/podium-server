@@ -735,15 +735,44 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     const [id, userId] = p as [number, number];
     return eventParticipants.filter((row) => row.id === id && row.user_id === userId);
   }
+  // Narrower "... AND left_at IS NULL" variant must be checked before the plain
+  // "... AND user_id = $2" branch below, for the same startsWith-prefix reason noted above.
+  if (
+    sql.startsWith(
+      "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2 AND left_at IS NULL",
+    )
+  ) {
+    const [eventId, userId] = p as [string, number];
+    return eventParticipants.filter(
+      (row) => row.event_id === eventId && row.user_id === userId && row.left_at === null,
+    );
+  }
   if (sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 AND user_id")) {
     const [eventId, userId] = p as [string, number];
     return eventParticipants.filter((row) => row.event_id === eventId && row.user_id === userId);
+  }
+  if (
+    sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 AND left_at IS NULL ORDER BY")
+  ) {
+    const [eventId] = p as [string];
+    return eventParticipants
+      .filter((row) => row.event_id === eventId && row.left_at === null)
+      .sort((a, b) => a.joined_at.getTime() - b.joined_at.getTime());
   }
   if (sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 ORDER BY")) {
     const [eventId] = p as [string];
     return eventParticipants
       .filter((row) => row.event_id === eventId)
       .sort((a, b) => a.joined_at.getTime() - b.joined_at.getTime());
+  }
+  if (sql.startsWith("UPDATE event_participants SET left_at = NOW()")) {
+    const [eventId, userId] = p as [string, number];
+    const row = eventParticipants.find(
+      (r) => r.event_id === eventId && r.user_id === userId && r.left_at === null,
+    );
+    if (!row) return [];
+    row.left_at = new Date();
+    return [row];
   }
   if (sql.startsWith("UPDATE event_participants SET name = COALESCE")) {
     const [id, eventId, name, email, phone, category, bib] = p as [

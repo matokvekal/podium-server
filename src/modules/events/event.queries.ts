@@ -33,6 +33,7 @@ interface EventRow {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
+  area: string | null;
   finished_at: Date | null;
   requires_approval: boolean;
   is_paused: boolean;
@@ -80,6 +81,7 @@ function mapEvent(row: EventRow): Event {
     visibility: row.visibility,
     description: row.description,
     location: row.location,
+    area: row.area,
     finishedAt: row.finished_at,
     requiresApproval: row.requires_approval,
     isPaused: row.is_paused,
@@ -174,6 +176,7 @@ export interface CreateEventInput {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
+  area: string | null;
   requiresApproval: boolean;
 }
 
@@ -182,8 +185,8 @@ export async function insertEvent(input: CreateEventInput): Promise<Event> {
   const row = await queryOne<EventRow>(
     `INSERT INTO events
         (id, code, name, type, requires_bib, starts_at, ends_at, is_active,
-         owner_id, display_mode, status, visibility, description, location, requires_approval)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13)
+         owner_id, display_mode, status, visibility, description, location, area, requires_approval)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13, $14)
       RETURNING *`,
     [
       input.id,
@@ -198,6 +201,7 @@ export async function insertEvent(input: CreateEventInput): Promise<Event> {
       input.visibility,
       input.description,
       input.location,
+      input.area,
       input.requiresApproval,
     ],
   );
@@ -215,6 +219,7 @@ export interface UpdateEventInput {
   visibility?: EventVisibility;
   description?: string;
   location?: string;
+  area?: string;
   showEventInfo?: boolean;
   showParticipants?: boolean;
   showRoute?: boolean;
@@ -237,13 +242,14 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             visibility = COALESCE($8, visibility),
             description = COALESCE($9, description),
             location = COALESCE($10, location),
-            show_event_info = COALESCE($11, show_event_info),
-            show_participants = COALESCE($12, show_participants),
-            show_route = COALESCE($13, show_route),
-            show_live_locations = COALESCE($14, show_live_locations),
-            show_history_locations = COALESCE($15, show_history_locations),
-            show_results = COALESCE($16, show_results),
-            requires_approval = COALESCE($17, requires_approval),
+            area = COALESCE($11, area),
+            show_event_info = COALESCE($12, show_event_info),
+            show_participants = COALESCE($13, show_participants),
+            show_route = COALESCE($14, show_route),
+            show_live_locations = COALESCE($15, show_live_locations),
+            show_history_locations = COALESCE($16, show_history_locations),
+            show_results = COALESCE($17, show_results),
+            requires_approval = COALESCE($18, requires_approval),
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
@@ -258,6 +264,7 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
       input.visibility ?? null,
       input.description ?? null,
       input.location ?? null,
+      input.area ?? null,
       input.showEventInfo ?? null,
       input.showParticipants ?? null,
       input.showRoute ?? null,
@@ -345,6 +352,41 @@ export async function selectParticipantByEventAndUser(
 ): Promise<EventParticipant | null> {
   const row = await queryOne<EventParticipantRow>(
     "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2",
+    [eventId, userId],
+  );
+  return row ? mapParticipant(row) : null;
+}
+
+/**
+ * Same as above, but only a still-active (not-left) row. Used for "have they already joined"
+ * checks — e.g. GET /:eventId's myParticipant — so a rider who left sees the Join button again
+ * instead of a stale "already joined" state.
+ */
+export async function selectActiveParticipantByEventAndUser(
+  eventId: string,
+  userId: number,
+): Promise<EventParticipant | null> {
+  const row = await queryOne<EventParticipantRow>(
+    "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2 AND left_at IS NULL",
+    [eventId, userId],
+  );
+  return row ? mapParticipant(row) : null;
+}
+
+/**
+ * Idempotent leave: only ever the caller's own still-active row (never another rider's, and
+ * never an organizer-added row — those have no user_id and so can never match here). Returns
+ * null when there was nothing active to leave — the caller had already left, or never joined —
+ * so the service can tell those two cases apart via selectParticipantByEventAndUser.
+ */
+export async function leaveEventForUser(
+  eventId: string,
+  userId: number,
+): Promise<EventParticipant | null> {
+  const row = await queryOne<EventParticipantRow>(
+    `UPDATE event_participants SET left_at = NOW()
+      WHERE event_id = $1 AND user_id = $2 AND left_at IS NULL
+      RETURNING *`,
     [eventId, userId],
   );
   return row ? mapParticipant(row) : null;
