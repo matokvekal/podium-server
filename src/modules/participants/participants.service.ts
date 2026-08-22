@@ -66,6 +66,15 @@ export async function listParticipantsForViewer(
 async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
   const event = await getEventForViewer(eventId, userId);
   assertOwner(event, userId);
+  // Roster management stays open through every non-terminal status (including live — the
+  // only ways to touch a live event are /status, /pause, and the participants endpoints).
+  // finished and cancelled are terminal: the event is over, so its roster is locked too.
+  if (event.status === "finished" || event.status === "cancelled") {
+    throw new ApiError(
+      400,
+      "This event has ended — participants can no longer be changed.",
+    );
+  }
 }
 
 export async function addParticipant(

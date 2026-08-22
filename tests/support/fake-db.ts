@@ -32,6 +32,7 @@ interface UserRow {
   last_name: string | null;
   nickname: string | null;
   emergency_phone: string | null;
+  avatar_url: string | null;
   role: Role;
   is_active: boolean;
   created_at: Date;
@@ -94,6 +95,7 @@ interface EventRow {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
+  area: string | null;
   finished_at: Date | null;
   requires_approval: boolean;
   is_paused: boolean;
@@ -146,6 +148,95 @@ interface LocationPointRow {
   emergency: boolean;
 }
 
+interface RouteRow {
+  id: number;
+  owner_id: number | null;
+  source: string | null;
+  distance_km: number | null;
+  elevation_m: number | null;
+  track_points: [number, number][] | null;
+  point_count: number | null;
+}
+
+interface EventRouteRow {
+  id: number;
+  event_id: string;
+  route_id: number;
+  created_at: Date;
+}
+
+/**
+ * Mirrors OWNER_NAME_SELECT_EXPR / OWNER_NAME_RETURNING_EXPR in event.queries.ts: nickname if
+ * non-blank, else trimmed "first last" (either half optional), else null.
+ */
+function computeOwnerName(ownerId: number | null): string | null {
+  if (ownerId === null) return null;
+  const user = users.find((u) => u.id === ownerId);
+  if (!user) return null;
+  const nickname = user.nickname?.trim();
+  if (nickname) return nickname;
+  const fullName = [user.first_name, user.last_name]
+    .filter((part) => part)
+    .join(" ")
+    .trim();
+  return fullName || null;
+}
+
+/** Mirrors OWNER_AVATAR_SELECT_EXPR / OWNER_AVATAR_RETURNING_EXPR: the owner's raw avatar_url,
+ *  or null when there's no owner (legacy data). */
+function computeOwnerAvatar(ownerId: number | null): string | null {
+  if (ownerId === null) return null;
+  const user = users.find((u) => u.id === ownerId);
+  return user?.avatar_url ?? null;
+}
+
+function withOwnerName<T extends { owner_id: number | null }>(
+  row: T,
+): T & { owner_name: string | null; owner_avatar_url: string | null } {
+  return {
+    ...row,
+    owner_name: computeOwnerName(row.owner_id),
+    owner_avatar_url: computeOwnerAvatar(row.owner_id),
+  };
+}
+
+/**
+ * Mirrors the COALESCE(nickname, "first last", ep.name) expression in
+ * selectParticipantsForEvent (participants.queries.ts): a real account (user_id set) prefers
+ * its nickname, else trimmed "first last", else falls through to the raw name column — which
+ * is also exactly what happens for a manual/account-less participant (user_id null), since
+ * there's no user row to find in that case.
+ */
+function computeParticipantDisplayName(row: EventParticipantRow): string | null {
+  const user = row.user_id !== null ? users.find((u) => u.id === row.user_id) : undefined;
+  if (user) {
+    const nickname = user.nickname?.trim();
+    if (nickname) return nickname;
+    const fullName = [user.first_name, user.last_name]
+      .filter((part) => part)
+      .join(" ")
+      .trim();
+    if (fullName) return fullName;
+  }
+  return row.name;
+}
+
+function computeParticipantAvatar(row: EventParticipantRow): string | null {
+  if (row.user_id === null) return null;
+  const user = users.find((u) => u.id === row.user_id);
+  return user?.avatar_url ?? null;
+}
+
+function withParticipantDisplay(
+  row: EventParticipantRow,
+): EventParticipantRow & { display_name: string | null; avatar_url: string | null } {
+  return {
+    ...row,
+    display_name: computeParticipantDisplayName(row),
+    avatar_url: computeParticipantAvatar(row),
+  };
+}
+
 const users: UserRow[] = [];
 const authIdentities: AuthIdentityRow[] = [];
 const sessions: SessionRow[] = [];
@@ -154,6 +245,8 @@ const events: EventRow[] = [];
 const eventParticipants: EventParticipantRow[] = [];
 const locationPoints: LocationPointRow[] = [];
 const participantLastLocations: ParticipantLastLocationRow[] = [];
+const routes: RouteRow[] = [];
+const eventRoutes: EventRouteRow[] = [];
 
 const nextId = {
   user: 1,
@@ -162,6 +255,8 @@ const nextId = {
   otp: 1,
   participant: 1,
   point: 1,
+  route: 1,
+  eventRoute: 1,
 };
 
 export function resetFakeDb() {
@@ -173,12 +268,16 @@ export function resetFakeDb() {
   eventParticipants.length = 0;
   locationPoints.length = 0;
   participantLastLocations.length = 0;
+  routes.length = 0;
+  eventRoutes.length = 0;
   nextId.user = 1;
   nextId.identity = 1;
   nextId.session = 1;
   nextId.otp = 1;
   nextId.participant = 1;
   nextId.point = 1;
+  nextId.route = 1;
+  nextId.eventRoute = 1;
 }
 
 /**
@@ -216,6 +315,7 @@ export function seedEvent(input: {
     visibility: input.visibility ?? "private",
     description: null,
     location: null,
+    area: null,
     finished_at: null,
     requires_approval: false,
     is_paused: false,
@@ -324,13 +424,14 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     return users.filter((u) => u.id === id);
   }
   if (sql.startsWith("INSERT INTO users")) {
-    const [lastLoginAt, now] = p as [Date | null, Date];
+    const [lastLoginAt, avatarUrl, now] = p as [Date | null, string | null, Date];
     const row: UserRow = {
       id: nextId.user++,
       first_name: null,
       last_name: null,
       nickname: null,
       emergency_phone: null,
+      avatar_url: avatarUrl,
       role: "RIDER",
       is_active: true,
       created_at: now,
@@ -338,6 +439,17 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       last_login_at: lastLoginAt,
     };
     users.push(row);
+    return [row];
+  }
+  // Google sign-in refresh: also overwrites avatar_url. Checked before the plain
+  // last-login branch below since both statements share the same text prefix.
+  if (sql.startsWith("UPDATE users SET last_login_at = $2, avatar_url")) {
+    const [id, at, avatarUrl] = p as [number, Date, string | null];
+    const row = users.find((u) => u.id === id);
+    if (!row) return [];
+    row.last_login_at = at;
+    row.avatar_url = avatarUrl;
+    row.updated_at = at;
     return [row];
   }
   if (sql.startsWith("UPDATE users SET last_login_at")) {
@@ -479,32 +591,43 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
   }
 
   // ---- events -------------------------------------------------------------
-  if (sql.startsWith("SELECT * FROM events WHERE code")) {
+  if (sql.includes("FROM events e") && sql.includes("WHERE e.code")) {
     const [code] = p as [string];
-    return events.filter((e) => e.code === code && e.is_active).slice(0, 1);
+    return events
+      .filter((e) => e.code === code && e.is_active)
+      .slice(0, 1)
+      .map(withOwnerName);
   }
-  if (sql.startsWith("SELECT * FROM events WHERE id")) {
+  if (sql.includes("FROM events e") && sql.includes("WHERE e.id = $1")) {
     const [id] = p as [string];
-    return events.filter((e) => e.id === id);
+    return events.filter((e) => e.id === id).map(withOwnerName);
   }
-  if (sql.startsWith("SELECT * FROM events WHERE owner_id")) {
-    const [ownerId] = p as [number];
-    return events.filter((e) => e.owner_id === ownerId && e.status === "live").slice(0, 1);
+  if (sql.startsWith("SELECT COUNT(*)::text AS count FROM events WHERE owner_id")) {
+    const [ownerId, excludeEventId] = p as [number, string];
+    const count = events.filter(
+      (e) => e.owner_id === ownerId && e.status === "live" && e.id !== excludeEventId,
+    ).length;
+    return [{ count: String(count) }];
   }
-  if (sql.startsWith("SELECT DISTINCT e.* FROM events e")) {
+  if (sql.startsWith("SELECT DISTINCT e.*")) {
     const [userId] = p as [number];
     const joinedEventIds = new Set(
-      eventParticipants.filter((ep) => ep.user_id === userId).map((ep) => ep.event_id),
+      eventParticipants
+        .filter((ep) => ep.user_id === userId && ep.left_at === null)
+        .map((ep) => ep.event_id),
     );
-    return events.filter(
-      (e) => (e.owner_id === userId || joinedEventIds.has(e.id)) && e.status !== "cancelled",
-    );
+    return events
+      .filter(
+        (e) => (e.owner_id === userId || joinedEventIds.has(e.id)) && e.status !== "cancelled",
+      )
+      .map(withOwnerName);
   }
-  if (sql.startsWith("SELECT * FROM events WHERE visibility")) {
+  if (sql.includes("FROM events e") && sql.includes("WHERE e.visibility")) {
     const [limit, offset] = p as [number, number];
     return events
       .filter((e) => e.visibility === "public" && e.status !== "cancelled" && e.status !== "draft")
-      .slice(offset, offset + limit);
+      .slice(offset, offset + limit)
+      .map(withOwnerName);
   }
   if (sql.startsWith("SELECT code FROM events WHERE code LIKE")) {
     const [pattern] = p as [string];
@@ -525,6 +648,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       visibility,
       description,
       location,
+      area,
       requiresApproval,
     ] = p as [
       string,
@@ -537,6 +661,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       number,
       DisplayMode,
       EventVisibility,
+      string | null,
       string | null,
       string | null,
       boolean,
@@ -559,6 +684,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       visibility,
       description,
       location,
+      area,
       finished_at: null,
       requires_approval: requiresApproval,
       is_paused: false,
@@ -570,7 +696,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       show_results: true,
     };
     events.push(row);
-    return [row];
+    return [withOwnerName(row)];
   }
   if (sql.startsWith("UPDATE events SET name = COALESCE")) {
     const [
@@ -584,6 +710,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       visibility,
       description,
       location,
+      area,
       showEventInfo,
       showParticipants,
       showRoute,
@@ -600,6 +727,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
       Date | null,
       DisplayMode | null,
       EventVisibility | null,
+      string | null,
       string | null,
       string | null,
       boolean | null,
@@ -624,6 +752,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     row.visibility = visibility ?? row.visibility;
     row.description = description ?? row.description;
     row.location = location ?? row.location;
+    row.area = area ?? row.area;
     row.show_event_info = showEventInfo ?? row.show_event_info;
     row.show_participants = showParticipants ?? row.show_participants;
     row.show_route = showRoute ?? row.show_route;
@@ -632,7 +761,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     row.show_results = showResults ?? row.show_results;
     row.requires_approval = requiresApproval ?? row.requires_approval;
     row.updated_at = new Date();
-    return [row];
+    return [withOwnerName(row)];
   }
   if (sql.startsWith("UPDATE events SET is_paused")) {
     const [id, isPaused] = p as [string, boolean];
@@ -643,7 +772,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     );
     row.is_paused = isPaused;
     row.updated_at = new Date();
-    return [row];
+    return [withOwnerName(row)];
   }
   if (sql.startsWith("UPDATE events SET status = $2")) {
     const [id, status, isActive, finishedAt] = p as [string, EventStatus, boolean, Date | null];
@@ -656,7 +785,7 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     row.is_active = isActive;
     row.finished_at = finishedAt;
     row.updated_at = new Date();
-    return [row];
+    return [withOwnerName(row)];
   }
   if (
     sql.startsWith("INSERT INTO event_participants (event_id, user_id, bib, registration_status)")
@@ -751,13 +880,14 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     const [eventId, userId] = p as [string, number];
     return eventParticipants.filter((row) => row.event_id === eventId && row.user_id === userId);
   }
-  if (
-    sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 AND left_at IS NULL ORDER BY")
-  ) {
+  // selectParticipantsForEvent — LEFT JOIN users for display_name/avatar_url (backs both
+  // GET /:eventId/participants and GET /:eventId/live's rider names).
+  if (sql.startsWith("SELECT ep.*") && sql.includes("FROM event_participants ep")) {
     const [eventId] = p as [string];
     return eventParticipants
       .filter((row) => row.event_id === eventId && row.left_at === null)
-      .sort((a, b) => a.joined_at.getTime() - b.joined_at.getTime());
+      .sort((a, b) => a.joined_at.getTime() - b.joined_at.getTime())
+      .map(withParticipantDisplay);
   }
   if (sql.startsWith("SELECT * FROM event_participants WHERE event_id = $1 ORDER BY")) {
     const [eventId] = p as [string];
@@ -894,6 +1024,72 @@ function runStatement(text: string, params: readonly unknown[] = []): Row[] {
     return inserted;
   }
 
+  // ---- routes / event_routes -----------------------------------------------------------
+  if (sql.startsWith("INSERT INTO routes")) {
+    const [ownerId, distanceKm, elevationM, trackPointsJson, pointCount] = p as [
+      number,
+      number,
+      number | null,
+      string,
+      number,
+    ];
+    const row: RouteRow = {
+      id: nextId.route++,
+      owner_id: ownerId,
+      source: "drawn",
+      distance_km: distanceKm,
+      elevation_m: elevationM,
+      // Mirrors what a real jsonb column round-trips back as: the driver parses it for us.
+      track_points: JSON.parse(trackPointsJson),
+      point_count: pointCount,
+    };
+    routes.push(row);
+    return [
+      {
+        id: row.id,
+        track_points: row.track_points,
+        distance_km: row.distance_km,
+        elevation_m: row.elevation_m,
+      },
+    ];
+  }
+  if (sql.startsWith("DELETE FROM event_routes WHERE event_id")) {
+    const [eventId] = p as [string];
+    const remaining = eventRoutes.filter((row) => row.event_id !== eventId);
+    const removedCount = eventRoutes.length - remaining.length;
+    eventRoutes.length = 0;
+    eventRoutes.push(...remaining);
+    return new Array(removedCount).fill({});
+  }
+  if (sql.startsWith("INSERT INTO event_routes")) {
+    const [eventId, routeId] = p as [string, number];
+    const row: EventRouteRow = {
+      id: nextId.eventRoute++,
+      event_id: eventId,
+      route_id: routeId,
+      created_at: new Date(),
+    };
+    eventRoutes.push(row);
+    return [row];
+  }
+  if (sql.includes("FROM event_routes er") && sql.includes("JOIN routes r")) {
+    const [eventId] = p as [string];
+    const links = eventRoutes
+      .filter((row) => row.event_id === eventId)
+      .sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+    if (links.length === 0) return [];
+    const route = routes.find((r) => r.id === links[0].route_id);
+    if (!route) return [];
+    return [
+      {
+        id: route.id,
+        track_points: route.track_points,
+        distance_km: route.distance_km,
+        elevation_m: route.elevation_m,
+      },
+    ];
+  }
+
   throw new Error(`fake-db: no handler for statement: ${sql}`);
 }
 
@@ -924,7 +1120,7 @@ export async function withTransaction<T>(fn: (tx: Transaction) => Promise<T>): P
   return fn({ query, queryOne });
 }
 
-export async function closePool(): Promise<void> {}
+export async function closePool(): Promise<void> { }
 
 export const pool = {
   query: async (text: string, params?: readonly unknown[]) => ({

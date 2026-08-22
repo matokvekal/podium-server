@@ -49,6 +49,8 @@ function toEventSummary(event: Event) {
     location: event.location,
     area: event.area,
     ownerId: event.ownerId,
+    ownerName: event.ownerName,
+    ownerAvatarUrl: event.ownerAvatarUrl,
   };
 }
 

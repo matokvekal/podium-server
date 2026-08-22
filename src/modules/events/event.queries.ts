@@ -28,6 +28,8 @@ interface EventRow {
   created_at: Date;
   updated_at: Date;
   owner_id: number | null;
+  owner_name: string | null;
+  owner_avatar_url: string | null;
   display_mode: DisplayMode;
   status: EventStatus;
   visibility: EventVisibility;
@@ -45,6 +47,27 @@ interface EventRow {
   show_results: boolean;
 }
 
+/**
+ * Owner display name: the owner's nickname if they set one (blank/whitespace doesn't count),
+ * otherwise their trimmed "first last" (either half optional), otherwise NULL — no owner, or an
+ * owner with neither set. Used both by SELECTs (as a LEFT JOIN, since owner_id may be NULL for
+ * legacy events) and by INSERT/UPDATE...RETURNING (as a correlated subquery, since RETURNING
+ * can't join — see OWNER_NAME_RETURNING_EXPR below). Keep the two expressions in sync.
+ */
+const OWNER_NAME_SELECT_EXPR =
+  "NULLIF(TRIM(COALESCE(NULLIF(TRIM(u.nickname), ''), TRIM(CONCAT_WS(' ', u.first_name, u.last_name)))), '')";
+
+/** Same computation as OWNER_NAME_SELECT_EXPR, as a subquery for RETURNING clauses. */
+const OWNER_NAME_RETURNING_EXPR = `(SELECT ${OWNER_NAME_SELECT_EXPR} FROM users u WHERE u.id = events.owner_id)`;
+
+/** Owner's avatar (Google profile photo), same LEFT JOIN as OWNER_NAME_SELECT_EXPR — just the
+ *  raw column, no name-style fallback chain needed. Null until Google sign-in populates it. */
+const OWNER_AVATAR_SELECT_EXPR = "u.avatar_url";
+
+/** Same idea as OWNER_NAME_RETURNING_EXPR, for RETURNING clauses that can't join. */
+const OWNER_AVATAR_RETURNING_EXPR =
+  "(SELECT u.avatar_url FROM users u WHERE u.id = events.owner_id)";
+
 interface EventParticipantRow {
   id: number;
   event_id: string;
@@ -61,6 +84,14 @@ interface EventParticipantRow {
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
+  /**
+   * Present only on rows selected with the users LEFT JOIN (selectParticipantsForEvent) —
+   * absent (undefined) on the frozen join/upsert/leave queries below, which don't join users.
+   * display_name is COALESCE(nickname, "first last", ep.name) computed in SQL; mapParticipant
+   * falls back to the raw `name` column when it's undefined so those other queries are unaffected.
+   */
+  display_name?: string | null;
+  avatar_url?: string | null;
 }
 
 function mapEvent(row: EventRow): Event {
@@ -76,6 +107,8 @@ function mapEvent(row: EventRow): Event {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ownerId: row.owner_id,
+    ownerName: row.owner_name,
+    ownerAvatarUrl: row.owner_avatar_url,
     displayMode: row.display_mode,
     status: row.status,
     visibility: row.visibility,
@@ -103,7 +136,10 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
     bib: row.bib,
     joinedAt: row.joined_at,
     leftAt: row.left_at,
-    name: row.name,
+    // display_name (nickname / "first last" / manual name, via SQL COALESCE) wins when the
+    // row was joined against users; every other query still returns the raw column.
+    name: row.display_name ?? row.name,
+    avatarUrl: row.avatar_url ?? null,
     email: row.email,
     phone: row.phone,
     category: row.category,
@@ -117,24 +153,40 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
 
 export async function selectActiveEventByCode(code: string): Promise<Event | null> {
   const row = await queryOne<EventRow>(
-    "SELECT * FROM events WHERE code = $1 AND is_active = TRUE LIMIT 1",
+    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
+       FROM events e
+       LEFT JOIN users u ON u.id = e.owner_id
+      WHERE e.code = $1 AND e.is_active = TRUE
+      LIMIT 1`,
     [code],
   );
   return row ? mapEvent(row) : null;
 }
 
 export async function selectEventById(id: string): Promise<Event | null> {
-  const row = await queryOne<EventRow>("SELECT * FROM events WHERE id = $1", [id]);
+  const row = await queryOne<EventRow>(
+    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
+       FROM events e
+       LEFT JOIN users u ON u.id = e.owner_id
+      WHERE e.id = $1`,
+    [id],
+  );
   return row ? mapEvent(row) : null;
 }
 
-/** For the one-live-event-per-owner check in changeEventStatus. */
-export async function selectLiveEventForOwner(ownerId: number): Promise<Event | null> {
-  const row = await queryOne<EventRow>(
-    "SELECT * FROM events WHERE owner_id = $1 AND status = 'live' LIMIT 1",
-    [ownerId],
+/**
+ * For the concurrent-live-events cap in changeEventStatus (see entitlements.ts). Excludes
+ * `excludeEventId` so an event being re-affirmed as live never counts against itself.
+ */
+export async function countLiveEventsForOwner(
+  ownerId: number,
+  excludeEventId: string,
+): Promise<number> {
+  const row = await queryOne<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM events WHERE owner_id = $1 AND status = 'live' AND id != $2",
+    [ownerId, excludeEventId],
   );
-  return row ? mapEvent(row) : null;
+  return row ? Number(row.count) : 0;
 }
 
 /**
@@ -144,8 +196,10 @@ export async function selectLiveEventForOwner(ownerId: number): Promise<Event | 
  */
 export async function selectEventsForUser(userId: number): Promise<Event[]> {
   const rows = await query<EventRow>(
-    `SELECT DISTINCT e.* FROM events e
-       LEFT JOIN event_participants ep ON ep.event_id = e.id AND ep.user_id = $1
+    `SELECT DISTINCT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
+       FROM events e
+       LEFT JOIN event_participants ep ON ep.event_id = e.id AND ep.user_id = $1 AND ep.left_at IS NULL
+       LEFT JOIN users u ON u.id = e.owner_id
       WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
       ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
     [userId],
@@ -155,8 +209,11 @@ export async function selectEventsForUser(userId: number): Promise<Event[]> {
 
 export async function selectPublicEvents(limit: number, offset: number): Promise<Event[]> {
   const rows = await query<EventRow>(
-    `SELECT * FROM events WHERE visibility = 'public' AND status NOT IN ('cancelled', 'draft')
-      ORDER BY starts_at ASC NULLS LAST
+    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
+       FROM events e
+       LEFT JOIN users u ON u.id = e.owner_id
+      WHERE e.visibility = 'public' AND e.status NOT IN ('cancelled', 'draft')
+      ORDER BY e.starts_at ASC NULLS LAST
       LIMIT $1 OFFSET $2`,
     [limit, offset],
   );
@@ -187,7 +244,7 @@ export async function insertEvent(input: CreateEventInput): Promise<Event> {
         (id, code, name, type, requires_bib, starts_at, ends_at, is_active,
          owner_id, display_mode, status, visibility, description, location, area, requires_approval)
       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13, $14)
-      RETURNING *`,
+      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
     [
       input.id,
       input.code,
@@ -252,7 +309,7 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             requires_approval = COALESCE($18, requires_approval),
             updated_at = NOW()
       WHERE id = $1
-      RETURNING *`,
+      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
     [
       eventId,
       input.name ?? null,
@@ -280,7 +337,8 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
 /** Pause/resume only ever touches this one column — general edits are locked out while live. */
 export async function updateEventPaused(eventId: string, isPaused: boolean): Promise<Event | null> {
   const rows = await query<EventRow>(
-    "UPDATE events SET is_paused = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+    `UPDATE events SET is_paused = $2, updated_at = NOW() WHERE id = $1
+      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
     [eventId, isPaused],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
@@ -296,7 +354,7 @@ export async function updateEventStatus(
   const rows = await query<EventRow>(
     `UPDATE events SET status = $2, is_active = $3, finished_at = $4, updated_at = NOW()
       WHERE id = $1
-      RETURNING *`,
+      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
     [eventId, status, isActive, finishedAt],
   );
   return rows[0] ? mapEvent(rows[0]) : null;

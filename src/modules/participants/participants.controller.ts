@@ -22,6 +22,7 @@ function toParticipantSummary(participant: EventParticipant) {
     eventId: participant.eventId,
     userId: participant.userId,
     name: participant.name,
+    avatarUrl: participant.avatarUrl,
     bib: participant.bib,
     email: participant.email,
     phone: participant.phone,

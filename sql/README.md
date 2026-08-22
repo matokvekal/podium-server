@@ -47,6 +47,8 @@ Skip 001 — those tables already exist.
 | `006-client-actions.sql` | offline de-duplication | yes — new table |
 | `007-users-avatar.sql` | `users.avatar_url` | yes — additive |
 | `008-registration-and-live.sql` | `requires_approval`, `is_paused`, one-live-event-per-owner index | yes — additive |
+| `009-events-area.sql` | `events.area` free-text field | yes — additive |
+| `010-drop-one-live-per-owner.sql` | drops the one-live-event-per-owner index; the "at most N" limit now lives in the server | yes — drops an index only |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

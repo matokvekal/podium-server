@@ -13,6 +13,7 @@ function toProfile(user: User) {
     lastName: user.lastName,
     nickname: user.nickname,
     emergencyPhone: user.emergencyPhone,
+    avatarUrl: user.avatarUrl,
     requiresProfile: needsProfile(user),
   };
 }

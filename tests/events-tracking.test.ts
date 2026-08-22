@@ -3,8 +3,8 @@
 
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFakeDb, seedEvent, storedLocationPoints } from "./support/fake-db.js";
 import { haversineDistanceKm } from "../src/lib/geo.js";
+import { resetFakeDb, seedEvent, storedLocationPoints } from "./support/fake-db.js";
 
 const mocks = vi.hoisted(() => ({
   verifyGoogleIdToken: vi.fn(),
@@ -22,12 +22,17 @@ const { createApp } = await import("../src/app.js");
 const RIDE_ID = "11111111-1111-4111-8111-111111111111";
 const RACE_ID = "22222222-2222-4222-8222-222222222222";
 
-async function signIn(app: ReturnType<typeof createApp>, subject = "google-subject-1") {
+async function signIn(
+  app: ReturnType<typeof createApp>,
+  subject = "google-subject-1",
+  picture: string | null = null,
+) {
   mocks.verifyGoogleIdToken.mockResolvedValue({
     subject,
     email: `${subject}@example.com`,
     emailVerified: true,
     name: "Rider One",
+    picture,
   });
   const res = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
   return res.body.accessToken as string;
@@ -325,6 +330,74 @@ describe("GET /api/v1/events/:eventId/live", () => {
     expect(rider.lat).toBeCloseTo(second.lat);
     expect(rider.lng).toBeCloseTo(second.lng);
     expect(rider.distanceKm).toBeCloseTo(haversineDistanceKm(first, second), 5);
+  });
+
+  it("shows a rider's nickname as the live name, plus avatarUrl from Google sign-in", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-name-1");
+    const event = await createLiveEvent(app, ownerToken);
+
+    const riderToken = await signIn(app, "live-rider-name-1", "https://example.com/ada.jpg");
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ firstName: "Ada", lastName: "Lovelace", nickname: "Ada L" });
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+    const participantId = join.body.participantId as number;
+    await request(app)
+      .post(`/api/v1/events/${event.id}/locations/batch`)
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({
+        participantId,
+        points: [{ lat: 32.1, lng: 34.8, recordedAt: "2026-08-13T09:00:00.000Z" }],
+      });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(200);
+    const rider = res.body.data.riders[0];
+    expect(rider.name).toBe("Ada L"); // nickname wins over "first last"
+    expect(rider.avatarUrl).toBe("https://example.com/ada.jpg");
+  });
+
+  it('falls back to "first last" as the live name when a rider has no nickname', async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-name-2");
+    const event = await createLiveEvent(app, ownerToken);
+
+    const riderToken = await signIn(app, "live-rider-name-2"); // no picture set
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ firstName: "Grace", lastName: "Hopper" });
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+    const participantId = join.body.participantId as number;
+    await request(app)
+      .post(`/api/v1/events/${event.id}/locations/batch`)
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({
+        participantId,
+        points: [{ lat: 32.1, lng: 34.8, recordedAt: "2026-08-13T09:00:00.000Z" }],
+      });
+
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(200);
+    const rider = res.body.data.riders[0];
+    expect(rider.name).toBe("Grace Hopper");
+    expect(rider.avatarUrl).toBeNull();
   });
 
   it("caps a non-owner's selection to 5 riders even if more are requested", async () => {

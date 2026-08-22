@@ -2,6 +2,7 @@ import { Router } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { optionalAuth, requireAuth } from "../../middleware/requireAuth.js";
 import { participantsRouter } from "../participants/participants.routes.js";
+import { routesRouter } from "../routes/routes.routes.js";
 import {
   cancelEventHandler,
   changeEventStatusHandler,
@@ -80,3 +81,4 @@ eventRouter.patch("/:eventId/pause", requireAuth, pauseEventHandler);
 eventRouter.delete("/:eventId", requireAuth, cancelEventHandler);
 
 eventRouter.use("/:eventId/participants", participantsRouter);
+eventRouter.use("/:eventId/route", routesRouter);

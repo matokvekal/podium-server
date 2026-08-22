@@ -19,12 +19,17 @@ vi.mock("../src/db/pool.js", async () => import("./support/fake-db.js"));
 
 const { createApp } = await import("../src/app.js");
 
-async function signIn(app: ReturnType<typeof createApp>, subject: string) {
+async function signIn(
+  app: ReturnType<typeof createApp>,
+  subject: string,
+  picture: string | null = null,
+) {
   mocks.verifyGoogleIdToken.mockResolvedValue({
     subject,
     email: `${subject}@example.com`,
     emailVerified: true,
     name: "Test User",
+    picture,
   });
   const res = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
   return res.body.accessToken as string;
@@ -51,6 +56,8 @@ describe("POST /api/v1/events", () => {
     expect(res.body.data.type).toBe("RIDE");
     expect(res.body.data.isOwner).toBe(true);
     expect(typeof res.body.data.code).toBe("string");
+    // Fresh sign-in leaves first/last/nickname unset — the client falls back on null itself.
+    expect(res.body.data.ownerName).toBeNull();
   });
 
   it("requires an access token", async () => {
@@ -106,6 +113,66 @@ describe("GET /api/v1/events", () => {
       .set("Authorization", `Bearer ${ownerToken}`);
     expect(ownerJoined.body.data).toHaveLength(0);
   });
+
+  it("includes the owner's display name, preferring nickname over first/last", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-name-1");
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ firstName: "Ada", lastName: "Lovelace" });
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Named Owner Event" });
+    expect(created.body.data.ownerName).toBe("Ada Lovelace");
+
+    const list = await request(app)
+      .get("/api/v1/events?filter=mine")
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.body.data[0].ownerName).toBe("Ada Lovelace");
+
+    // Nickname wins once set, everywhere ownerName is read from — proves it's computed
+    // fresh on read rather than snapshotted at event-creation time.
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ nickname: "Countess" });
+
+    const detail = await request(app)
+      .get(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(detail.body.data.ownerName).toBe("Countess");
+  });
+
+  it("includes the owner's avatarUrl from Google sign-in, null until they have one", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-avatar-1"); // no picture set
+
+    const noAvatar = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Ownerless Avatar" });
+    expect(noAvatar.body.data.ownerAvatarUrl).toBeNull();
+
+    const withAvatarToken = await signIn(app, "owner-avatar-2", "https://example.com/owner.jpg");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${withAvatarToken}`)
+      .send({ name: "Named Owner Avatar Event" });
+    expect(created.body.data.ownerAvatarUrl).toBe("https://example.com/owner.jpg");
+
+    const list = await request(app)
+      .get("/api/v1/events?filter=mine")
+      .set("Authorization", `Bearer ${withAvatarToken}`);
+    expect(list.body.data[0].ownerAvatarUrl).toBe("https://example.com/owner.jpg");
+
+    const detail = await request(app)
+      .get(`/api/v1/events/${created.body.data.id}`)
+      .set("Authorization", `Bearer ${withAvatarToken}`);
+    expect(detail.body.data.ownerAvatarUrl).toBe("https://example.com/owner.jpg");
+  });
 });
 
 describe("GET /api/v1/events/public", () => {
@@ -118,6 +185,28 @@ describe("GET /api/v1/events/public", () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].id).toBe("a");
+  });
+
+  it("surfaces the owner's display name on public list items too, not just the detail page", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-pub-1");
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ firstName: "Grace", lastName: "Hopper" });
+
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Public With Owner", visibility: "public" });
+    await request(app)
+      .patch(`/api/v1/events/${created.body.data.id}/status`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ status: "published" });
+
+    const res = await request(app).get("/api/v1/events/public");
+    const item = res.body.data.find((e: { id: string }) => e.id === created.body.data.id);
+    expect(item.ownerName).toBe("Grace Hopper");
   });
 });
 
@@ -308,33 +397,35 @@ describe("PATCH /api/v1/events/:eventId/status", () => {
     return latest;
   }
 
-  it("409s starting a second event while the owner already has one live", async () => {
+  it("409s starting a (limit + 1)th live event — free tier caps concurrent live events at 2", async () => {
     const app = createApp();
     const token = await signIn(app, "owner-12");
     await walkToLive(app, token, "First live event");
+    await walkToLive(app, token, "Second live event");
 
-    const second = await request(app)
+    const third = await request(app)
       .post("/api/v1/events")
       .set("Authorization", `Bearer ${token}`)
-      .send({ name: "Second event" });
+      .send({ name: "Third event" });
     await request(app)
-      .patch(`/api/v1/events/${second.body.data.id}/status`)
+      .patch(`/api/v1/events/${third.body.data.id}/status`)
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "published" });
     await request(app)
-      .patch(`/api/v1/events/${second.body.data.id}/status`)
+      .patch(`/api/v1/events/${third.body.data.id}/status`)
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "registration_open" });
     await request(app)
-      .patch(`/api/v1/events/${second.body.data.id}/status`)
+      .patch(`/api/v1/events/${third.body.data.id}/status`)
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "ready" });
 
     const res = await request(app)
-      .patch(`/api/v1/events/${second.body.data.id}/status`)
+      .patch(`/api/v1/events/${third.body.data.id}/status`)
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "live" });
     expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/limit is 2/);
   });
 
   it("does not block a different owner from going live at the same time", async () => {
@@ -364,9 +455,7 @@ describe("PATCH /api/v1/events/:eventId/status", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "published" });
 
-    const afterPublish = await request(app).get(
-      `/api/v1/events/by-code/${created.body.data.code}`,
-    );
+    const afterPublish = await request(app).get(`/api/v1/events/by-code/${created.body.data.code}`);
     expect(afterPublish.status).toBe(200);
   });
 });

@@ -21,6 +21,7 @@ async function signIn(app: ReturnType<typeof createApp>) {
     email: "rider@example.com",
     emailVerified: true,
     name: "Rider One",
+    picture: "https://lh3.googleusercontent.com/a/avatar-v1",
   });
   const res = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
   return res.body as { accessToken: string };
@@ -53,6 +54,7 @@ describe("PATCH /api/v1/users/me", () => {
     expect(res.body.data.id).toEqual(expect.any(Number));
     expect(res.body.data.role).toBe("RIDER");
     expect(res.body.data.requiresProfile).toBe(true);
+    expect(res.body.data.avatarUrl).toBe("https://lh3.googleusercontent.com/a/avatar-v1");
   });
 
   it("starts with requiresProfile true and flips to false once fields are complete", async () => {

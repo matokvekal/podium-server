@@ -20,6 +20,7 @@ const GOOGLE_IDENTITY = {
   email: "rider@example.com",
   emailVerified: true,
   name: "Rider One",
+  picture: "https://lh3.googleusercontent.com/a/avatar-v1",
 };
 
 beforeEach(() => {
@@ -75,5 +76,46 @@ describe("POST /api/v1/auth/google", () => {
     const app = createApp();
     const res = await request(app).post("/api/v1/auth/google").send({});
     expect(res.status).toBe(400);
+  });
+
+  it("captures avatar_url from the Google picture on first sign-in", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue(GOOGLE_IDENTITY);
+    const app = createApp();
+
+    const signIn = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await request(app)
+      .get("/api/v1/users/me")
+      .set("Authorization", `Bearer ${signIn.body.accessToken}`);
+
+    expect(me.status).toBe(200);
+    expect(me.body.data.avatarUrl).toBe(GOOGLE_IDENTITY.picture);
+  });
+
+  it("refreshes avatar_url on re-sign-in when the Google picture changes", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue(GOOGLE_IDENTITY);
+    const app = createApp();
+    await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+
+    const newPicture = "https://lh3.googleusercontent.com/a/avatar-v2";
+    mocks.verifyGoogleIdToken.mockResolvedValue({ ...GOOGLE_IDENTITY, picture: newPicture });
+    const second = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await request(app)
+      .get("/api/v1/users/me")
+      .set("Authorization", `Bearer ${second.body.accessToken}`);
+
+    expect(me.status).toBe(200);
+    expect(me.body.data.avatarUrl).toBe(newPicture);
+  });
+
+  it("does not set avatar_url when the Google token has no picture", async () => {
+    mocks.verifyGoogleIdToken.mockResolvedValue({ ...GOOGLE_IDENTITY, picture: null });
+    const app = createApp();
+
+    const signIn = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
+    const me = await request(app)
+      .get("/api/v1/users/me")
+      .set("Authorization", `Bearer ${signIn.body.accessToken}`);
+
+    expect(me.body.data.avatarUrl).toBeNull();
   });
 });

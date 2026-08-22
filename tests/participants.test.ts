@@ -11,19 +11,24 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/lib/google-auth.js", () => ({
   verifyGoogleIdToken: mocks.verifyGoogleIdToken,
-  InvalidGoogleTokenError: class InvalidGoogleTokenError extends Error {},
+  InvalidGoogleTokenError: class InvalidGoogleTokenError extends Error { },
 }));
 
 vi.mock("../src/db/pool.js", async () => import("./support/fake-db.js"));
 
 const { createApp } = await import("../src/app.js");
 
-async function signIn(app: ReturnType<typeof createApp>, subject: string) {
+async function signIn(
+  app: ReturnType<typeof createApp>,
+  subject: string,
+  picture: string | null = null,
+) {
   mocks.verifyGoogleIdToken.mockResolvedValue({
     subject,
     email: `${subject}@example.com`,
     emailVerified: true,
     name: "Test User",
+    picture,
   });
   const res = await request(app).post("/api/v1/auth/google").send({ idToken: "good-token" });
   return res.body.accessToken as string;
@@ -43,6 +48,30 @@ async function createAndPublish(
     .set("Authorization", `Bearer ${ownerToken}`)
     .send({ status: "published" });
   return created.body.data;
+}
+
+/** Walks an already-published event through the real status transitions to "live", then
+ * (optionally) on to "finished" — used to prove the roster lock kicks in only once the event
+ * is actually terminal, not just because it went live. */
+async function walkToStatus(
+  app: ReturnType<typeof createApp>,
+  ownerToken: string,
+  eventId: string,
+  target: "live" | "finished" | "cancelled",
+) {
+  const steps: string[] =
+    target === "cancelled"
+      ? ["cancelled"]
+      : ["registration_open", "ready", "live", ...(target === "finished" ? ["finished"] : [])];
+  let latest: Record<string, unknown> | undefined;
+  for (const status of steps) {
+    const res = await request(app)
+      .patch(`/api/v1/events/${eventId}/status`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ status });
+    latest = res.body.data;
+  }
+  return latest as { id: string; status: string; code: string };
 }
 
 beforeEach(() => {
@@ -110,6 +139,26 @@ describe("PATCH and DELETE /api/v1/events/:eventId/participants/:id", () => {
 });
 
 describe("approval-required registration", () => {
+  it("blocks the event owner from joining their own event", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-self-join-1");
+    const event = await createAndPublish(app, ownerToken, { requiresApproval: true });
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ eventCode: event.code });
+
+    expect(join.status).toBe(400);
+    expect(join.body.error).toMatch(/owner is already registered as organizer/i);
+
+    const list = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(0);
+  });
+
   it("self-join lands as waiting_approval, and the owner can approve it", async () => {
     const app = createApp();
     const ownerToken = await signIn(app, "owner-4");
@@ -230,5 +279,214 @@ describe("GET /api/v1/events/:eventId/participants — the riders-list-open gate
 
     const res = await request(app).get(`/api/v1/events/${event.id}/participants`);
     expect(res.status).toBe(401);
+  });
+});
+
+describe("leave flow membership consistency", () => {
+  it("removes a rider from joined events after leave", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-leave-1");
+    const riderToken = await signIn(app, "rider-leave-1");
+    const event = await createAndPublish(app, ownerToken);
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+    expect(join.status).toBe(200);
+
+    const joinedBeforeLeave = await request(app)
+      .get("/api/v1/events?filter=joined")
+      .set("Authorization", `Bearer ${riderToken}`);
+    expect(joinedBeforeLeave.status).toBe(200);
+    expect(joinedBeforeLeave.body.data.some((e: { id: string }) => e.id === event.id)).toBe(true);
+
+    const leave = await request(app)
+      .post(`/api/v1/events/${event.id}/leave`)
+      .set("Authorization", `Bearer ${riderToken}`);
+    expect(leave.status).toBe(200);
+
+    const joinedAfterLeave = await request(app)
+      .get("/api/v1/events?filter=joined")
+      .set("Authorization", `Bearer ${riderToken}`);
+    expect(joinedAfterLeave.status).toBe(200);
+    expect(joinedAfterLeave.body.data.some((e: { id: string }) => e.id === event.id)).toBe(false);
+  });
+});
+
+describe("participant name and avatar resolution", () => {
+  it("shows a real account's nickname as name, and avatarUrl from Google sign-in", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "name-owner-1");
+    const event = await createAndPublish(app, ownerToken);
+
+    const riderToken = await signIn(app, "name-rider-1", "https://example.com/ada.jpg");
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ firstName: "Ada", lastName: "Lovelace", nickname: "Ada L" });
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+
+    const list = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].name).toBe("Ada L"); // nickname wins over "first last"
+    expect(list.body.data[0].avatarUrl).toBe("https://example.com/ada.jpg");
+  });
+
+  it('falls back to "first last" when the account has no nickname', async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "name-owner-2");
+    const event = await createAndPublish(app, ownerToken);
+
+    const riderToken = await signIn(app, "name-rider-2"); // no picture set
+    await request(app)
+      .patch("/api/v1/users/me")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ firstName: "Grace", lastName: "Hopper" });
+    await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: event.code });
+
+    const list = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.body.data[0].name).toBe("Grace Hopper");
+    expect(list.body.data[0].avatarUrl).toBeNull();
+  });
+
+  it("leaves a manual/account-less participant's own name unaffected, with a null avatarUrl", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "name-owner-3");
+    const event = await createAndPublish(app, ownerToken);
+
+    const added = await request(app)
+      .post(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Walk-in Rider" });
+    expect(added.body.data.name).toBe("Walk-in Rider");
+    expect(added.body.data.avatarUrl).toBeNull();
+
+    const list = await request(app)
+      .get(`/api/v1/events/${event.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].name).toBe("Walk-in Rider");
+    expect(list.body.data[0].avatarUrl).toBeNull();
+  });
+});
+
+describe("roster is locked once an event is finished or cancelled", () => {
+  it("still lets the owner add/edit/remove/approve/reject while the event is live", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-10");
+    const riderToken = await signIn(app, "rider-10");
+    const created = await createAndPublish(app, ownerToken, { requiresApproval: true });
+    await walkToStatus(app, ownerToken, created.id, "live");
+
+    const join = await request(app)
+      .post("/api/v1/events/join")
+      .set("Authorization", `Bearer ${riderToken}`)
+      .send({ eventCode: created.code });
+    const participantId = join.body.participantId;
+
+    const approve = await request(app)
+      .post(`/api/v1/events/${created.id}/participants/${participantId}/approve`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(approve.status).toBe(200);
+
+    const reject = await request(app)
+      .post(`/api/v1/events/${created.id}/participants/${participantId}/reject`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(reject.status).toBe(200);
+
+    const add = await request(app)
+      .post(`/api/v1/events/${created.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Walk-in while live" });
+    expect(add.status).toBe(201);
+
+    const edit = await request(app)
+      .patch(`/api/v1/events/${created.id}/participants/${add.body.data.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Renamed while live" });
+    expect(edit.status).toBe(200);
+
+    const remove = await request(app)
+      .delete(`/api/v1/events/${created.id}/participants/${add.body.data.id}`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(remove.status).toBe(204);
+  });
+
+  it("400s add/edit/remove/approve/reject once the event is finished", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-11");
+    const created = await createAndPublish(app, ownerToken, { requiresApproval: true });
+
+    const added = await request(app)
+      .post(`/api/v1/events/${created.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Added before finish" });
+    const participantId = added.body.data.id;
+
+    const finished = await walkToStatus(app, ownerToken, created.id, "finished");
+    expect(finished.status).toBe("finished");
+
+    const add = await request(app)
+      .post(`/api/v1/events/${created.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Too late" });
+    expect(add.status).toBe(400);
+    expect(add.body.error).toMatch(/no longer be changed/);
+
+    const edit = await request(app)
+      .patch(`/api/v1/events/${created.id}/participants/${participantId}`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Too late" });
+    expect(edit.status).toBe(400);
+
+    const remove = await request(app)
+      .delete(`/api/v1/events/${created.id}/participants/${participantId}`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(remove.status).toBe(400);
+
+    const approve = await request(app)
+      .post(`/api/v1/events/${created.id}/participants/${participantId}/approve`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(approve.status).toBe(400);
+
+    const reject = await request(app)
+      .post(`/api/v1/events/${created.id}/participants/${participantId}/reject`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(reject.status).toBe(400);
+
+    // Reads must still work — riders can still see a finished event's roster.
+    const list = await request(app)
+      .get(`/api/v1/events/${created.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(list.status).toBe(200);
+    expect(list.body.data).toHaveLength(1);
+  });
+
+  it("400s add once the event is cancelled", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "owner-12");
+    const created = await createAndPublish(app, ownerToken);
+
+    const cancelled = await walkToStatus(app, ownerToken, created.id, "cancelled");
+    expect(cancelled.status).toBe("cancelled");
+
+    const add = await request(app)
+      .post(`/api/v1/events/${created.id}/participants`)
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "Too late" });
+    expect(add.status).toBe(400);
+    expect(add.body.error).toMatch(/no longer be changed/);
   });
 });

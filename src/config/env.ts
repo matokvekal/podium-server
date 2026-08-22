@@ -61,16 +61,15 @@ const envSchema = z.object({
   SMS_PROVIDER: z.enum(["MOCK", "TWILIO"]).default("MOCK"),
   AUTH_PROVIDERS: authProviders(),
 
-  // Developer sign-in shortcut (POST /api/v1/auth/dev-login), which mints a real session
-  // for a fake user with no credential of any kind. Defaults to ON outside production so
-  // local work needs no setup. The value is FORCED OFF in production below — this is the
-  // one setting that must never be flippable by a stray environment variable.
-  DEV_LOGIN_ENABLED: boolFlag(true),
-
   // Raw GPS retention. Only location_points are ever deleted, and never for an event whose
   // participant_tracks have not been written — losing a track is the one thing the design
   // exists to prevent.
   LOCATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+
+  // Flat free-tier cap on how many events one owner can have live at once — replaces the old
+  // DB-level "exactly 1" unique index (see sql/010-drop-one-live-per-owner.sql). Enforced in
+  // src/modules/events/entitlements.ts, which is the seam for per-plan limits later.
+  MAX_CONCURRENT_LIVE_EVENTS_FREE: z.coerce.number().int().positive().default(2),
 
   // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
   // On by default so it's visible without any setup; set to "false" to go quiet.
@@ -120,18 +119,7 @@ export const env = {
     "dev-only-access-secret-do-not-use-in-production-0001",
     data.NODE_ENV,
   ),
-  // Not `data.DEV_LOGIN_ENABLED`: production wins over whatever the environment says. A
-  // misconfigured deploy must not be able to switch on a passwordless login.
-  DEV_LOGIN_ENABLED: data.NODE_ENV === "production" ? false : data.DEV_LOGIN_ENABLED,
 };
-
-if (env.DEV_LOGIN_ENABLED) {
-  console.warn(
-    "DEV_LOGIN_ENABLED is on — POST /api/v1/auth/dev-login will issue real sessions for a " +
-      "fake user with no credentials. Never deploy this reachable from the internet. " +
-      "TEMPORARY DEVELOPMENT AID: delete it before going to production (see README.md).",
-  );
-}
 
 if (env.GOOGLE_CLIENT_IDS.length === 0) {
   console.warn("GOOGLE_CLIENT_IDS is not set — Google sign-in will reject every request.");

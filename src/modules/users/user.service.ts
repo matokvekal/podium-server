@@ -6,6 +6,7 @@ import {
   selectUserById,
   updateIdentityLastUsed,
   updateUserLastLogin,
+  updateUserLastLoginAndAvatar,
   updateUserProfile,
   updateUserRole,
 } from "./user.queries.js";
@@ -24,6 +25,8 @@ export function createUserWithIdentity(input: {
   providerUserId: string;
   email: string | null;
   phone: string | null;
+  /** Google profile photo at signup time; pass null for non-Google providers. */
+  avatarUrl: string | null;
 }): Promise<User> {
   return insertUserWithIdentity({ ...input, now: new Date() });
 }
@@ -31,6 +34,16 @@ export function createUserWithIdentity(input: {
 export async function touchLastLogin(userId: number): Promise<User> {
   const user = await updateUserLastLogin(userId, new Date());
   if (!user) throw new Error(`touchLastLogin: user ${userId} not found`);
+  return user;
+}
+
+/** Google sign-in only — see updateUserLastLoginAndAvatar. */
+export async function touchLastLoginAndAvatar(
+  userId: number,
+  avatarUrl: string | null,
+): Promise<User> {
+  const user = await updateUserLastLoginAndAvatar(userId, new Date(), avatarUrl);
+  if (!user) throw new Error(`touchLastLoginAndAvatar: user ${userId} not found`);
   return user;
 }
 

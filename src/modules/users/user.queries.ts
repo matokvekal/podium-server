@@ -12,6 +12,7 @@ interface UserRow {
   last_name: string | null;
   nickname: string | null;
   emergency_phone: string | null;
+  avatar_url: string | null;
   role: Role;
   is_active: boolean;
   created_at: Date;
@@ -40,6 +41,7 @@ function mapUser(row: UserRow): User {
     lastName: row.last_name,
     nickname: row.nickname,
     emergencyPhone: row.emergency_phone,
+    avatarUrl: row.avatar_url,
     role: row.role,
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -86,14 +88,16 @@ export async function insertUserWithIdentity(input: {
   providerUserId: string;
   email: string | null;
   phone: string | null;
+  /** Google profile photo at signup time; null for non-Google providers. */
+  avatarUrl: string | null;
   now: Date;
 }): Promise<User> {
   return withTransaction(async (tx) => {
     const userRow = await tx.queryOne<UserRow>(
-      `INSERT INTO users (last_login_at, created_at, updated_at)
-        VALUES ($1, $2, $2)
+      `INSERT INTO users (last_login_at, avatar_url, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
         RETURNING *`,
-      [input.now, input.now],
+      [input.now, input.avatarUrl, input.now],
     );
     if (!userRow) throw new Error("insertUserWithIdentity returned no user row");
 
@@ -112,6 +116,28 @@ export async function updateUserLastLogin(userId: number, at: Date): Promise<Use
   const rows = await query<UserRow>(
     "UPDATE users SET last_login_at = $2, updated_at = $2 WHERE id = $1 RETURNING *",
     [userId, at],
+  );
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+/**
+ * Google sign-in only: touches last_login_at like updateUserLastLogin, and also refreshes
+ * avatar_url from the Google ID token's current picture on every sign-in (a rider's Google
+ * photo can change, so this is a full overwrite, not a COALESCE-guarded partial update).
+ */
+export async function updateUserLastLoginAndAvatar(
+  userId: number,
+  at: Date,
+  avatarUrl: string | null,
+): Promise<User | null> {
+  const rows = await query<UserRow>(
+    `UPDATE users
+        SET last_login_at = $2,
+            avatar_url = $3,
+            updated_at = $2
+      WHERE id = $1
+      RETURNING *`,
+    [userId, at, avatarUrl],
   );
   return rows[0] ? mapUser(rows[0]) : null;
 }

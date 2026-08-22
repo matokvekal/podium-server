@@ -25,12 +25,37 @@ interface EventParticipantRow {
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
+  /** Only present on the joined query below — see the same field on event.queries.ts's
+   *  EventParticipantRow, which mapParticipant actually reads. */
+  display_name?: string | null;
+  avatar_url?: string | null;
 }
 
-/** Default roster: a rider who left drops off automatically (left_at IS NULL). */
+/**
+ * Default roster: a rider who left drops off automatically (left_at IS NULL). This is the one
+ * query behind both GET /:eventId/participants (via participants.service.ts) and GET
+ * /:eventId/live's rider names (via event.service.ts's getLiveRiders) — so the name/avatar
+ * resolution below covers both response shapes from a single place.
+ *
+ * display_name: a real account's (ep.user_id set) nickname wins, else trimmed "first last",
+ * else ep.name as a last resort (normally null for a real account, but harmless to include).
+ * For a manual/account-less entry (user_id null) the LEFT JOIN makes every u.* column null, so
+ * this collapses to plain ep.name — unaffected by this change. avatar_url is the real
+ * account's users.avatar_url, always null for a manual entry.
+ */
 export async function selectParticipantsForEvent(eventId: string): Promise<EventParticipant[]> {
   const rows = await query<EventParticipantRow>(
-    "SELECT * FROM event_participants WHERE event_id = $1 AND left_at IS NULL ORDER BY joined_at ASC",
+    `SELECT ep.*,
+        COALESCE(
+          NULLIF(TRIM(u.nickname), ''),
+          NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
+          ep.name
+        ) AS display_name,
+        u.avatar_url
+       FROM event_participants ep
+       LEFT JOIN users u ON u.id = ep.user_id
+      WHERE ep.event_id = $1 AND ep.left_at IS NULL
+      ORDER BY ep.joined_at ASC`,
     [eventId],
   );
   return rows.map(mapParticipant);

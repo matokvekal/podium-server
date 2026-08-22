@@ -9,6 +9,7 @@ export interface GoogleIdentity {
   email: string;
   emailVerified: boolean;
   name: string | null;
+  picture: string | null;
 }
 
 export class InvalidGoogleTokenError extends Error {
@@ -49,5 +50,6 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleIdenti
     email: payload.email.toLowerCase(),
     emailVerified: payload.email_verified ?? false,
     name: payload.name ?? null,
+    picture: payload.picture ?? null,
   };
 }
