@@ -8,6 +8,7 @@ import {
   createUserWithIdentity,
   findUserById,
   findUserByIdentity,
+  type NewUserProfile,
   needsProfile,
   touchIdentityLastUsed,
   touchLastLogin,
@@ -29,14 +30,27 @@ export interface AuthResult {
   requiresProfile: boolean;
 }
 
+/**
+ * The one place a provider identity becomes a Podium user. Keyed on
+ * (provider, providerUserId) — for Google that is the immutable `sub`, never the email,
+ * which can be reassigned.
+ *
+ * `newUserProfile` is applied ONLY on the branch that creates the row. An existing user
+ * is never re-written from the provider: they may have edited their name since, and a
+ * sign-in must not silently undo that.
+ */
 async function resolveUser(
   provider: AuthProviderType,
   providerUserId: string,
   email: string | null,
   phone: string | null,
+<<<<<<< HEAD
   /** Google's current profile photo. Only ever non-null for provider "GOOGLE" — SMS/dev-login
    *  callers pass null and avatar_url is left untouched for them. */
   avatarUrl: string | null,
+=======
+  newUserProfile?: NewUserProfile,
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 ): Promise<User> {
   const existing = await findUserByIdentity(provider, providerUserId);
   if (existing) {
@@ -50,9 +64,31 @@ async function resolveUser(
     logger.info({ userId: user.id, provider, isNewUser: false }, "user authenticated");
     return user;
   }
+<<<<<<< HEAD
   const user = await createUserWithIdentity({ provider, providerUserId, email, phone, avatarUrl });
+=======
+  const user = await createUserWithIdentity({
+    provider,
+    providerUserId,
+    email,
+    phone,
+    profile: newUserProfile,
+  });
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   logger.info({ userId: user.id, provider, isNewUser: true }, "user authenticated");
   return user;
+}
+
+/**
+ * Column widths are VARCHAR(200) for the names and VARCHAR(500) for avatar_url. Google
+ * has no documented ceiling on any of them, and an over-long value would make the INSERT
+ * throw — which would fail the whole sign-in. Truncating is the lesser evil; an empty or
+ * blank value becomes NULL so it does not look like a filled-in profile field.
+ */
+function fitColumn(value: string | null | undefined, maxLength: number): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
 }
 
 async function buildAuthResult(user: User, context: SessionContext): Promise<AuthResult> {
@@ -84,6 +120,7 @@ export async function authenticateWithGoogle(
     throw new ApiError(401, "Google account email is not verified");
   }
 
+<<<<<<< HEAD
   const user = await resolveUser(
     "GOOGLE",
     identity.subject,
@@ -91,6 +128,17 @@ export async function authenticateWithGoogle(
     null,
     identity.picture ?? null,
   );
+=======
+  // Everything below already came inside the token we just verified — no second call to
+  // Google, no extra scope. `displayName` is read but intentionally not stored: it would
+  // have to land in `nickname`, and that would satisfy needsProfile() and skip the
+  // profile-setup screen. The rider picks their own nickname.
+  const user = await resolveUser("GOOGLE", identity.subject, identity.email, null, {
+    firstName: fitColumn(identity.firstName, 200),
+    lastName: fitColumn(identity.lastName, 200),
+    avatarUrl: fitColumn(identity.picture, 500),
+  });
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   return buildAuthResult(user, context);
 }
 

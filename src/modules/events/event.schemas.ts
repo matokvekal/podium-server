@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { DISPLAY_MODES, EVENT_STATUSES, EVENT_TYPES, EVENT_VISIBILITIES } from "../../db/types.js";
+import {
+  ACTIVITY_TYPES,
+  DISPLAY_MODES,
+  EVENT_STATUSES,
+  EVENT_TYPES,
+  EVENT_VISIBILITIES,
+  RIDER_LEVELS,
+} from "../../db/types.js";
 
 export const eventCodeParamSchema = z.object({
   code: z.string().min(1).max(32),
@@ -21,6 +28,23 @@ export const createEventSchema = z.object({
   location: z.string().max(255).optional(),
   area: z.string().max(255).optional(),
   requiresApproval: z.boolean().optional().default(false),
+
+  // The create form collects these too — "riders can see the list" in particular. Left off
+  // this schema they were stripped silently (zod objects drop unknown keys), so the organizer's
+  // choice was lost until they happened to open Edit. Optional, not defaulted: undefined means
+  // "use the column default" rather than "set it to false".
+  showEventInfo: z.boolean().optional(),
+  showParticipants: z.boolean().optional(),
+  showRoute: z.boolean().optional(),
+  showLiveLocations: z.boolean().optional(),
+  showHistoryLocations: z.boolean().optional(),
+  showResults: z.boolean().optional(),
+
+  // Collected by the create form all along; the server had nowhere to put them until
+  // sql/010-event-profile.sql.
+  activityType: z.enum(ACTIVITY_TYPES).optional(),
+  level: z.enum(RIDER_LEVELS).optional(),
+  organizerGroup: z.string().max(200).optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -41,6 +65,9 @@ export const updateEventSchema = z.object({
   showHistoryLocations: z.boolean().optional(),
   showResults: z.boolean().optional(),
   requiresApproval: z.boolean().optional(),
+  activityType: z.enum(ACTIVITY_TYPES).optional(),
+  level: z.enum(RIDER_LEVELS).optional(),
+  organizerGroup: z.string().max(200).optional(),
 });
 
 export const changeEventStatusSchema = z.object({
@@ -66,10 +93,29 @@ export const liveQuerySchema = z.object({
 });
 
 export const listEventsQuerySchema = z.object({
-  filter: z.enum(["mine", "joined", "upcoming", "live", "past"]).optional().default("mine"),
+  filter: z
+    .enum(["mine", "joined", "upcoming", "live", "past", "following"])
+    .optional()
+    .default("mine"),
 });
 
+/**
+ * The public "Find Rides" browser. Every one of these used to run in the client's memory over
+ * whatever the first 20 rows happened to be — so a "Finished" filter could render empty while
+ * finished rides sat at row 21. Doing it here is the only way the answer can be right.
+ *
+ * `bucket` is the Live / Upcoming / Finished pill, expressed as the question a rider is
+ * actually asking rather than as a raw status: "upcoming" spans three statuses, and "finished"
+ * has to include a ride whose end time has passed but whose status nobody flipped.
+ */
 export const publicEventsQuerySchema = z.object({
+  q: z.string().max(200).optional(),
+  type: z.enum(EVENT_TYPES).optional(),
+  bucket: z.enum(["live", "upcoming", "finished"]).optional(),
+  activityType: z.enum(ACTIVITY_TYPES).optional(),
+  level: z.enum(RIDER_LEVELS).optional(),
+  /** Default depends on the bucket — see listPublicEvents. */
+  sort: z.enum(["soonest", "latest", "newest"]).optional(),
   limit: z.coerce.number().int().positive().max(100).optional().default(20),
   offset: z.coerce.number().int().nonnegative().optional().default(0),
 });

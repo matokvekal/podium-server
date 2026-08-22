@@ -1,5 +1,14 @@
 # Bike Podium server — start here
 
+> **Cross-repo lead-agent state lives here:** [TASKS.md](TASKS.md) (running task list),
+> [CONTEXT.md](CONTEXT.md) (durable knowledge, verified API-contract findings),
+> [NOTES.md](NOTES.md) (why things are the way they are, caveats, what is deliberately
+> undone) and [CLIENT-SERVER-AUDIT.md](CLIENT-SERVER-AUDIT.md) (the client-vs-server
+> walkthrough of the whole product story).
+> They cover **both** `podium-server` and `podium-client` — they live in this repo only
+> because the workspace root is not under git. Agent definitions are in
+> `.claude/agents/`.
+
 Express 5 + TypeScript + PostgreSQL. **Live in production**, and the Android transmitter
 talks to it today.
 
@@ -38,10 +47,15 @@ src/
   lib/                     api-error, crypto, duration, google-auth, jwt, logger
   middleware/              requireAuth, error-handler, not-found
   modules/
-    auth/    google + SMS sign-in, sessions, token rotation
-    users/   profile
-    events/  by-code, join, location ingest
-    sms/     OTP challenge lifecycle and the SMS provider
+    auth/         google + SMS sign-in, sessions, token rotation
+    users/        profile
+    events/       by-code, join, location ingest, CRUD, status workflow, live
+    groups/       ride groups — one event ridden as 2-4 groups
+    participants/ start list, manual add, approve/reject, attendance, results
+    results/      finish hook, results, saved ride lines
+    routes/       the track library, and attaching one to an event
+    sms/          OTP challenge lifecycle and the SMS provider
+    teams/        clubs, membership, and following an organizer
 sql/                       the hand-owned schema. Run by hand, never by a tool
 tests/                     vitest, with an in-memory stand-in for the pool
 docker/postgres/Dockerfile local Postgres 17 with the fresh-database sql/ files baked in
@@ -57,7 +71,7 @@ docker exec -it podium-db psql -U podium -d podium
 ```
 
 `podium` / `podium` / `podium`, and `.env.example` already carries the matching
-`DATABASE_URL`. The image bakes in the fresh-database order from `sql/README.md` (001→006,
+`DATABASE_URL`. The image bakes in the fresh-database order from `sql/README.md` (001→006, 008→013,
 then `seed.sql`); `007` and the destructive `900` are deliberately excluded. Init scripts
 only run on an **empty** volume — a new `sql/` file needs a `COPY` line in the Dockerfile
 *and* `docker compose down -v`, or a hand-run `psql` against the running container. This is
@@ -123,9 +137,23 @@ anything else on top of it.
 
 ## What this server does not do yet
 
-Event ownership (`events` still has no `owner_id` in the live database), per-event roles,
-visibility, participant status and results, routes, live positions, history tracks. The
-build order is in [../plan/01-task-list.md](../plan/01-task-list.md).
+Built since this list was first written: event ownership and the status workflow, visibility
+and the viewer tiers, the participant start list with approve/reject, live positions, the
+route library, results + ride history (including the finish hook that saves each rider's line
+— so the raw-point purge is no longer a data-loss hazard), the ride profile fields, real
+browse filters, bulk participant import, and offline replay de-duplication.
+
+Every wave of [CLIENT-SERVER-AUDIT.md](CLIENT-SERVER-AUDIT.md) has now shipped. What is left:
+
+- **per-event roles** — `event_members` exists; nothing reads it, so every action is owner-only
+- **billing** — `lib/plan-limits.ts` enforces the free tier, but there is no paid plan to
+  upgrade to and no subscription record. Every account is on the free plan today.
+- **races** — splits, categories, waves, laps. Deliberately deferred; see NOTES.md §6.
+- **Find Tracks** — hazards, POIs, air quality (`plan/server-tasks.md` Part B)
+- **purge jobs** — nothing yet purges `location_points` or `client_actions`. ⚠ read
+  NOTES.md §2.1 before writing the first one.
+
+The original build order is in [../plan/01-task-list.md](../plan/01-task-list.md).
 
 ## When to update this file
 

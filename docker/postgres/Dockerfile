@@ -30,6 +30,12 @@ COPY sql/003-participants.sql    /docker-entrypoint-initdb.d/03-participants.sql
 COPY sql/004-routes.sql          /docker-entrypoint-initdb.d/04-routes.sql
 COPY sql/005-tracking.sql        /docker-entrypoint-initdb.d/05-tracking.sql
 COPY sql/006-client-actions.sql  /docker-entrypoint-initdb.d/06-client-actions.sql
+COPY sql/008-registration-and-live.sql /docker-entrypoint-initdb.d/08-registration-and-live.sql
+COPY sql/009-results.sql         /docker-entrypoint-initdb.d/09-results.sql
+COPY sql/010-event-profile.sql   /docker-entrypoint-initdb.d/10-event-profile.sql
+COPY sql/011-client-action-results.sql /docker-entrypoint-initdb.d/11-client-action-results.sql
+COPY sql/012-ride-groups.sql     /docker-entrypoint-initdb.d/12-ride-groups.sql
+COPY sql/013-teams-and-follows.sql /docker-entrypoint-initdb.d/13-teams-and-follows.sql
 
 # Development seed: two example events (codes 74291 and 10001). Drop this line for a
 # container you do not want test data in.

@@ -491,6 +491,53 @@ describe("GET /api/v1/events/:eventId/live", () => {
       .set("Authorization", `Bearer ${viewerToken}`);
     expect(res.status).toBe(403);
   });
+
+  /**
+   * show_live_locations governs seeing OTHER riders. A rider's own dot is theirs regardless —
+   * without this, a participant on a ride with sharing off got a 403 and a blank map.
+   */
+  it("shows a participant their own position even when show_live_locations is off", async () => {
+    const app = createApp();
+    const ownerToken = await signIn(app, "live-owner-6");
+    const created = await request(app)
+      .post("/api/v1/events")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ name: "No live sharing", visibility: "public" });
+    for (const status of ["published", "registration_open", "ready", "live"]) {
+      await request(app)
+        .patch(`/api/v1/events/${created.body.data.id}/status`)
+        .set("Authorization", `Bearer ${ownerToken}`)
+        .send({ status });
+    }
+    const event = created.body.data;
+
+    const meToken = await signIn(app, "live-rider-self");
+    const otherToken = await signIn(app, "live-rider-other");
+    const ids: number[] = [];
+    for (const [i, token] of [meToken, otherToken].entries()) {
+      const join = await request(app)
+        .post("/api/v1/events/join")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ eventCode: event.code });
+      ids.push(join.body.participantId);
+      await request(app)
+        .post(`/api/v1/events/${event.id}/locations/batch`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          participantId: join.body.participantId,
+          points: [{ lat: 32 + i * 0.01, lng: 34.7, recordedAt: "2026-08-13T09:00:00.000Z" }],
+        });
+    }
+
+    // Asks for both riders; may only have the one that is them.
+    const res = await request(app)
+      .get(`/api/v1/events/${event.id}/live?riders=${ids.join(",")}`)
+      .set("Authorization", `Bearer ${meToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.riders).toHaveLength(1);
+    expect(res.body.data.riders[0].participantId).toBe(ids[0]);
+  });
 });
 
 describe("PATCH /api/v1/events/:eventId/pause", () => {

@@ -82,22 +82,42 @@ export async function selectIdentity(
   return row ? mapAuthIdentity(row) : null;
 }
 
-/** New account plus its first external identity — one transaction, never half of it. */
+/**
+ * New account plus its first external identity — one transaction, never half of it.
+ *
+ * firstName/lastName/avatarUrl are whatever the provider already told us about this
+ * person (Google's given_name, family_name and picture). They are only ever written
+ * here, at creation: a later sign-in must not overwrite what the rider has since
+ * edited. `nickname` is deliberately left NULL so needsProfile() still sends a new
+ * rider to the profile-setup screen.
+ */
 export async function insertUserWithIdentity(input: {
   provider: AuthProviderType;
   providerUserId: string;
   email: string | null;
   phone: string | null;
+<<<<<<< HEAD
   /** Google profile photo at signup time; null for non-Google providers. */
+=======
+  firstName: string | null;
+  lastName: string | null;
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   avatarUrl: string | null;
   now: Date;
 }): Promise<User> {
   return withTransaction(async (tx) => {
     const userRow = await tx.queryOne<UserRow>(
+<<<<<<< HEAD
       `INSERT INTO users (last_login_at, avatar_url, created_at, updated_at)
         VALUES ($1, $2, $3, $3)
         RETURNING *`,
       [input.now, input.avatarUrl, input.now],
+=======
+      `INSERT INTO users (first_name, last_name, avatar_url, last_login_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $5)
+        RETURNING *`,
+      [input.firstName, input.lastName, input.avatarUrl, input.now, input.now],
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
     );
     if (!userRow) throw new Error("insertUserWithIdentity returned no user row");
 

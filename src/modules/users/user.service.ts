@@ -11,6 +11,16 @@ import {
   updateUserRole,
 } from "./user.queries.js";
 
+/**
+ * Profile fields an identity provider can hand us at sign-up. Every one is optional:
+ * Google only guarantees `sub` and `email`, the rest depend on the account.
+ */
+export interface NewUserProfile {
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+}
+
 export async function findUserByIdentity(
   provider: AuthProviderType,
   providerUserId: string,
@@ -20,15 +30,33 @@ export async function findUserByIdentity(
   return selectUserById(identity.userId);
 }
 
+/**
+ * `profile` is what the identity provider already knew about this person — it is applied
+ * once, here, and never on a later sign-in. Providers that carry no profile (SMS) pass
+ * nothing and the columns stay NULL.
+ */
 export function createUserWithIdentity(input: {
   provider: AuthProviderType;
   providerUserId: string;
   email: string | null;
   phone: string | null;
+<<<<<<< HEAD
   /** Google profile photo at signup time; pass null for non-Google providers. */
   avatarUrl: string | null;
+=======
+  profile?: NewUserProfile;
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 }): Promise<User> {
-  return insertUserWithIdentity({ ...input, now: new Date() });
+  return insertUserWithIdentity({
+    provider: input.provider,
+    providerUserId: input.providerUserId,
+    email: input.email,
+    phone: input.phone,
+    firstName: input.profile?.firstName ?? null,
+    lastName: input.profile?.lastName ?? null,
+    avatarUrl: input.profile?.avatarUrl ?? null,
+    now: new Date(),
+  });
 }
 
 export async function touchLastLogin(userId: number): Promise<User> {

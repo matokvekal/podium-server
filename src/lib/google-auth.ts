@@ -4,11 +4,28 @@ import { logger } from "./logger.js";
 
 const client = new OAuth2Client();
 
+/**
+ * What the verified ID token tells us about the person. Only `subject` and `email` are
+ * guaranteed — every profile field below depends on scopes and on what the account
+ * actually has filled in, so each one is independently nullable.
+ */
 export interface GoogleIdentity {
+  /** Google's `sub`. Stable forever, unlike email — this is the identity key. */
   subject: string;
   email: string;
   emailVerified: boolean;
+<<<<<<< HEAD
   name: string | null;
+=======
+  /** `given_name` */
+  firstName: string | null;
+  /** `family_name` */
+  lastName: string | null;
+  /** `name` — the full display name. Read here, but deliberately not stored: writing it
+   *  to `nickname` would satisfy needsProfile() and skip the profile-setup screen. */
+  displayName: string | null;
+  /** `picture` — https URL of the Google avatar, stored as users.avatar_url. */
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   picture: string | null;
 }
 
@@ -49,7 +66,13 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleIdenti
     subject: payload.sub,
     email: payload.email.toLowerCase(),
     emailVerified: payload.email_verified ?? false,
+<<<<<<< HEAD
     name: payload.name ?? null,
+=======
+    firstName: payload.given_name ?? null,
+    lastName: payload.family_name ?? null,
+    displayName: payload.name ?? null,
+>>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
     picture: payload.picture ?? null,
   };
 }

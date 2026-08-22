@@ -10,6 +10,8 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { notFound } from "./middleware/not-found.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { eventRouter } from "./modules/events/event.routes.js";
+import { routeRouter } from "./modules/routes/route.routes.js";
+import { teamRouter } from "./modules/teams/team.routes.js";
 import { userRouter } from "./modules/users/user.routes.js";
 
 export function createApp(): Express {
@@ -43,6 +45,13 @@ export function createApp(): Express {
     }),
   );
 
+  /**
+   * Route geometry is the one genuinely large body this API takes: a GPX of a 100 km ride is
+   * tens of thousands of points, which is megabytes as JSON — 100 kb would 413 every real
+   * upload. Mounted BEFORE the global parser and scoped to the routes path; body-parser
+   * no-ops on an already-parsed request, so everything else still gets the tight limit.
+   */
+  app.use("/api/v1/routes", express.json({ limit: "4mb" }));
   app.use(express.json({ limit: "100kb" }));
 
   app.use(
@@ -61,6 +70,8 @@ export function createApp(): Express {
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
   app.use("/api/v1/events", eventRouter);
+  app.use("/api/v1/routes", routeRouter);
+  app.use("/api/v1/teams", teamRouter);
 
   app.use(notFound);
   app.use(errorHandler);
