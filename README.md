@@ -1,6 +1,0 @@
-<!-- 
-
-
-
-
-claude --dangerously-skip-permissions
