@@ -25,26 +25,14 @@ import {
 } from "./participants.queries.js";
 
 /**
- * Owner sees everyone, including who's still waiting on approval or was rejected — they need
- * the full picture to actually act on it. Otherwise: only a registered/approved rider may look
- * at all, and only once the organizer has opened the list (`show_participants`) — mirrors "if
- * riders list is open I will see, else no" from the product ask — and even then the list itself
- * is trimmed to other registered/approved riders only. An event that requires approval is
- * mutual: an approved rider doesn't see who's still pending, and a still-pending rider can't
- * see the roster at all yet (the isRegistered check above already blocks them outright) —
- * asked for directly ("he dont se the not appruved at ride and that user will not see him at
- * the ride").
+ * Owner sees everyone. Otherwise: only a registered/approved rider may look, and only once
+ * the organizer has opened the list (`show_participants`) — mirrors "if riders list is open I
+ * will see, else no" from the product ask.
  */
 export async function listParticipantsForViewer(
   eventId: string,
   viewerId: number | null,
 ): Promise<EventParticipant[]> {
-<<<<<<< HEAD
-  const event = await getEventForViewer(eventId, viewerId); // 403s a private event for a stranger
-  const isOwner = viewerId !== null && event.ownerId === viewerId;
-  if (isOwner) {
-    return selectParticipantsForEvent(eventId);
-=======
   // 404s a private event for a stranger; "approved" here is exactly the registered-or-approved
   // test this function used to run for itself — see getEventForViewer's tier rules.
   const { event, tier } = await getEventForViewer(eventId, viewerId);
@@ -58,33 +46,8 @@ export async function listParticipantsForViewer(
     if (!event.showParticipants) {
       throw new ApiError(403, "The participants list is not open for this event");
     }
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   }
-
-  const myParticipant =
-    viewerId !== null
-      ? await selectParticipantByEventAndUser(eventId, viewerId)
-      : null;
-  const isRegistered =
-    myParticipant !== null &&
-    (myParticipant.registrationStatus === "registered" ||
-      myParticipant.registrationStatus === "approved");
-  if (!isRegistered) {
-    throw new ApiError(
-      403,
-      "Only a registered rider or the organizer may view the participants list",
-    );
-  }
-  if (!event.showParticipants) {
-    throw new ApiError(403, "The participants list is not open for this event");
-  }
-
-  const all = await selectParticipantsForEvent(eventId);
-  return all.filter(
-    (p) =>
-      p.registrationStatus === "registered" ||
-      p.registrationStatus === "approved",
-  );
+  return selectParticipantsForEvent(eventId);
 }
 
 /** The plan cap applies to the whole start list, however riders got onto it. */
@@ -103,15 +66,6 @@ async function assertRoomForRiders(
 async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
   const { event } = await getEventForViewer(eventId, userId);
   assertOwner(event, userId);
-  // Roster management stays open through every non-terminal status (including live — the
-  // only ways to touch a live event are /status, /pause, and the participants endpoints).
-  // finished and cancelled are terminal: the event is over, so its roster is locked too.
-  if (event.status === "finished" || event.status === "cancelled") {
-    throw new ApiError(
-      400,
-      "This event has ended — participants can no longer be changed.",
-    );
-  }
 }
 
 export async function addParticipant(
@@ -123,11 +77,8 @@ export async function addParticipant(
     phone?: string;
     category?: string;
     bib?: string;
-<<<<<<< HEAD
-=======
     team?: string;
     countryCode?: string;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   },
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
@@ -141,10 +92,7 @@ export async function addParticipant(
     team: input.team ?? null,
     countryCode: input.countryCode ?? null,
   });
-  logger.info(
-    { eventId, userId, participantId: participant.id },
-    "participant added manually",
-  );
+  logger.info({ eventId, userId, participantId: participant.id }, "participant added manually");
   return participant;
 }
 
@@ -192,11 +140,8 @@ export async function editParticipant(
     phone?: string;
     category?: string;
     bib?: string;
-<<<<<<< HEAD
-=======
     team?: string;
     countryCode?: string;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   },
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
@@ -224,21 +169,11 @@ async function setRegistrationStatus(
 ): Promise<EventParticipant> {
   await assertOwnerOf(eventId, userId);
   const existing = await selectParticipantByIdForEvent(participantId, eventId);
-  if (!existing)
-    throw new ApiError(404, "Participant not found for this event");
-  const updated = await updateRegistrationStatus(
-    participantId,
-    eventId,
-    status,
-  );
+  if (!existing) throw new ApiError(404, "Participant not found for this event");
+  const updated = await updateRegistrationStatus(participantId, eventId, status);
   if (!updated)
-    throw new Error(
-      `setRegistrationStatus: participant ${participantId} not found after update`,
-    );
-  logger.info(
-    { eventId, userId, participantId, status },
-    "registration status changed",
-  );
+    throw new Error(`setRegistrationStatus: participant ${participantId} not found after update`);
+  logger.info({ eventId, userId, participantId, status }, "registration status changed");
   return updated;
 }
 

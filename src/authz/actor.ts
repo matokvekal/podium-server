@@ -45,7 +45,21 @@ export async function buildEventContext(event: Event, userId: number | null): Pr
       [event.id, userId],
     ),
     queryOne<{ registration_status: string }>(
-      "SELECT registration_status FROM event_participants WHERE event_id = $1 AND user_id = $2",
+      `SELECT registration_status
+         FROM event_participants
+        WHERE event_id = $1 AND user_id = $2
+        ORDER BY
+          CASE registration_status
+            WHEN 'approved' THEN 1
+            WHEN 'registered' THEN 2
+            WHEN 'waiting_approval' THEN 3
+            WHEN 'rejected' THEN 4
+            ELSE 5
+          END,
+          CASE WHEN left_at IS NULL THEN 0 ELSE 1 END,
+          joined_at DESC,
+          id DESC
+        LIMIT 1`,
       [event.id, userId],
     ),
   ]);

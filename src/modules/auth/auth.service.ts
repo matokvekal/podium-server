@@ -1,4 +1,5 @@
-import type { AuthProviderType, User } from "../../db/types.js";
+import { env } from "../../config/env.js";
+import type { AuthProviderType, Role, User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
 import { verifyGoogleIdToken } from "../../lib/google-auth.js";
 import { signAccessToken } from "../../lib/jwt.js";
@@ -6,13 +7,16 @@ import { logger } from "../../lib/logger.js";
 import { requestOtp, verifyOtp } from "../sms/otp.service.js";
 import {
   createUserWithIdentity,
+  findIdentity,
   findUserById,
   findUserByIdentity,
   type NewUserProfile,
   needsProfile,
+  removeIdentity,
+  setUserRole,
   touchIdentityLastUsed,
   touchLastLogin,
-  touchLastLoginAndAvatar,
+  updateProfile,
 } from "../users/user.service.js";
 import {
   findSessionByRefreshToken,
@@ -22,6 +26,36 @@ import {
   type SessionContext,
 } from "./session.service.js";
 import { issueTokenPair, type TokenPair } from "./token.service.js";
+
+function isDuplicateIdentityError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const code = "code" in err ? (err as { code?: unknown }).code : undefined;
+  const constraint =
+    "constraint" in err ? (err as { constraint?: unknown }).constraint : undefined;
+  return (
+    code === "23505" &&
+    constraint === "auth_identities_provider_provider_user_id_key"
+  );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function findUserByIdentityWithRetry(
+  provider: AuthProviderType,
+  providerUserId: string,
+): Promise<User | null> {
+  // After a unique-violation race, the winner may not be committed yet on this connection.
+  // Retry briefly so the loser request can continue as a normal returning login.
+  const delaysMs = [0, 25, 50, 100];
+  for (const delay of delaysMs) {
+    if (delay > 0) await wait(delay);
+    const user = await findUserByIdentity(provider, providerUserId);
+    if (user) return user;
+  }
+  return null;
+}
 
 export interface AuthResult {
   user: { id: number; role: User["role"] };
@@ -44,37 +78,52 @@ async function resolveUser(
   providerUserId: string,
   email: string | null,
   phone: string | null,
-<<<<<<< HEAD
-  /** Google's current profile photo. Only ever non-null for provider "GOOGLE" — SMS/dev-login
-   *  callers pass null and avatar_url is left untouched for them. */
-  avatarUrl: string | null,
-=======
   newUserProfile?: NewUserProfile,
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 ): Promise<User> {
+  const identity = await findIdentity(provider, providerUserId);
+  if (identity) {
+    const existing = await findUserById(identity.userId);
+    if (existing) {
+      await touchIdentityLastUsed(provider, providerUserId);
+      const user = await touchLastLogin(existing.id);
+      logger.info({ userId: user.id, provider, isNewUser: false }, "user authenticated");
+      return user;
+    }
+
+    // Corrupted row: identity exists but linked user no longer exists. Remove it so
+    // sign-in can recreate a consistent user+identity pair.
+    await removeIdentity(provider, providerUserId);
+    logger.warn({ provider, providerUserId }, "removed dangling auth identity (missing user)");
+  }
+
   const existing = await findUserByIdentity(provider, providerUserId);
   if (existing) {
     await touchIdentityLastUsed(provider, providerUserId);
-    // Google photos change over time, so re-sign-in refreshes avatar_url every time. Other
-    // providers keep using the plain last-login touch, which never writes avatar_url.
-    const user =
-      provider === "GOOGLE"
-        ? await touchLastLoginAndAvatar(existing.id, avatarUrl)
-        : await touchLastLogin(existing.id);
+    const user = await touchLastLogin(existing.id);
     logger.info({ userId: user.id, provider, isNewUser: false }, "user authenticated");
     return user;
   }
-<<<<<<< HEAD
-  const user = await createUserWithIdentity({ provider, providerUserId, email, phone, avatarUrl });
-=======
-  const user = await createUserWithIdentity({
-    provider,
-    providerUserId,
-    email,
-    phone,
-    profile: newUserProfile,
-  });
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
+  let user: User;
+  try {
+    user = await createUserWithIdentity({
+      provider,
+      providerUserId,
+      email,
+      phone,
+      profile: newUserProfile,
+    });
+  } catch (err) {
+    // Two tabs (or repeated GIS callbacks) can race: both see "no identity", one inserts,
+    // the other loses on the unique index. Treat that loser as a normal returning login.
+    if (!isDuplicateIdentityError(err)) throw err;
+
+    const recovered = await findUserByIdentityWithRetry(provider, providerUserId);
+    if (!recovered) throw err;
+    await touchIdentityLastUsed(provider, providerUserId);
+    user = await touchLastLogin(recovered.id);
+    logger.info({ userId: user.id, provider, isNewUser: false }, "user authenticated after identity race");
+    return user;
+  }
   logger.info({ userId: user.id, provider, isNewUser: true }, "user authenticated");
   return user;
 }
@@ -120,15 +169,6 @@ export async function authenticateWithGoogle(
     throw new ApiError(401, "Google account email is not verified");
   }
 
-<<<<<<< HEAD
-  const user = await resolveUser(
-    "GOOGLE",
-    identity.subject,
-    identity.email,
-    null,
-    identity.picture ?? null,
-  );
-=======
   // Everything below already came inside the token we just verified — no second call to
   // Google, no extra scope. `displayName` is read but intentionally not stored: it would
   // have to land in `nickname`, and that would satisfy needsProfile() and skip the
@@ -138,7 +178,6 @@ export async function authenticateWithGoogle(
     lastName: fitColumn(identity.lastName, 200),
     avatarUrl: fitColumn(identity.picture, 500),
   });
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   return buildAuthResult(user, context);
 }
 
@@ -155,7 +194,57 @@ export async function verifySmsOtp(
   context: SessionContext,
 ): Promise<AuthResult> {
   const phone = await verifyOtp(challengeId, code);
-  const user = await resolveUser("SMS", phone, null, phone, null);
+  const user = await resolveUser("SMS", phone, null, phone);
+  return buildAuthResult(user, context);
+}
+
+/**
+ * ⚠ TEMPORARY DEVELOPMENT AID — DELETE BEFORE PRODUCTION.
+ * See README.md > Developer sign-in for the full removal checklist.
+ *
+ * Signs in as a fake user with no credential of any kind, and returns exactly the same
+ * AuthResult as a real sign-in: a genuine access token and a genuine session row. That is
+ * the point — the rest of the app then behaves identically to a real login, so nothing
+ * downstream needs a "pretend" code path.
+ *
+ * The route is unreachable in production (see requireDevLoginEnabled); this second check
+ * exists because the cost of it being wrong is an open door to every account.
+ */
+export async function authenticateAsDevUser(
+  input: { role: Role; key: string },
+  context: SessionContext,
+): Promise<AuthResult> {
+  if (!env.DEV_LOGIN_ENABLED || env.NODE_ENV === "production") {
+    throw new ApiError(404, "Not found");
+  }
+
+  // EMAIL_PASSWORD with no password hash: it cannot collide with a real GOOGLE or SMS
+  // identity, and it is inert — no other code path can authenticate this identity.
+  const providerUserId = `dev-${input.key.toLowerCase()}`;
+  let user = await resolveUser(
+    "EMAIL_PASSWORD",
+    providerUserId,
+    `${providerUserId}@podium.local`,
+    null,
+  );
+
+  // Fill the profile so the fake user lands in the app instead of the profile-setup screen.
+  if (needsProfile(user)) {
+    user = await updateProfile(user.id, {
+      firstName: "Dev",
+      lastName: input.key === "default" ? "User" : input.key,
+      nickname: providerUserId,
+    });
+  }
+
+  if (user.role !== input.role) {
+    user = await setUserRole(user.id, input.role);
+  }
+
+  logger.warn(
+    { userId: user.id, role: user.role, key: input.key },
+    "DEV LOGIN USED — passwordless sign-in, development only",
+  );
   return buildAuthResult(user, context);
 }
 

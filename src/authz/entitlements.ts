@@ -70,17 +70,31 @@ function isFeature(value: string): value is Feature {
  * one ride and must not quietly upgrade the whole account.
  */
 async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
-  return query<GrantRow>(
-    `SELECT * FROM entitlement_grants
-      WHERE user_id = $1
-        AND revoked_at IS NULL
-        AND starts_at <= NOW()
-        AND (expires_at IS NULL OR expires_at > NOW())
-        AND (quantity IS NULL OR consumed < quantity)
-        AND scope_type IS NULL
-      ORDER BY id ASC`,
-    [userId],
-  );
+  try {
+    return await query<GrantRow>(
+      `SELECT * FROM entitlement_grants
+        WHERE user_id = $1
+          AND revoked_at IS NULL
+          AND starts_at <= NOW()
+          AND (expires_at IS NULL OR expires_at > NOW())
+          AND (quantity IS NULL OR consumed < quantity)
+          AND scope_type IS NULL
+        ORDER BY id ASC`,
+      [userId],
+    );
+  } catch (err) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? (err as { code?: unknown }).code
+        : undefined;
+    // Older local DBs may not have authz tables yet. Fallback to free plan instead of
+    // failing /users/me and blocking sign-in.
+    if (code === "42P01") {
+      logger.warn({ userId, err }, "entitlement tables missing; falling back to free entitlements");
+      return [];
+    }
+    throw err;
+  }
 }
 
 export async function resolveEntitlements(userId: number | null): Promise<Entitlements> {

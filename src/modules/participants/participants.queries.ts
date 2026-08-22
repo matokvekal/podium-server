@@ -33,46 +33,16 @@ interface EventParticipantRow {
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
-<<<<<<< HEAD
-  /** Only present on the joined query below — see the same field on event.queries.ts's
-   *  EventParticipantRow, which mapParticipant actually reads. */
-=======
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   display_name?: string | null;
   avatar_url?: string | null;
 }
 
-/**
- * Default roster: a rider who left drops off automatically (left_at IS NULL). This is the one
- * query behind both GET /:eventId/participants (via participants.service.ts) and GET
- * /:eventId/live's rider names (via event.service.ts's getLiveRiders) — so the name/avatar
- * resolution below covers both response shapes from a single place.
- *
- * display_name: a real account's (ep.user_id set) nickname wins, else trimmed "first last",
- * else ep.name as a last resort (normally null for a real account, but harmless to include).
- * For a manual/account-less entry (user_id null) the LEFT JOIN makes every u.* column null, so
- * this collapses to plain ep.name — unaffected by this change. avatar_url is the real
- * account's users.avatar_url, always null for a manual entry.
- */
 export async function selectParticipantsForEvent(eventId: string): Promise<EventParticipant[]> {
   const rows = await query<EventParticipantRow>(
-<<<<<<< HEAD
-    `SELECT ep.*,
-        COALESCE(
-          NULLIF(TRIM(u.nickname), ''),
-          NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
-          ep.name
-        ) AS display_name,
-        u.avatar_url
-       FROM event_participants ep
-       LEFT JOIN users u ON u.id = ep.user_id
-      WHERE ep.event_id = $1 AND ep.left_at IS NULL
-=======
     `SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
        FROM event_participants ep
        LEFT JOIN users u ON u.id = ep.user_id
       WHERE ep.event_id = $1
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
       ORDER BY ep.joined_at ASC`,
     [eventId],
   );
@@ -280,6 +250,41 @@ export async function updateRegistrationStatus(
   eventId: string,
   status: RegistrationStatus,
 ): Promise<EventParticipant | null> {
+  const target = await queryOne<{ user_id: number | null }>(
+    "SELECT user_id FROM event_participants WHERE id = $1 AND event_id = $2",
+    [participantId, eventId],
+  );
+  if (!target) return null;
+
+  if (target.user_id !== null) {
+    const rows = await query<EventParticipantRow>(
+      // Legacy DBs can carry duplicate rows for the same event/user pair. Keep them in sync,
+      // then return one canonical row for API responses.
+      `WITH updated AS (
+         UPDATE event_participants
+            SET registration_status = $3
+          WHERE event_id = $2 AND user_id = $4
+          RETURNING *
+       )
+       SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
+         FROM updated ep
+         LEFT JOIN users u ON u.id = ep.user_id
+        ORDER BY
+          CASE ep.registration_status
+            WHEN 'approved' THEN 1
+            WHEN 'registered' THEN 2
+            WHEN 'waiting_approval' THEN 3
+            WHEN 'rejected' THEN 4
+            ELSE 5
+          END,
+          CASE WHEN ep.left_at IS NULL THEN 0 ELSE 1 END,
+          ep.joined_at DESC,
+          ep.id DESC`,
+      [participantId, eventId, status, target.user_id],
+    );
+    return rows[0] ? mapParticipant(rows[0]) : null;
+  }
+
   const rows = await query<EventParticipantRow>(
     // Same re-join as updateParticipant — approving a rider must not blank out their name.
     `WITH updated AS (

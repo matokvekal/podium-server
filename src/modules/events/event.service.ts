@@ -19,17 +19,11 @@ import { ApiError } from "../../lib/api-error.js";
 import { haversineDistanceKm } from "../../lib/geo.js";
 import { logger } from "../../lib/logger.js";
 import { selectParticipantsForEvent } from "../participants/participants.queries.js";
-<<<<<<< HEAD
-import { getMaxConcurrentLiveEvents } from "./entitlements.js";
-=======
 import { writeParticipantTracks } from "../results/track-writer.js";
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 import {
-  countLiveEventsForOwner,
   insertEvent,
   insertLocationPoints,
   type LocationPointInput,
-  leaveEventForUser,
   selectActiveEventByCode,
   selectEventById,
   selectEventCodesWithPrefix,
@@ -37,10 +31,7 @@ import {
   selectEventsForUser,
   selectLastLocation,
   selectLastLocationsForEvent,
-<<<<<<< HEAD
-=======
   selectLiveEventForOwner,
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   selectParticipantByEventAndUser,
   selectParticipantForUser,
   type PublicEventFilters,
@@ -100,12 +91,6 @@ export async function joinEvent(
     throw new ApiError(404, "Event not found");
   }
 
-  // Creator/owner is already the organizer by definition and must never create a
-  // self-membership row that could appear as pending/rejected.
-  if (event.ownerId === userId) {
-    throw new ApiError(400, "Event owner is already registered as organizer");
-  }
-
   if (event.requiresBib && !bib) {
     logger.warn({ eventId: event.id, userId }, "joinEvent: missing required bib");
     throw new ApiError(400, "This event requires a bib number");
@@ -127,36 +112,10 @@ export async function joinEvent(
   const initialStatus: RegistrationStatus = event.requiresApproval
     ? "waiting_approval"
     : "registered";
-  const participant = await upsertParticipant({
-    eventId: event.id,
-    userId,
-    bib,
-    initialStatus,
-  });
+  const participant = await upsertParticipant({ eventId: event.id, userId, bib, initialStatus });
   logger.info({ eventId: event.id, userId, participantId: participant.id }, "user joined event");
 
   return { event, participant };
-}
-
-/**
- * Idempotent counterpart to joinEvent: leaving twice returns the same already-left state
- * rather than erroring, so the client can call it freely. Only a caller who never joined this
- * event at all (no row with their user_id) gets 404. Rejoining reuses this same row (see
- * upsertParticipant above), so leaving never needs to touch participantId, and joinedAt is
- * deliberately left alone here — it's the original first-join date, not "last activity".
- */
-export async function leaveEvent(eventId: string, userId: number): Promise<EventParticipant> {
-  const updated = await leaveEventForUser(eventId, userId);
-  if (updated) {
-    logger.info({ eventId, userId, participantId: updated.id }, "user left event");
-    return updated;
-  }
-
-  const existing = await selectParticipantByEventAndUser(eventId, userId);
-  if (!existing) {
-    throw new ApiError(404, "You are not registered for this event");
-  }
-  return existing; // already left — idempotent no-op
 }
 
 export async function findParticipantForUser(
@@ -207,14 +166,12 @@ export function assertOwner(event: Event, userId: number): void {
   }
 }
 
-/** draft -> published -> live -> finished, with registration_open/ready as optional
- * waypoints an owner may still pass through manually — but going live only ever requires
- * being published, not walking every waypoint first. Any non-terminal state may move to
- * cancelled. finished and cancelled are terminal. */
+/** draft -> published -> registration_open -> ready -> live -> finished. Any non-terminal
+ * state may move to cancelled. finished and cancelled are terminal. */
 const ALLOWED_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   draft: ["published", "cancelled"],
-  published: ["registration_open", "live", "cancelled"],
-  registration_open: ["ready", "live", "cancelled"],
+  published: ["registration_open", "cancelled"],
+  registration_open: ["ready", "cancelled"],
   ready: ["live", "cancelled"],
   live: ["finished", "cancelled"],
   finished: [],
@@ -474,13 +431,9 @@ export async function changeEventStatus(
   }
 
   if (nextStatus === "live") {
-    const limit = getMaxConcurrentLiveEvents(userId);
-    const liveCount = await countLiveEventsForOwner(userId, eventId);
-    if (liveCount >= limit) {
-      throw new ApiError(
-        409,
-        `You already have ${liveCount} live events — the limit is ${limit}. Stop one first.`,
-      );
+    const existingLive = await selectLiveEventForOwner(userId);
+    if (existingLive && existingLive.id !== eventId) {
+      throw new ApiError(409, "You already have another event live — stop it first");
     }
   }
 
@@ -574,12 +527,6 @@ export async function getLiveRiders(
   const { event, tier } = await getEventForViewer(eventId, viewerId); // 404s a private event for a stranger
   const isOwner = tier === "owner";
 
-<<<<<<< HEAD
-  if (!isOwner) {
-    if (!event.showLiveLocations) {
-      throw new ApiError(403, "Live locations are not shared for this event");
-    }
-=======
   // A rider's own position is theirs to see. show_live_locations governs whether they may see
   // EVERYONE ELSE ("see other riders if creator allows that") — it was never meant to hide a
   // rider from themselves, and doing so left a participant on an unshared ride with a blank map.
@@ -588,7 +535,6 @@ export async function getLiveRiders(
 
   if (!isOwner && !event.showLiveLocations && me === null) {
     throw new ApiError(403, "Live locations are not shared for this event");
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   }
 
   let riderIds: number[] | null = requestedRiderIds;
@@ -608,28 +554,12 @@ export async function getLiveRiders(
   ]);
   const participantById = new Map(participants.map((p) => [p.id, p]));
 
-  // Defense in depth on top of the roster's own filtering (participants.service.ts) — a
-  // non-owner viewer should never see a still-pending or rejected rider's position, even if
-  // they somehow already had that participant id.
-  const visibleLocations = isOwner
-    ? locations
-    : locations.filter((loc) => {
-      const status = participantById.get(loc.participantId)?.registrationStatus;
-      return status === "registered" || status === "approved";
-    });
-
-  const riders: LiveRider[] = visibleLocations.map((loc) => {
+  const riders: LiveRider[] = locations.map((loc) => {
     const participant = participantById.get(loc.participantId);
     return {
       participantId: loc.participantId,
-<<<<<<< HEAD
-      // selectParticipantsForEvent already resolves the real name in SQL (nickname, else
-      // "first last", else the manual name column) — "Rider" only fires in the genuinely
-      // impossible case where all of those are blank, or the participant row is missing.
-=======
       // selectParticipantsForEvent resolves this from `users` for anyone who joined through
       // the app; "Rider" is now only reachable for a location row whose participant is gone.
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
       name: participant?.name ?? "Rider",
       avatarUrl: participant?.avatarUrl ?? null,
       bib: participant?.bib ?? null,

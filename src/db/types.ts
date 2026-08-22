@@ -78,14 +78,8 @@ export interface User {
   lastName: string | null;
   nickname: string | null;
   emergencyPhone: string | null;
-<<<<<<< HEAD
-  /** Google profile photo URL. Populated/refreshed on Google sign-in only — see
-   *  auth.service.ts's resolveUser. Null for SMS/dev-login users and for Google accounts
-   *  with no photo. */
-=======
   /** users.avatar_url — the Google profile picture, filled in at sign-up when Google
    *  supplied one. Never overwritten by a later login. */
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   avatarUrl: string | null;
   role: Role;
   isActive: boolean;
@@ -133,14 +127,6 @@ export interface Event {
   updatedAt: Date;
 
   ownerId: number | null;
-  /** Owner's nickname if set, else "first last" (either half optional), else null. Computed
-   *  in the query layer via a LEFT JOIN/subquery to users — see event.queries.ts. Null when
-   *  the event has no owner (legacy data) or the owner set neither nickname nor first/last. */
-  ownerName: string | null;
-  /** Owner's Google profile photo (users.avatar_url), via the same LEFT JOIN/subquery as
-   *  ownerName — see event.queries.ts. Null for legacy/ownerless events, and for any owner
-   *  who hasn't signed in with Google (or Google gave no photo). */
-  ownerAvatarUrl: string | null;
   displayMode: DisplayMode;
   status: EventStatus;
   visibility: EventVisibility;
@@ -176,35 +162,20 @@ export interface EventParticipant {
   joinedAt: Date;
   leftAt: Date | null;
 
-<<<<<<< HEAD
-  // `name`/`avatarUrl` as returned to clients: for a real account (userId set), the query
-  // layer resolves these from `users` (nickname else "first last"; avatar_url) — see
-  // selectParticipantsForEvent in participants.queries.ts. For a manual/account-less entry
-  // (userId null — manual add, Excel import), `name` is this raw column and avatarUrl is
-  // always null. Some lower-level queries (join/upsert/leave) don't do this resolution and
-  // return the raw column as-is — see the EventParticipantRow comment in event.queries.ts.
-=======
   /** The row's own name (manual entry, Excel import) when set, otherwise the linked user's —
    *  resolved at read time by PARTICIPANT_DISPLAY_COLUMNS, not stored twice. */
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   name: string | null;
   /** The linked user's `users.avatar_url`. Always null for a participant with no account. */
   avatarUrl: string | null;
   email: string | null;
   phone: string | null;
   category: string | null;
-<<<<<<< HEAD
-  /** Real account's users.avatar_url, or null for a manual/account-less participant, or null
-   *  when returned by a query that doesn't join users (see `name` comment above). */
-  avatarUrl: string | null;
-=======
   /** Free text, shown on the results row. Not linked to the teams feature. */
   team: string | null;
   /** ISO 3166-1 alpha-2, stored uppercase. */
   countryCode: string | null;
   /** Which ride group they are in, if the organizer uses groups at all. */
   groupId: number | null;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 
   // THREE INDEPENDENT AXES — do not merge. See plan/02-database-schema.md.
   registrationStatus: RegistrationStatus;

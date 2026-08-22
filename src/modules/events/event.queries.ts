@@ -5,6 +5,7 @@
 // location_points column names match that app's JSON. Neither may be renamed.
 
 import { execute, query, queryOne } from "../../db/pool.js";
+import { logger } from "../../lib/logger.js";
 import type {
   ActivityType,
   DisplayMode,
@@ -30,8 +31,6 @@ interface EventRow {
   created_at: Date;
   updated_at: Date;
   owner_id: number | null;
-  owner_name: string | null;
-  owner_avatar_url: string | null;
   display_mode: DisplayMode;
   status: EventStatus;
   visibility: EventVisibility;
@@ -53,27 +52,6 @@ interface EventRow {
   show_results: boolean;
 }
 
-/**
- * Owner display name: the owner's nickname if they set one (blank/whitespace doesn't count),
- * otherwise their trimmed "first last" (either half optional), otherwise NULL — no owner, or an
- * owner with neither set. Used both by SELECTs (as a LEFT JOIN, since owner_id may be NULL for
- * legacy events) and by INSERT/UPDATE...RETURNING (as a correlated subquery, since RETURNING
- * can't join — see OWNER_NAME_RETURNING_EXPR below). Keep the two expressions in sync.
- */
-const OWNER_NAME_SELECT_EXPR =
-  "NULLIF(TRIM(COALESCE(NULLIF(TRIM(u.nickname), ''), TRIM(CONCAT_WS(' ', u.first_name, u.last_name)))), '')";
-
-/** Same computation as OWNER_NAME_SELECT_EXPR, as a subquery for RETURNING clauses. */
-const OWNER_NAME_RETURNING_EXPR = `(SELECT ${OWNER_NAME_SELECT_EXPR} FROM users u WHERE u.id = events.owner_id)`;
-
-/** Owner's avatar (Google profile photo), same LEFT JOIN as OWNER_NAME_SELECT_EXPR — just the
- *  raw column, no name-style fallback chain needed. Null until Google sign-in populates it. */
-const OWNER_AVATAR_SELECT_EXPR = "u.avatar_url";
-
-/** Same idea as OWNER_NAME_RETURNING_EXPR, for RETURNING clauses that can't join. */
-const OWNER_AVATAR_RETURNING_EXPR =
-  "(SELECT u.avatar_url FROM users u WHERE u.id = events.owner_id)";
-
 interface EventParticipantRow {
   id: number;
   event_id: string;
@@ -93,18 +71,9 @@ interface EventParticipantRow {
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
-<<<<<<< HEAD
-  /**
-   * Present only on rows selected with the users LEFT JOIN (selectParticipantsForEvent) —
-   * absent (undefined) on the frozen join/upsert/leave queries below, which don't join users.
-   * display_name is COALESCE(nickname, "first last", ep.name) computed in SQL; mapParticipant
-   * falls back to the raw `name` column when it's undefined so those other queries are unaffected.
-   */
-=======
 
   // Only present on the queries that join `users` — see PARTICIPANT_DISPLAY_COLUMNS. A plain
   // `SELECT *` leaves both undefined, which mapParticipant treats as "nothing to fall back to".
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   display_name?: string | null;
   avatar_url?: string | null;
 }
@@ -139,8 +108,6 @@ function mapEvent(row: EventRow): Event {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ownerId: row.owner_id,
-    ownerName: row.owner_name,
-    ownerAvatarUrl: row.owner_avatar_url,
     displayMode: row.display_mode,
     status: row.status,
     visibility: row.visibility,
@@ -172,13 +139,8 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
     bib: row.bib,
     joinedAt: row.joined_at,
     leftAt: row.left_at,
-<<<<<<< HEAD
-    // display_name (nickname / "first last" / manual name, via SQL COALESCE) wins when the
-    // row was joined against users; every other query still returns the raw column.
-=======
     // display_name is undefined on queries that did not join `users`; the row's own name is
     // still the right answer there (manual entries always have one).
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
     name: row.display_name ?? row.name,
     avatarUrl: row.avatar_url ?? null,
     email: row.email,
@@ -197,40 +159,24 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
 
 export async function selectActiveEventByCode(code: string): Promise<Event | null> {
   const row = await queryOne<EventRow>(
-    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
-       FROM events e
-       LEFT JOIN users u ON u.id = e.owner_id
-      WHERE e.code = $1 AND e.is_active = TRUE
-      LIMIT 1`,
+    "SELECT * FROM events WHERE code = $1 AND is_active = TRUE LIMIT 1",
     [code],
   );
   return row ? mapEvent(row) : null;
 }
 
 export async function selectEventById(id: string): Promise<Event | null> {
-  const row = await queryOne<EventRow>(
-    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
-       FROM events e
-       LEFT JOIN users u ON u.id = e.owner_id
-      WHERE e.id = $1`,
-    [id],
-  );
+  const row = await queryOne<EventRow>("SELECT * FROM events WHERE id = $1", [id]);
   return row ? mapEvent(row) : null;
 }
 
-/**
- * For the concurrent-live-events cap in changeEventStatus (see entitlements.ts). Excludes
- * `excludeEventId` so an event being re-affirmed as live never counts against itself.
- */
-export async function countLiveEventsForOwner(
-  ownerId: number,
-  excludeEventId: string,
-): Promise<number> {
-  const row = await queryOne<{ count: string }>(
-    "SELECT COUNT(*)::text AS count FROM events WHERE owner_id = $1 AND status = 'live' AND id != $2",
-    [ownerId, excludeEventId],
+/** For the one-live-event-per-owner check in changeEventStatus. */
+export async function selectLiveEventForOwner(ownerId: number): Promise<Event | null> {
+  const row = await queryOne<EventRow>(
+    "SELECT * FROM events WHERE owner_id = $1 AND status = 'live' LIMIT 1",
+    [ownerId],
   );
-  return row ? Number(row.count) : 0;
+  return row ? mapEvent(row) : null;
 }
 
 /**
@@ -240,19 +186,12 @@ export async function countLiveEventsForOwner(
  */
 export async function selectEventsForUser(userId: number): Promise<Event[]> {
   const rows = await query<EventRow>(
-<<<<<<< HEAD
-    `SELECT DISTINCT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
-       FROM events e
-       LEFT JOIN event_participants ep ON ep.event_id = e.id AND ep.user_id = $1 AND ep.left_at IS NULL
-       LEFT JOIN users u ON u.id = e.owner_id
-=======
     // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
     // events this user OWNS but was rejected from, which cannot happen today but is exactly
     // the kind of thing that starts happening once co-organizers land.
     `SELECT DISTINCT e.* FROM events e
        LEFT JOIN event_participants ep
               ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
       WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
       ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
     [userId],
@@ -267,15 +206,6 @@ export async function selectEventsForUser(userId: number): Promise<Event[]> {
  */
 export async function selectUpcomingEventsForFollowed(userId: number): Promise<Event[]> {
   const rows = await query<EventRow>(
-<<<<<<< HEAD
-    `SELECT e.*, ${OWNER_NAME_SELECT_EXPR} AS owner_name, ${OWNER_AVATAR_SELECT_EXPR} AS owner_avatar_url
-       FROM events e
-       LEFT JOIN users u ON u.id = e.owner_id
-      WHERE e.visibility = 'public' AND e.status NOT IN ('cancelled', 'draft')
-      ORDER BY e.starts_at ASC NULLS LAST
-      LIMIT $1 OFFSET $2`,
-    [limit, offset],
-=======
     `SELECT DISTINCT e.* FROM events e
        LEFT JOIN user_follows f ON f.followee_id = e.owner_id AND f.follower_id = $1
        LEFT JOIN team_members tm
@@ -286,7 +216,6 @@ export async function selectUpcomingEventsForFollowed(userId: number): Promise<E
         AND (f.follower_id IS NOT NULL OR tm.user_id IS NOT NULL)
       ORDER BY e.starts_at ASC NULLS LAST`,
     [userId],
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   );
   return rows.map(mapEvent);
 }
@@ -325,6 +254,10 @@ export interface PublicEventFilters {
   sort: "soonest" | "latest" | "newest";
   limit: number;
   offset: number;
+}
+
+function isMissingColumnError(err: unknown): err is { code: string; message?: string } {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703";
 }
 
 /**
@@ -370,15 +303,47 @@ export async function selectPublicEvents(
     newest: "created_at DESC",
   }[filters.sort];
 
-  const rows = await query<EventRow>(
-    `SELECT * FROM events WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
-    [...params, filters.limit, filters.offset],
-  );
-  const countRow = await queryOne<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM events WHERE ${where}`,
-    params,
-  );
-  return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
+  try {
+    const rows = await query<EventRow>(
+      `SELECT * FROM events WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
+      [...params, filters.limit, filters.offset],
+    );
+    const countRow = await queryOne<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM events WHERE ${where}`,
+      params,
+    );
+    return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+
+    // Older local schemas may not have activity_type/level yet.
+    logger.warn({ err }, "events profile columns missing; using legacy public-events query");
+
+    const legacyWhere = `visibility = 'public'
+        AND status NOT IN ('cancelled', 'draft')
+        AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR location ILIKE '%' || $1 || '%')
+        AND ($2::text IS NULL OR type = $2)
+        AND (
+          $3::text IS NULL
+          OR ($3 = 'live' AND status = 'live')
+          OR ($3 = 'upcoming'
+              AND status IN ('published', 'registration_open', 'ready')
+              AND (ends_at IS NULL OR ends_at >= NOW()))
+          OR ($3 = 'finished'
+              AND (status = 'finished' OR (ends_at IS NOT NULL AND ends_at < NOW())))
+        )`;
+    const legacyParams = [filters.q ?? null, filters.type ?? null, filters.bucket ?? null];
+
+    const rows = await query<EventRow>(
+      `SELECT * FROM events WHERE ${legacyWhere} ORDER BY ${orderBy} LIMIT $4 OFFSET $5`,
+      [...legacyParams, filters.limit, filters.offset],
+    );
+    const countRow = await queryOne<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM events WHERE ${legacyWhere}`,
+      legacyParams,
+    );
+    return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
+  }
 }
 
 export interface CreateEventInput {
@@ -394,13 +359,10 @@ export interface CreateEventInput {
   visibility: EventVisibility;
   description: string | null;
   location: string | null;
-<<<<<<< HEAD
   area: string | null;
-=======
   activityType: ActivityType | null;
   level: RiderLevel | null;
   organizerGroup: string | null;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   requiresApproval: boolean;
   /** null for any of these means "leave the column default alone" — see the COALESCEs below. */
   showEventInfo: boolean | null;
@@ -413,55 +375,92 @@ export interface CreateEventInput {
 
 /** New events always start as a draft, and a draft is never is_active — see event.service.ts. */
 export async function insertEvent(input: CreateEventInput): Promise<Event> {
-  const row = await queryOne<EventRow>(
-    // The COALESCE defaults repeat sql/002-events-podium.sql's column defaults on purpose: an
-    // explicit INSERT column list cannot fall back to DEFAULT per-row, and the caller passes
-    // null for anything the create form did not ask about.
-    `INSERT INTO events
+  try {
+    const row = await queryOne<EventRow>(
+      // The COALESCE defaults repeat sql/002-events-podium.sql's column defaults on purpose: an
+      // explicit INSERT column list cannot fall back to DEFAULT per-row, and the caller passes
+      // null for anything the create form did not ask about.
+      `INSERT INTO events
         (id, code, name, type, requires_bib, starts_at, ends_at, is_active,
-<<<<<<< HEAD
-         owner_id, display_mode, status, visibility, description, location, area, requires_approval)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13, $14)
-      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
-=======
-         owner_id, display_mode, status, visibility, description, location, requires_approval,
+         owner_id, display_mode, status, visibility, description, location, area, requires_approval,
          show_event_info, show_participants, show_route,
          show_live_locations, show_history_locations, show_results,
          activity_type, level, organizer_group)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13,
-              COALESCE($14, TRUE), COALESCE($15, FALSE), COALESCE($16, TRUE),
-              COALESCE($17, FALSE), COALESCE($18, FALSE), COALESCE($19, TRUE),
-              $20, $21, $22)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13, $14,
+              COALESCE($15, TRUE), COALESCE($16, FALSE), COALESCE($17, TRUE),
+              COALESCE($18, FALSE), COALESCE($19, FALSE), COALESCE($20, TRUE),
+              $21, $22, $23)
       RETURNING *`,
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
-    [
-      input.id,
-      input.code,
-      input.name,
-      input.type,
-      input.requiresBib,
-      input.startsAt,
-      input.endsAt,
-      input.ownerId,
-      input.displayMode,
-      input.visibility,
-      input.description,
-      input.location,
-      input.area,
-      input.requiresApproval,
-      input.showEventInfo,
-      input.showParticipants,
-      input.showRoute,
-      input.showLiveLocations,
-      input.showHistoryLocations,
-      input.showResults,
-      input.activityType,
-      input.level,
-      input.organizerGroup,
-    ],
-  );
-  if (!row) throw new Error("insertEvent returned no row");
-  return mapEvent(row);
+      [
+        input.id,
+        input.code,
+        input.name,
+        input.type,
+        input.requiresBib,
+        input.startsAt,
+        input.endsAt,
+        input.ownerId,
+        input.displayMode,
+        input.visibility,
+        input.description,
+        input.location,
+        input.area,
+        input.requiresApproval,
+        input.showEventInfo,
+        input.showParticipants,
+        input.showRoute,
+        input.showLiveLocations,
+        input.showHistoryLocations,
+        input.showResults,
+        input.activityType,
+        input.level,
+        input.organizerGroup,
+      ],
+    );
+    if (!row) throw new Error("insertEvent returned no row");
+    return mapEvent(row);
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+
+    // Legacy local schema fallback (before activity_type/level/organizer_group existed).
+    logger.warn({ err }, "events profile columns missing; inserting event with legacy columns");
+
+    const row = await queryOne<EventRow>(
+      `INSERT INTO events
+          (id, code, name, type, requires_bib, starts_at, ends_at, is_active,
+           owner_id, display_mode, status, visibility, description, location, area, requires_approval,
+           show_event_info, show_participants, show_route,
+           show_live_locations, show_history_locations, show_results)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, 'draft', $10, $11, $12, $13, $14,
+          COALESCE($15, TRUE), COALESCE($16, FALSE), COALESCE($17, TRUE),
+          COALESCE($18, FALSE), COALESCE($19, FALSE), COALESCE($20, TRUE))
+        RETURNING *`,
+      [
+        input.id,
+        input.code,
+        input.name,
+        input.type,
+        input.requiresBib,
+        input.startsAt,
+        input.endsAt,
+        input.ownerId,
+        input.displayMode,
+        input.visibility,
+        input.description,
+        input.location,
+        input.area,
+        input.requiresApproval,
+        input.showEventInfo,
+        input.showParticipants,
+        input.showRoute,
+        input.showLiveLocations,
+        input.showHistoryLocations,
+        input.showResults,
+      ],
+    );
+    if (!row) throw new Error("insertEvent legacy fallback returned no row");
+    return mapEvent(row);
+  }
 }
 
 export interface UpdateEventInput {
@@ -500,7 +499,6 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             visibility = COALESCE($8, visibility),
             description = COALESCE($9, description),
             location = COALESCE($10, location),
-<<<<<<< HEAD
             area = COALESCE($11, area),
             show_event_info = COALESCE($12, show_event_info),
             show_participants = COALESCE($13, show_participants),
@@ -509,21 +507,12 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             show_history_locations = COALESCE($16, show_history_locations),
             show_results = COALESCE($17, show_results),
             requires_approval = COALESCE($18, requires_approval),
-=======
-            show_event_info = COALESCE($11, show_event_info),
-            show_participants = COALESCE($12, show_participants),
-            show_route = COALESCE($13, show_route),
-            show_live_locations = COALESCE($14, show_live_locations),
-            show_history_locations = COALESCE($15, show_history_locations),
-            show_results = COALESCE($16, show_results),
-            requires_approval = COALESCE($17, requires_approval),
-            activity_type = COALESCE($18, activity_type),
-            level = COALESCE($19, level),
-            organizer_group = COALESCE($20, organizer_group),
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
+            activity_type = COALESCE($19, activity_type),
+            level = COALESCE($20, level),
+            organizer_group = COALESCE($21, organizer_group),
             updated_at = NOW()
       WHERE id = $1
-      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
+      RETURNING *`,
     [
       eventId,
       input.name ?? null,
@@ -554,8 +543,7 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
 /** Pause/resume only ever touches this one column — general edits are locked out while live. */
 export async function updateEventPaused(eventId: string, isPaused: boolean): Promise<Event | null> {
   const rows = await query<EventRow>(
-    `UPDATE events SET is_paused = $2, updated_at = NOW() WHERE id = $1
-      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
+    "UPDATE events SET is_paused = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
     [eventId, isPaused],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
@@ -571,7 +559,7 @@ export async function updateEventStatus(
   const rows = await query<EventRow>(
     `UPDATE events SET status = $2, is_active = $3, finished_at = $4, updated_at = NOW()
       WHERE id = $1
-      RETURNING *, ${OWNER_NAME_RETURNING_EXPR} AS owner_name, ${OWNER_AVATAR_RETURNING_EXPR} AS owner_avatar_url`,
+      RETURNING *`,
     [eventId, status, isActive, finishedAt],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
@@ -626,42 +614,20 @@ export async function selectParticipantByEventAndUser(
   userId: number,
 ): Promise<EventParticipant | null> {
   const row = await queryOne<EventParticipantRow>(
-    "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2",
-    [eventId, userId],
-  );
-  return row ? mapParticipant(row) : null;
-}
-
-/**
- * Same as above, but only a still-active (not-left) row. Used for "have they already joined"
- * checks — e.g. GET /:eventId's myParticipant — so a rider who left sees the Join button again
- * instead of a stale "already joined" state.
- */
-export async function selectActiveParticipantByEventAndUser(
-  eventId: string,
-  userId: number,
-): Promise<EventParticipant | null> {
-  const row = await queryOne<EventParticipantRow>(
-    "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2 AND left_at IS NULL",
-    [eventId, userId],
-  );
-  return row ? mapParticipant(row) : null;
-}
-
-/**
- * Idempotent leave: only ever the caller's own still-active row (never another rider's, and
- * never an organizer-added row — those have no user_id and so can never match here). Returns
- * null when there was nothing active to leave — the caller had already left, or never joined —
- * so the service can tell those two cases apart via selectParticipantByEventAndUser.
- */
-export async function leaveEventForUser(
-  eventId: string,
-  userId: number,
-): Promise<EventParticipant | null> {
-  const row = await queryOne<EventParticipantRow>(
-    `UPDATE event_participants SET left_at = NOW()
-      WHERE event_id = $1 AND user_id = $2 AND left_at IS NULL
-      RETURNING *`,
+    `SELECT * FROM event_participants
+      WHERE event_id = $1 AND user_id = $2
+      ORDER BY
+        CASE registration_status
+          WHEN 'approved' THEN 1
+          WHEN 'registered' THEN 2
+          WHEN 'waiting_approval' THEN 3
+          WHEN 'rejected' THEN 4
+          ELSE 5
+        END,
+        CASE WHEN left_at IS NULL THEN 0 ELSE 1 END,
+        joined_at DESC,
+        id DESC
+      LIMIT 1`,
     [eventId, userId],
   );
   return row ? mapParticipant(row) : null;

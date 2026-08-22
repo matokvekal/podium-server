@@ -48,10 +48,11 @@ export function createApp(): Express {
   /**
    * Route geometry is the one genuinely large body this API takes: a GPX of a 100 km ride is
    * tens of thousands of points, which is megabytes as JSON — 100 kb would 413 every real
-   * upload. Mounted BEFORE the global parser and scoped to the routes path; body-parser
+   * upload. Mounted BEFORE the global parser and scoped to route-upload paths; body-parser
    * no-ops on an already-parsed request, so everything else still gets the tight limit.
    */
-  app.use("/api/v1/routes", express.json({ limit: "4mb" }));
+  app.use("/api/v1/routes", express.json({ limit: "15mb" }));
+  app.use("/api/v1/events/:eventId/route", express.json({ limit: "15mb" }));
   app.use(express.json({ limit: "100kb" }));
 
   app.use(

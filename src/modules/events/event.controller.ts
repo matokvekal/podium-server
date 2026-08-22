@@ -2,15 +2,11 @@ import type { NextFunction, Request, Response } from "express";
 import type { Event, EventParticipant, User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
 import { traceLog } from "../../lib/trace-log.js";
-<<<<<<< HEAD
-import { selectActiveParticipantByEventAndUser } from "./event.queries.js";
-=======
 import { toRouteSummary } from "../routes/route.controller.js";
 import type { RouteWithOwner } from "../routes/route.queries.js";
 import { getEventRoute } from "../routes/route.service.js";
 import { selectUserById } from "../users/user.queries.js";
 import { selectParticipantByEventAndUser } from "./event.queries.js";
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 import {
   changeEventStatusSchema,
   createEventSchema,
@@ -38,7 +34,6 @@ import {
   getEventForViewer,
   getLiveRiders,
   joinEvent,
-  leaveEvent,
   listMyEvents,
   listPublicEvents,
   pauseEvent,
@@ -61,19 +56,13 @@ function toEventSummary(event: Event) {
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     location: event.location,
-    area: event.area,
     ownerId: event.ownerId,
-<<<<<<< HEAD
-    ownerName: event.ownerName,
-    ownerAvatarUrl: event.ownerAvatarUrl,
-=======
     // On the SUMMARY, not just the detail: these are exactly what a rider filters and scans
     // the "Find Rides" list by, and a list must not need a detail call per card to show them.
     activityType: event.activityType,
     level: event.level,
     organizerGroup: event.organizerGroup,
     teamId: event.teamId,
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   };
 }
 
@@ -323,26 +312,8 @@ export async function getEventHandler(req: Request, res: Response, next: NextFun
     const { eventId } = eventIdParamSchema.parse(req.params);
     const viewerId = req.auth?.userId ?? null;
     traceLog("event.controller.getEventHandler", { eventId, viewerId });
-<<<<<<< HEAD
-    const event = await getEventForViewer(eventId, viewerId);
-    const myParticipant =
-      viewerId !== null ? await selectActiveParticipantByEventAndUser(eventId, viewerId) : null;
-    res.status(200).json({ data: toEventDetail(event, viewerId, myParticipant) });
-=======
     const view = await getEventForViewer(eventId, viewerId);
     res.status(200).json({ data: await eventDetailWithRoute(view, viewerId) });
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function leaveEventHandler(req: Request, res: Response, next: NextFunction) {
-  try {
-    const { eventId } = eventIdParamSchema.parse(req.params);
-    traceLog("event.controller.leaveEventHandler", { eventId, userId: req.auth!.userId });
-    const participant = await leaveEvent(eventId, req.auth!.userId);
-    res.status(200).json({ participantId: participant.id, leftAt: participant.leftAt });
   } catch (err) {
     next(err);
   }

@@ -60,6 +60,7 @@ const envSchema = z.object({
 
   SMS_PROVIDER: z.enum(["MOCK", "TWILIO"]).default("MOCK"),
   AUTH_PROVIDERS: authProviders(),
+  DEV_LOGIN_ENABLED: boolFlag(false),
 
   // Raw GPS retention. Only location_points are ever deleted, and never for an event whose
   // participant_tracks have not been written — losing a track is the one thing the design
@@ -102,7 +103,7 @@ function resolveSecret(
   if (value) {
     console.warn(
       `${envVarName} is shorter than 32 characters — using it anyway in ${nodeEnv}, ` +
-        "but this would be rejected in production.",
+      "but this would be rejected in production.",
     );
     return value;
   }

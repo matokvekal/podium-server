@@ -26,7 +26,6 @@ import {
   getEventHandler,
   getLiveHandler,
   join,
-  leaveEventHandler,
   listEventsHandler,
   listPublicEventsHandler,
   pauseEventHandler,
@@ -62,7 +61,6 @@ const locationBatchLimiter = rateLimit({
 eventRouter.get("/by-code/:code", getEventByCode);
 
 eventRouter.post("/join", requireAuth, join);
-eventRouter.post("/:eventId/leave", requireAuth, leaveEventHandler);
 eventRouter.post("/:eventId/locations/batch", requireAuth, locationBatchLimiter, postLocationBatch);
 
 /**

@@ -2,6 +2,8 @@ import type { NextFunction, Request, Response } from "express";
 import { traceLog } from "../../lib/trace-log.js";
 import { eventIdParamSchema } from "../events/event.schemas.js";
 import type { RouteWithOwner } from "./route.queries.js";
+import { setEventRouteSchema } from "./routes.schemas.js";
+import { setEventRoute } from "./routes.service.js";
 import {
   attachRouteSchema,
   createRouteSchema,
@@ -47,11 +49,11 @@ export function toRouteSummary(route: RouteWithOwner) {
       route.bboxMinLat === null
         ? null
         : {
-            minLat: route.bboxMinLat,
-            minLon: route.bboxMinLon,
-            maxLat: route.bboxMaxLat,
-            maxLon: route.bboxMaxLon,
-          },
+          minLat: route.bboxMinLat,
+          minLon: route.bboxMinLon,
+          maxLat: route.bboxMaxLat,
+          maxLon: route.bboxMaxLon,
+        },
     createdAt: route.createdAt,
     updatedAt: route.updatedAt,
   };
@@ -151,10 +153,32 @@ export async function deleteRouteHandler(req: Request, res: Response, next: Next
 export async function attachRouteHandler(req: Request, res: Response, next: NextFunction) {
   try {
     const { eventId } = eventIdParamSchema.parse(req.params);
-    const { routeId } = attachRouteSchema.parse(req.body);
-    traceLog("route.controller.attachRouteHandler", { eventId, routeId, userId: req.auth!.userId });
-    const route = await attachRouteToEvent(eventId, req.auth!.userId, routeId);
-    res.status(200).json({ data: toRouteSummary(route) });
+    // Backward-compatible endpoint: some clients send `{ routeId }` (attach existing library
+    // route), while others send `{ points, distanceKm, elevationM }` (store and attach route).
+    if (
+      req.body &&
+      typeof req.body === "object" &&
+      Object.prototype.hasOwnProperty.call(req.body, "routeId")
+    ) {
+      const { routeId } = attachRouteSchema.parse(req.body);
+      traceLog("route.controller.attachRouteHandler", {
+        eventId,
+        routeId,
+        userId: req.auth!.userId,
+      });
+      const route = await attachRouteToEvent(eventId, req.auth!.userId, routeId);
+      res.status(200).json({ data: toRouteSummary(route) });
+      return;
+    }
+
+    const input = setEventRouteSchema.parse(req.body);
+    traceLog("route.controller.attachRouteHandler", {
+      eventId,
+      userId: req.auth!.userId,
+      pointCount: input.points.length,
+    });
+    const route = await setEventRoute(eventId, req.auth!.userId, input);
+    res.status(200).json({ data: route });
   } catch (err) {
     next(err);
   }

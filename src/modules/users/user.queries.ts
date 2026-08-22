@@ -82,6 +82,16 @@ export async function selectIdentity(
   return row ? mapAuthIdentity(row) : null;
 }
 
+export async function deleteIdentity(
+  provider: AuthProviderType,
+  providerUserId: string,
+): Promise<number> {
+  return execute(
+    "DELETE FROM auth_identities WHERE provider = $1 AND provider_user_id = $2",
+    [provider, providerUserId],
+  );
+}
+
 /**
  * New account plus its first external identity — one transaction, never half of it.
  *
@@ -96,28 +106,17 @@ export async function insertUserWithIdentity(input: {
   providerUserId: string;
   email: string | null;
   phone: string | null;
-<<<<<<< HEAD
-  /** Google profile photo at signup time; null for non-Google providers. */
-=======
   firstName: string | null;
   lastName: string | null;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
   avatarUrl: string | null;
   now: Date;
 }): Promise<User> {
   return withTransaction(async (tx) => {
     const userRow = await tx.queryOne<UserRow>(
-<<<<<<< HEAD
-      `INSERT INTO users (last_login_at, avatar_url, created_at, updated_at)
-        VALUES ($1, $2, $3, $3)
-        RETURNING *`,
-      [input.now, input.avatarUrl, input.now],
-=======
       `INSERT INTO users (first_name, last_name, avatar_url, last_login_at, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $5)
         RETURNING *`,
       [input.firstName, input.lastName, input.avatarUrl, input.now, input.now],
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
     );
     if (!userRow) throw new Error("insertUserWithIdentity returned no user row");
 
@@ -136,28 +135,6 @@ export async function updateUserLastLogin(userId: number, at: Date): Promise<Use
   const rows = await query<UserRow>(
     "UPDATE users SET last_login_at = $2, updated_at = $2 WHERE id = $1 RETURNING *",
     [userId, at],
-  );
-  return rows[0] ? mapUser(rows[0]) : null;
-}
-
-/**
- * Google sign-in only: touches last_login_at like updateUserLastLogin, and also refreshes
- * avatar_url from the Google ID token's current picture on every sign-in (a rider's Google
- * photo can change, so this is a full overwrite, not a COALESCE-guarded partial update).
- */
-export async function updateUserLastLoginAndAvatar(
-  userId: number,
-  at: Date,
-  avatarUrl: string | null,
-): Promise<User | null> {
-  const rows = await query<UserRow>(
-    `UPDATE users
-        SET last_login_at = $2,
-            avatar_url = $3,
-            updated_at = $2
-      WHERE id = $1
-      RETURNING *`,
-    [userId, at, avatarUrl],
   );
   return rows[0] ? mapUser(rows[0]) : null;
 }

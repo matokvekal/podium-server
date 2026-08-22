@@ -1,12 +1,12 @@
 import type { AuthProviderType, Role, User } from "../../db/types.js";
 import { logger } from "../../lib/logger.js";
 import {
+  deleteIdentity,
   insertUserWithIdentity,
   selectIdentity,
   selectUserById,
   updateIdentityLastUsed,
   updateUserLastLogin,
-  updateUserLastLoginAndAvatar,
   updateUserProfile,
   updateUserRole,
 } from "./user.queries.js";
@@ -30,6 +30,20 @@ export async function findUserByIdentity(
   return selectUserById(identity.userId);
 }
 
+export function findIdentity(
+  provider: AuthProviderType,
+  providerUserId: string,
+) {
+  return selectIdentity(provider, providerUserId);
+}
+
+export function removeIdentity(
+  provider: AuthProviderType,
+  providerUserId: string,
+): Promise<number> {
+  return deleteIdentity(provider, providerUserId);
+}
+
 /**
  * `profile` is what the identity provider already knew about this person — it is applied
  * once, here, and never on a later sign-in. Providers that carry no profile (SMS) pass
@@ -40,12 +54,7 @@ export function createUserWithIdentity(input: {
   providerUserId: string;
   email: string | null;
   phone: string | null;
-<<<<<<< HEAD
-  /** Google profile photo at signup time; pass null for non-Google providers. */
-  avatarUrl: string | null;
-=======
   profile?: NewUserProfile;
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
 }): Promise<User> {
   return insertUserWithIdentity({
     provider: input.provider,
@@ -62,16 +71,6 @@ export function createUserWithIdentity(input: {
 export async function touchLastLogin(userId: number): Promise<User> {
   const user = await updateUserLastLogin(userId, new Date());
   if (!user) throw new Error(`touchLastLogin: user ${userId} not found`);
-  return user;
-}
-
-/** Google sign-in only — see updateUserLastLoginAndAvatar. */
-export async function touchLastLoginAndAvatar(
-  userId: number,
-  avatarUrl: string | null,
-): Promise<User> {
-  const user = await updateUserLastLoginAndAvatar(userId, new Date(), avatarUrl);
-  if (!user) throw new Error(`touchLastLoginAndAvatar: user ${userId} not found`);
   return user;
 }
 

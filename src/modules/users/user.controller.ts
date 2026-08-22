@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "../../db/types.js";
 import { ApiError } from "../../lib/api-error.js";
+import { logger } from "../../lib/logger.js";
 import { traceLog } from "../../lib/trace-log.js";
 import { ACCOUNT_CAPABILITIES } from "../../authz/capabilities.js";
 import { buildActor } from "../../authz/actor.js";
@@ -10,6 +11,22 @@ import { countEventsCreatedSince } from "../events/event.queries.js";
 import { countTeamsForOwner } from "../teams/team.queries.js";
 import { redeemCouponSchema, updateProfileSchema } from "./user.schemas.js";
 import { findUserById, needsProfile, updateProfile } from "./user.service.js";
+
+function isMissingRelationError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const code = "code" in err ? (err as { code?: unknown }).code : undefined;
+  return code === "42P01";
+}
+
+async function safeCountTeamsForOwner(userId: number): Promise<number> {
+  try {
+    return await countTeamsForOwner(userId);
+  } catch (err) {
+    if (!isMissingRelationError(err)) throw err;
+    logger.warn({ userId, err }, "teams table missing; reporting teamsOwned=0");
+    return 0;
+  }
+}
 
 function toProfile(user: User) {
   return {
@@ -36,7 +53,7 @@ async function toAccount(user: User) {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [eventsThisWeek, teamsOwned] = await Promise.all([
     countEventsCreatedSince(user.id, weekAgo),
-    countTeamsForOwner(user.id),
+    safeCountTeamsForOwner(user.id),
   ]);
 
   return {

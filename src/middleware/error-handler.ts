@@ -20,6 +20,22 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return res.status(err.status).json({ error: err.message, message: err.message });
   }
 
+  // body-parser and similar HTTP-layer errors carry status/statusCode + expose.
+  // Treat those as client errors instead of collapsing everything into 500.
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    (("status" in err && typeof (err as { status?: unknown }).status === "number") ||
+      ("statusCode" in err && typeof (err as { statusCode?: unknown }).statusCode === "number"))
+  ) {
+    const status =
+      ((err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode) || 500;
+    const message = err instanceof Error ? err.message : "Request error";
+    if (status >= 400 && status < 500) {
+      return res.status(status).json({ error: "Invalid request", message });
+    }
+  }
+
   logger.error({ err, path: req.path }, "Unhandled error");
   res.status(500).json({ error: "Internal server error", message: "Internal server error" });
 }
