@@ -50,11 +50,16 @@ export async function setEventRouteFromPoints(
   if (!event) throw new ApiError(404, "Event not found");
   assertOwner(event, userId);
 
+  // routes.is_public and events.visibility are separate flags, and nothing used to bridge
+  // them: a route saved for a PUBLIC ride took the column default FALSE, so it never showed
+  // up in Find Track (GET /routes/public filters on is_public = TRUE). Publishing the ride
+  // is what publishes its track — "registered" and "private" rides keep theirs unlisted.
   const stored = await insertDrawnRouteRow(
     userId,
     input.points,
     input.distanceKm,
     input.elevationM ?? null,
+    event.visibility === "public",
   );
   await attachRouteToEvent(eventId, stored.id);
   logger.info({ eventId, userId, routeId: stored.id }, "event route set");

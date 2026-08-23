@@ -87,12 +87,14 @@ export async function insertDrawnRouteRow(
   points: RoutePoint[],
   distanceKm: number,
   elevationM: number | null,
+  isPublic: boolean,
 ): Promise<StoredRoute> {
   const row = await queryOne<RouteRow>(
-    `INSERT INTO routes (owner_id, source, distance_km, elevation_m, track_points, point_count)
-      VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5)
+    `INSERT INTO routes
+        (owner_id, source, distance_km, elevation_m, track_points, point_count, is_public)
+      VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5, $6)
       RETURNING id, track_points, distance_km, elevation_m`,
-    [ownerId, distanceKm, elevationM, JSON.stringify(points), points.length],
+    [ownerId, distanceKm, elevationM, JSON.stringify(points), points.length, isPublic],
   );
   if (!row) throw new Error("insertDrawnRouteRow returned no row");
   return mapStoredRoute(row);
