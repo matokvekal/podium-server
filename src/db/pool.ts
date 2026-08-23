@@ -12,9 +12,16 @@ pg.types.setTypeParser(20, (value: string) => Number(value));
 // `-c timezone=UTC` pins every connection's session timezone. It is what makes NOW(),
 // and any timestamptz -> timestamp assignment, land in UTC regardless of how the host
 // machine is configured — the database stores UTC and only the browser converts.
+// export const pool = new pg.Pool({
+//   connectionString: env.DATABASE_URL,
+//   options: "-c timezone=UTC",
+// });
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   options: "-c timezone=UTC",
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 export type QueryParams = readonly unknown[];

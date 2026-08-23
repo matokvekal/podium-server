@@ -67,9 +67,13 @@ const envSchema = z.object({
   // exists to prevent.
   LOCATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 
-  // Flat free-tier cap on how many events one owner can have live at once — replaces the old
-  // DB-level "exactly 1" unique index (see sql/010-drop-one-live-per-owner.sql). Enforced in
-  // src/modules/events/entitlements.ts, which is the seam for per-plan limits later.
+  // Flat free-tier cap on how many events one owner can have live at once.
+  //
+  // NOT CURRENTLY ENFORCED. It was read only by src/modules/events/entitlements.ts, which
+  // nothing ever imported; that file has been deleted. The limit actually applied today is
+  // "one live event per owner", enforced in event.service.ts via selectLiveEventForOwner —
+  // so changing this number has no effect. Kept because it is a documented deployment knob,
+  // and because it is what a real per-plan limit should read (see authz/plans.ts).
   MAX_CONCURRENT_LIVE_EVENTS_FREE: z.coerce.number().int().positive().default(2),
 
   // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
