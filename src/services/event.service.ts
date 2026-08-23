@@ -167,10 +167,15 @@ export function assertOwner(event: Event, userId: number): void {
 }
 
 /** draft -> published -> registration_open -> ready -> live -> finished. Any non-terminal
- * state may move to cancelled. finished and cancelled are terminal. */
+ * state may move to cancelled. finished and cancelled are terminal.
+ *
+ * published -> live is the START button. POST /events now creates a published event, and the
+ * product flow is create-then-start: registration_open and ready are optional stops an
+ * organizer may use, not a queue every ride has to be walked through. Without this edge the
+ * only way to start a ride was two extra PATCHes the client never makes. */
 const ALLOWED_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   draft: ["published", "cancelled"],
-  published: ["registration_open", "cancelled"],
+  published: ["registration_open", "live", "cancelled"],
   registration_open: ["ready", "cancelled"],
   ready: ["live", "cancelled"],
   live: ["finished", "cancelled"],
@@ -196,6 +201,8 @@ export async function createEvent(
     location?: string;
     area?: string;
     requiresApproval: boolean;
+    /** "I'm riding too": also put the organizer on the start list, as themselves. */
+    joinAsRider?: boolean;
     /** Defaults to "published" in createEventSchema — this product has no draft workflow. */
     status: EventStatus;
     showEventInfo?: boolean;
@@ -261,7 +268,20 @@ export async function createEvent(
   // of truth; this row is the extensible form of it, and the only way to express an operator.
   await insertEventMember(event.id, ownerId, "owner");
 
-  logger.info({ eventId: event.id, ownerId }, "event created");
+  // Owning a ride and riding it are different things — event_members says who runs it,
+  // event_participants says who is on the start list. An organizer who ticked "I'm riding
+  // too" belongs in both, linked to their real user_id so the client can tell it is them.
+  // Never "waiting_approval": nobody approves the owner onto their own ride.
+  if (input.joinAsRider) {
+    await upsertParticipant({
+      eventId: event.id,
+      userId: ownerId,
+      bib: undefined,
+      initialStatus: input.requiresApproval ? "approved" : "registered",
+    });
+  }
+
+  logger.info({ eventId: event.id, ownerId, joinAsRider: !!input.joinAsRider }, "event created");
   return event;
 }
 

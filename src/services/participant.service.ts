@@ -11,7 +11,7 @@ import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import { buildActor } from "../authz/actor.js";
 import { assertWithinParticipantLimit } from "../authz/limits.js";
-import { assertOwner, getEventForViewer } from "./event.service.js";
+import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
 import {
   deleteParticipant as deleteParticipantRow,
   insertManualParticipant,
@@ -25,19 +25,30 @@ import {
 } from "../queries/participant.queries.js";
 
 /**
- * Owner sees everyone. Otherwise: only a registered/approved rider may look, and only once
- * the organizer has opened the list (`show_participants`) — mirrors "if riders list is open I
- * will see, else no" from the product ask.
+ * Owner sees everyone. Otherwise: a rider who is on the list may look — approved/registered
+ * OR still waiting for approval — and only once the organizer has opened the list
+ * (`show_participants`): "if riders list is open I will see, else no".
+ *
+ * A pending rider is included deliberately. Being on a start list and waiting to be let in
+ * is the whole point of an approval ride, and a rider who cannot see the list cannot see
+ * even their own row — so "you are in the queue" was unverifiable from the app. This grants
+ * no approval and changes no workflow: participation stays "pending" everywhere else, and
+ * every rule in authz/policy.ts that turns a pending rider away (the route, live locations,
+ * history, results) is untouched.
+ *
+ * The tier comes back with the rows because the CALLER decides how much of each row to
+ * serialize: contact details are organizer-only. See toParticipantSummary in
+ * controllers/participant.controller.ts.
  */
 export async function listParticipantsForViewer(
   eventId: string,
   viewerId: number | null,
-): Promise<EventParticipant[]> {
-  // 404s a private event for a stranger; "approved" here is exactly the registered-or-approved
-  // test this function used to run for itself — see getEventForViewer's tier rules.
+): Promise<{ participants: EventParticipant[]; tier: ViewerTier }> {
+  // 404s a private event for a stranger; "approved" covers "registered" too, since an event
+  // needing no approval never moves anyone past it — see getEventForViewer's tier rules.
   const { event, tier } = await getEventForViewer(eventId, viewerId);
   if (tier !== "owner") {
-    if (tier !== "approved") {
+    if (tier !== "approved" && tier !== "pending") {
       throw new ApiError(
         403,
         "Only a registered rider or the organizer may view the participants list",
@@ -47,7 +58,7 @@ export async function listParticipantsForViewer(
       throw new ApiError(403, "The participants list is not open for this event");
     }
   }
-  return selectParticipantsForEvent(eventId);
+  return { participants: await selectParticipantsForEvent(eventId), tier };
 }
 
 /** The plan cap applies to the whole start list, however riders got onto it. */

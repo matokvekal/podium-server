@@ -22,6 +22,11 @@ import {
   setResult,
 } from "../services/participant.service.js";
 
+/**
+ * The organizer's view of a rider. Everything the management screens need, contact details
+ * included — every endpoint that serializes with this one is owner-only (assertOwnerOf).
+ * The list endpoint is the exception: it picks per viewer, see toRiderParticipantSummary.
+ */
 function toParticipantSummary(participant: EventParticipant) {
   return {
     id: participant.id,
@@ -45,14 +50,33 @@ function toParticipantSummary(participant: EventParticipant) {
   };
 }
 
+/**
+ * What one rider may know about another: enough to render a start list and to recognise
+ * themselves in it (`userId` against the signed-in id — the server never marks anyone "ME").
+ *
+ * `email` and `phone` are the difference from toParticipantSummary and are deliberately
+ * absent: an organizer collects them to run the ride, riders did not hand them to each
+ * other. They were previously served to every approved rider; opening the list to pending
+ * riders would have widened that to anyone who knows the ride code.
+ */
+function toRiderParticipantSummary(participant: EventParticipant) {
+  const { email, phone, ...visible } = toParticipantSummary(participant);
+  void email;
+  void phone;
+  return visible;
+}
+
 // GET /api/v1/events/:eventId/participants
 export async function listParticipantsController(req: Request, res: Response, next: NextFunction) {
   try {
     const { eventId } = participantsEventIdParamSchema.parse(req.params);
     const viewerId = req.auth?.userId ?? null;
     traceLog("participants.controller.listParticipantsController", { eventId, viewerId });
-    const participants = await listParticipantsForViewer(eventId, viewerId);
-    res.status(200).json({ data: participants.map(toParticipantSummary) });
+    const { participants, tier } = await listParticipantsForViewer(eventId, viewerId);
+    // Only the organizer gets contact details; every other viewer that got past the service
+    // is a rider looking at the start list.
+    const toSummary = tier === "owner" ? toParticipantSummary : toRiderParticipantSummary;
+    res.status(200).json({ data: participants.map(toSummary) });
   } catch (err) {
     next(err);
   }

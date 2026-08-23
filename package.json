@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:debug": "tsx watch --inspect=9229 src/server.ts",
     "dev:all": "npm run db:up && npm run dev",
     "build": "tsc -p tsconfig.build.json",
     "start": "npm run build && node dist/server.js",

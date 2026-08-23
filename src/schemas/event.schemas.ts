@@ -41,6 +41,14 @@ export const createEventSchema = z.object({
   area: z.string().max(255).optional(),
   requiresApproval: z.boolean().optional().default(false),
 
+  // "I'm riding too" on the create form. The organizer is on event_members as owner either
+  // way; this is the separate question of whether they are also ON THE START LIST, and it
+  // is the only way to put them there as themselves. Without it the client's only option
+  // was the manual-add endpoint, which writes user_id NULL — an anonymous rider row that no
+  // client can match against the signed-in user. Optional and defaulting to false, so an
+  // organizer who is not riding, and every existing caller, are unaffected.
+  joinAsRider: z.boolean().optional().default(false),
+
   // The create form collects these too — "riders can see the list" in particular. Left off
   // this schema they were stripped silently (zod objects drop unknown keys), so the organizer's
   // choice was lost until they happened to open Edit. Optional, not defaulted: undefined means

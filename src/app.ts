@@ -40,7 +40,7 @@ export function createApp(): Express {
     cors({
       origin: env.CORS_ORIGINS.length > 0 ? env.CORS_ORIGINS : false,
       credentials: true,
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       // X-Client-Action-Id is not optional here. The client attaches it to EVERY mutation
       // (apiMutate in podium-client/src/lib/api-client.ts), and a header the preflight does
       // not allow makes the browser block the request before it is sent — so reads worked
@@ -59,6 +59,11 @@ export function createApp(): Express {
    * upload. Mounted BEFORE the global parser and scoped to route-upload paths; body-parser
    * no-ops on an already-parsed request, so everything else still gets the tight limit.
    */
+
+  app.use((req, _res, next) => {
+  console.log(">>> INCOMING", req.method, req.url);
+  next();
+});
   app.use("/api/v1/routes", express.json({ limit: "15mb" }));
   app.use("/api/v1/events/:eventId/route", express.json({ limit: "15mb" }));
   app.use(express.json({ limit: "100kb" }));

@@ -1,0 +1,30 @@
+{
+  // The dev server ("npm run dev") starts NO inspector, and tsx watch runs the app in a
+  // forked child process — so a breakpoint set in src/**.ts never binds and never hits.
+  // Use one of these instead.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Breakpoints work, no file watching. F5 restarts after an edit.
+      "type": "node",
+      "request": "launch",
+      "name": "Debug API (no watch)",
+      "program": "${workspaceFolder}/src/server.ts",
+      "runtimeArgs": ["--import", "tsx"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**"]
+    },
+    {
+      // Watch mode kept: run `npm run dev:debug` in a terminal, then attach with this.
+      // "restart" re-attaches after tsx reloads the child on a file change.
+      "type": "node",
+      "request": "attach",
+      "name": "Attach to dev:debug (watch)",
+      "port": 9229,
+      "restart": true,
+      "cwd": "${workspaceFolder}",
+      "skipFiles": ["<node_internals>/**", "${workspaceFolder}/node_modules/**"]
+    }
+  ]
+}
