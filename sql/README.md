@@ -64,6 +64,8 @@ Skip 001 — those tables already exist.
 | `012-ride-groups.sql` | `event_groups`, `event_participants.group_id` | yes — additive |
 | `013-teams-and-follows.sql` | `teams`, `team_members`, `user_follows`, `events.team_id` | yes — additive |
 >>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
+| `017-user-avatar-cover.sql` | `users.avatar_type/_value`, `cover_type/_value` | yes — additive |
+| `018-user-limits.sql` | `user_limits` — per-user limit overrides, NULL = inherit | yes — new table |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

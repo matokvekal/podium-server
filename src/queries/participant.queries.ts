@@ -35,6 +35,8 @@ interface EventParticipantRow {
   finish_position: number | null;
   display_name?: string | null;
   avatar_url?: string | null;
+  avatar_type?: string | null;
+  avatar_value?: string | null;
 }
 
 export async function selectParticipantsForEvent(eventId: string): Promise<EventParticipant[]> {

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Mountain peaks">
+  <defs>
+    <linearGradient id="avatar-mountain-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2b4a6b"/><stop offset="100%" stop-color="#8fb3d4"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-mountain-01-bg)"/>
+  <path d="M8,206 L88,86 L152,206 Z" fill="#1b2c3d" opacity="0.92"/>
+  <path d="M88,86 L116,128 L88,142 L62,128 Z" fill="#fdfbf3" opacity="0.95"/>
+  <path d="M108,206 L178,110 L248,206 Z" fill="#1b2c3d" opacity="0.72"/>
+  <path d="M178,110 L202,146 L178,158 L155,146 Z" fill="#fdfbf3" opacity="0.8"/>
+  <rect y="206" width="256" height="50" fill="#1b2c3d" opacity="0.5"/>
+</svg>

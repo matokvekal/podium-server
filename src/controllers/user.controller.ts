@@ -1,12 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
+import { buildActor } from "../authz/actor.js";
+import { ACCOUNT_CAPABILITIES } from "../authz/capabilities.js";
+import { redeemCoupon } from "../authz/coupons.js";
+import { accountCapabilitiesFor } from "../authz/policy.js";
 import type { User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import { traceLog } from "../lib/trace-log.js";
-import { ACCOUNT_CAPABILITIES } from "../authz/capabilities.js";
-import { buildActor } from "../authz/actor.js";
-import { redeemCoupon } from "../authz/coupons.js";
-import { accountCapabilitiesFor } from "../authz/policy.js";
+import { userImageFieldsOf } from "../lib/user-images.js";
 import { countEventsCreatedSince } from "../queries/event.queries.js";
 import { countTeamsForOwner } from "../queries/team.queries.js";
 import { redeemCouponSchema, updateProfileSchema } from "../schemas/user.schemas.js";
@@ -28,7 +29,18 @@ async function safeCountTeamsForOwner(userId: number): Promise<number> {
   }
 }
 
-function toProfile(user: User) {
+/**
+ * Exported so the avatar/cover routes can reply with exactly the same profile shape that
+ * PATCH /users/me already returns — one serializer, so a client never has to care which
+ * endpoint a profile came back from.
+ *
+ * `avatarUrl` keeps its name and meaning to every client that already reads it, and now
+ * carries the rider's CURRENT avatar rather than only their Google photo: their upload,
+ * else their chosen preset, else the Google picture, else null. `avatar`/`cover`/`coverUrl`
+ * are additive — a client that ignores them is unaffected, and a user who has chosen
+ * neither image gets exactly today's response with two nulls beside it.
+ */
+export function toProfile(user: User) {
   return {
     id: user.id,
     role: user.role,
@@ -36,7 +48,7 @@ function toProfile(user: User) {
     lastName: user.lastName,
     nickname: user.nickname,
     emergencyPhone: user.emergencyPhone,
-    avatarUrl: user.avatarUrl,
+    ...userImageFieldsOf(user),
     requiresProfile: needsProfile(user),
   };
 }

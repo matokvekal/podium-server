@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Abstract crimson">
+  <defs>
+    <linearGradient id="cover-abstract-01-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7a1f3d"/><stop offset="100%" stop-color="#c9506f"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-abstract-01-sky)"/>
+  <path d="M-180,450 L30,0 L166,0 L-44,450 Z" fill="#5a1630" opacity="0.2"/>
+  <path d="M88,450 L298,0 L434,0 L224,450 Z" fill="#3f0f1d" opacity="0.29"/>
+  <path d="M356,450 L566,0 L702,0 L492,450 Z" fill="#ffc7a8" opacity="0.38"/>
+  <path d="M624,450 L834,0 L970,0 L760,450 Z" fill="#5a1630" opacity="0.47"/>
+  <path d="M892,450 L1102,0 L1238,0 L1028,450 Z" fill="#3f0f1d" opacity="0.56"/>
+  <circle cx="298" cy="150" r="118" fill="#ffc7a8" opacity="0.16"/>
+  <circle cx="892" cy="316" r="152" fill="#ffe3d6" opacity="0.12"/>
+</svg>

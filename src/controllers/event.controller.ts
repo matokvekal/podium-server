@@ -1,12 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
+import { EVENT_CAPABILITIES } from "../authz/capabilities.js";
+import { eventCapabilitiesFor } from "../authz/policy.js";
 import type { Event, EventParticipant, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { traceLog } from "../lib/trace-log.js";
-import { toRouteSummary } from "./routeLibrary.controller.js";
-import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
-import { getEventRouteSummary } from "../services/eventRoute.service.js";
-import { selectUserById } from "../queries/user.queries.js";
+import { userImageFieldsOf } from "../lib/user-images.js";
 import { selectParticipantByEventAndUser } from "../queries/event.queries.js";
+import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
+import { selectUserById } from "../queries/user.queries.js";
 import {
   changeEventStatusSchema,
   createEventSchema,
@@ -20,8 +21,6 @@ import {
   publicEventsQuerySchema,
   updateEventSchema,
 } from "../schemas/event.schemas.js";
-import { EVENT_CAPABILITIES } from "../authz/capabilities.js";
-import { eventCapabilitiesFor } from "../authz/policy.js";
 import {
   cancelEvent,
   canViewEventInfo,
@@ -29,6 +28,7 @@ import {
   changeEventStatus,
   computeEffectiveStatus,
   createEvent,
+  type EventView,
   findActiveEventByCode,
   findParticipantForUser,
   getEventForViewer,
@@ -38,11 +38,12 @@ import {
   listPublicEvents,
   pauseEvent,
   saveLocationBatch,
-  type EventView,
   toEventConfig,
   updateEventDetails,
   type ViewerTier,
 } from "../services/event.service.js";
+import { getEventRouteSummary } from "../services/eventRoute.service.js";
+import { toRouteSummary } from "./routeLibrary.controller.js";
 
 function toEventSummary(event: Event) {
   return {
@@ -134,7 +135,11 @@ function toEventDetail(
             [owner.firstName, owner.lastName].filter(Boolean).join(" ").trim() ||
             owner.nickname ||
             null,
-          avatarUrl: owner.avatarUrl,
+          // The organizer's own visual identity, read through events.owner_id — nothing is
+          // copied into the event row, so changing an avatar changes it on every ride at
+          // once. `avatarUrl` keeps its existing shape and now resolves to their current
+          // avatar; `avatar`/`cover`/`coverUrl` are additive for clients that use them.
+          ...userImageFieldsOf(owner),
         }
       : null,
     myParticipant: myParticipant
@@ -165,9 +170,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
   const [route, owner, myParticipant] = await Promise.all([
     canSeeRoute ? getEventRouteSummary(event.id) : Promise.resolve(null),
     event.ownerId === null ? Promise.resolve(null) : selectUserById(event.ownerId),
-    viewerId === null
-      ? Promise.resolve(null)
-      : selectParticipantByEventAndUser(event.id, viewerId),
+    viewerId === null ? Promise.resolve(null) : selectParticipantByEventAndUser(event.id, viewerId),
   ]);
   return toEventDetail(
     event,
@@ -261,7 +264,11 @@ export async function pauseEventController(req: Request, res: Response, next: Ne
   try {
     const { eventId } = eventIdParamSchema.parse(req.params);
     const { paused } = pauseEventSchema.parse(req.body);
-    traceLog("event.controller.pauseEventController", { eventId, userId: req.auth!.userId, paused });
+    traceLog("event.controller.pauseEventController", {
+      eventId,
+      userId: req.auth!.userId,
+      paused,
+    });
     const event = await pauseEvent(eventId, req.auth!.userId, paused);
     res.status(200).json({ data: await ownerDetail(event, req.auth!.userId) });
   } catch (err) {

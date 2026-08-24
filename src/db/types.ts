@@ -57,13 +57,7 @@ export const ACTIVITY_TYPES = ["road", "mtb", "gravel", "running", "hiking"] as 
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
 /** One difficulty label for a whole ride — not per ride-group. */
-export const RIDER_LEVELS = [
-  "beginner",
-  "intermediate",
-  "masters",
-  "elite",
-  "world_tour",
-] as const;
+export const RIDER_LEVELS = ["beginner", "intermediate", "masters", "elite", "world_tour"] as const;
 export type RiderLevel = (typeof RIDER_LEVELS)[number];
 
 export const ROUTE_TYPES = ["road", "gravel", "mtb", "mixed"] as const;
@@ -79,8 +73,18 @@ export interface User {
   nickname: string | null;
   emergencyPhone: string | null;
   /** users.avatar_url — the Google profile picture, filled in at sign-up when Google
-   *  supplied one. Never overwritten by a later login. */
+   *  supplied one. Never overwritten by a later login, and never overwritten by the
+   *  avatar the rider chooses below either: it stays the fallback a reset returns to. */
   avatarUrl: string | null;
+  /** The avatar the rider chose: "preset" with a registry id, "upload" with a relative
+   *  reference under UPLOADS_DIR, or null for neither. See lib/user-images.ts for how these
+   *  and avatarUrl combine into the single URL the API returns. */
+  avatarType: string | null;
+  avatarValue: string | null;
+  /** The rider's wide cover image, same two shapes. There is no legacy fallback for a
+   *  cover — unset simply means none. */
+  coverType: string | null;
+  coverValue: string | null;
   role: Role;
   isActive: boolean;
   createdAt: Date;

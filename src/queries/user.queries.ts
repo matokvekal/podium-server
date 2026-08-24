@@ -3,6 +3,7 @@
 // `updated_at` is written explicitly on every write: the live database inherited it from
 // Prisma as NOT NULL with no default, so the application has to maintain it.
 
+import type { UserImageKind, UserImageSource } from "../config/user-images.js";
 import { execute, query, queryOne, withTransaction } from "../db/pool.js";
 import type { AuthIdentity, AuthProviderType, Role, User } from "../db/types.js";
 
@@ -13,6 +14,10 @@ interface UserRow {
   nickname: string | null;
   emergency_phone: string | null;
   avatar_url: string | null;
+  avatar_type: string | null;
+  avatar_value: string | null;
+  cover_type: string | null;
+  cover_value: string | null;
   role: Role;
   is_active: boolean;
   created_at: Date;
@@ -42,6 +47,13 @@ function mapUser(row: UserRow): User {
     nickname: row.nickname,
     emergencyPhone: row.emergency_phone,
     avatarUrl: row.avatar_url,
+    // Nullish-coalesced, not read straight through: a database that has not had
+    // sql/017-user-avatar-cover.sql applied yet returns rows without these keys at all, and
+    // every existing endpoint has to keep working on such a database.
+    avatarType: row.avatar_type ?? null,
+    avatarValue: row.avatar_value ?? null,
+    coverType: row.cover_type ?? null,
+    coverValue: row.cover_value ?? null,
     role: row.role,
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -86,10 +98,10 @@ export async function deleteIdentity(
   provider: AuthProviderType,
   providerUserId: string,
 ): Promise<number> {
-  return execute(
-    "DELETE FROM auth_identities WHERE provider = $1 AND provider_user_id = $2",
-    [provider, providerUserId],
-  );
+  return execute("DELETE FROM auth_identities WHERE provider = $1 AND provider_user_id = $2", [
+    provider,
+    providerUserId,
+  ]);
 }
 
 /**
@@ -183,6 +195,49 @@ export async function updateUserProfile(
     ],
   );
   return rows[0] ? mapUser(rows[0]) : null;
+}
+
+/**
+ * Set or clear one of a user's two images.
+ *
+ * The column name cannot be a bind parameter, so there are two statements rather than one
+ * assembled at runtime — `kind` is a closed union, never a caller's string, and this way
+ * every SQL string in the file is still a literal you can read.
+ *
+ * Passing (null, null) is the reset: it clears the choice and the API falls back to
+ * users.avatar_url, which this never touches.
+ */
+export async function updateUserImage(
+  userId: number,
+  kind: UserImageKind,
+  type: UserImageSource | null,
+  value: string | null,
+): Promise<User | null> {
+  const sql =
+    kind === "avatar"
+      ? `UPDATE users SET avatar_type = $2, avatar_value = $3, updated_at = NOW()
+          WHERE id = $1 RETURNING *`
+      : `UPDATE users SET cover_type = $2, cover_value = $3, updated_at = NOW()
+          WHERE id = $1 RETURNING *`;
+
+  const rows = await query<UserRow>(sql, [userId, type, value]);
+  return rows[0] ? mapUser(rows[0]) : null;
+}
+
+/**
+ * Every upload reference the database currently points at, for the orphan sweeper in
+ * scripts/cleanup-user-uploads.mjs. Preset rows are excluded on purpose: a preset value is a
+ * registry id, not a file this user owns, and preset art must never be swept.
+ */
+export async function selectAllUploadRefs(): Promise<{ userId: number; ref: string }[]> {
+  const rows = await query<{ user_id: number; ref: string }>(
+    `SELECT id AS user_id, avatar_value AS ref FROM users
+       WHERE avatar_type = 'upload' AND avatar_value IS NOT NULL
+     UNION ALL
+     SELECT id AS user_id, cover_value AS ref FROM users
+       WHERE cover_type = 'upload' AND cover_value IS NOT NULL`,
+  );
+  return rows.map((row) => ({ userId: row.user_id, ref: row.ref }));
 }
 
 /**

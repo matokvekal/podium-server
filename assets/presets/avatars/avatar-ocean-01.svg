@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Ocean swell">
+  <defs>
+    <linearGradient id="avatar-ocean-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0e4d63"/><stop offset="100%" stop-color="#3fa3b8"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-ocean-01-bg)"/>
+  <circle cx="184" cy="70" r="30" fill="#051c25" opacity="0.28"/>
+  <path d="M0,150 C42,132 74,132 116,150 C158,168 190,168 256,144 L256,256 L0,256 Z" fill="#051c25" opacity="0.42"/>
+  <path d="M0,186 C42,168 74,168 116,186 C158,204 190,204 256,180 L256,256 L0,256 Z" fill="#051c25" opacity="0.66"/>
+  <path d="M0,222 C42,204 74,204 116,222 C158,240 190,240 256,216 L256,256 L0,256 Z" fill="#051c25" opacity="0.92"/>
+</svg>

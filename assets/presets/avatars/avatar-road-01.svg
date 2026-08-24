@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Road wheel">
+  <defs>
+    <linearGradient id="avatar-road-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#243b53"/><stop offset="100%" stop-color="#5b7fa6"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-road-01-bg)"/>
+  <circle cx="128" cy="128" r="88" fill="none" stroke="#f2f7fd" stroke-width="9" opacity="0.92"/>
+  <line x1="128" y1="128" x2="212" y2="128" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="195.96" y2="177.37" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="153.96" y2="207.89" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="102.04" y2="207.89" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="60.04" y2="177.37" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="44" y2="128" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="60.04" y2="78.63" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="102.04" y2="48.11" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="153.96" y2="48.11" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <line x1="128" y1="128" x2="195.96" y2="78.63" stroke="#f2f7fd" stroke-width="4" opacity="0.6"/>
+  <circle cx="128" cy="128" r="18" fill="#f2f7fd"/>
+</svg>

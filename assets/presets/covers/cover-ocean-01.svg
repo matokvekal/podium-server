@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Coastal water">
+  <defs>
+    <linearGradient id="cover-ocean-01-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#123b52"/><stop offset="100%" stop-color="#2e7f9e"/></linearGradient>
+    <linearGradient id="cover-ocean-01-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#061822"/><stop offset="100%" stop-color="#0a2534"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-ocean-01-sky)"/>
+  <circle cx="900" cy="120" r="46" fill="#e9f7ff" opacity="0.88"/>
+  <path d="M0,262 C150,232 300,292 450,262 C600,232 750,292 900,262 C1050,232 1140,282 1200,262 L1200,450 L0,450 Z" fill="#0d2f42" opacity="0.8"/>
+  <path d="M0,318 C170,288 320,348 480,318 C640,288 800,348 960,318 C1080,296 1150,330 1200,316 L1200,450 L0,450 Z" fill="#0a2534" opacity="0.9"/>
+  <path d="M0,376 C200,352 380,404 580,378 C780,352 980,402 1200,372 L1200,450 L0,450 Z" fill="url(#cover-ocean-01-gnd)"/>
+  <path d="M120,300 C190,288 250,296 320,286" stroke="#e9f7ff" stroke-width="4" fill="none" opacity="0.35" stroke-linecap="round"/>
+  <path d="M700,352 C780,340 840,348 920,338" stroke="#e9f7ff" stroke-width="4" fill="none" opacity="0.28" stroke-linecap="round"/>
+</svg>

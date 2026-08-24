@@ -2,8 +2,17 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { closePool } from "./db/pool.js";
 import { logger } from "./lib/logger.js";
+import { ensureUploadRoot } from "./lib/user-image-storage.js";
 
 const app = createApp();
+
+// Create the upload root at boot rather than discovering on a rider's first upload that the
+// directory is missing or unwritable. A failure here is a deployment problem (UPLOADS_DIR
+// pointing somewhere the process cannot write), so it is worth a loud warning — but not a
+// refusal to start: every other endpoint works fine without it.
+void ensureUploadRoot().catch((err: Error) => {
+  logger.error({ err: err.message }, "could not create the user upload directory (UPLOADS_DIR)");
+});
 
 // The listen callback fires even when the bind FAILED (server.listening === false,
 // address() === null), so it cannot be trusted as proof of a successful start. Without

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Mountain ridge">
+  <defs>
+    <linearGradient id="cover-mountain-01-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2b4a6b"/><stop offset="100%" stop-color="#8fb3d4"/></linearGradient>
+    <linearGradient id="cover-mountain-01-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1b2c3d"/><stop offset="100%" stop-color="#2b4359"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-mountain-01-sky)"/>
+  <circle cx="212" cy="126" r="52" fill="#fdfbf3" opacity="0.9"/>
+  <path d="M0,278 L120,180 L232,262 L360,168 L500,258 L640,176 L790,266 L940,182 L1080,258 L1200,204 L1200,450 L0,450 Z" fill="#3d5f80" opacity="0.85"/>
+  <path d="M0,322 L170,286 L330,326 L500,282 L660,322 L820,280 L990,320 L1200,286 L1200,450 L0,450 Z" fill="#2b4359" opacity="0.92"/>
+  <path d="M0,372 L1200,346 L1200,450 L0,450 Z" fill="url(#cover-mountain-01-gnd)"/>
+</svg>

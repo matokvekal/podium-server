@@ -6,16 +6,17 @@
 
 import type { Event, EventParticipant, ParticipantTrack } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
-import { getEventForViewer, type ViewerTier } from "./event.service.js";
+import { resolveImageUrl } from "../lib/user-images.js";
 import { selectParticipantsForEvent } from "../queries/participant.queries.js";
-import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
-import { getEventRouteSummary } from "./eventRoute.service.js";
-import { selectUserById } from "../queries/user.queries.js";
 import {
   selectDistancesForEvent,
   selectTrackForParticipant,
   selectTracksForEvent,
 } from "../queries/result.queries.js";
+import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
+import { selectUserById } from "../queries/user.queries.js";
+import { getEventForViewer, type ViewerTier } from "./event.service.js";
+import { getEventRouteSummary } from "./eventRoute.service.js";
 
 export type RiderStatus = "finished" | "dnf" | "dns" | "racing" | "not_started";
 
@@ -229,7 +230,11 @@ export async function getEventResults(
         [owner?.firstName, owner?.lastName].filter(Boolean).join(" ").trim() ||
         owner?.nickname ||
         null,
-      avatarUrl: owner?.avatarUrl ?? null,
+      // Effective avatar, same as everywhere else the organizer is shown — their upload,
+      // else their chosen preset, else the Google picture (lib/user-images.ts).
+      avatarUrl: owner
+        ? resolveImageUrl("avatar", owner.avatarType, owner.avatarValue, owner.avatarUrl)
+        : null,
       // No country is stored for a user yet. Null rather than a guess — see NOTES.md.
       countryCode: null,
     },

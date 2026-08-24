@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Mountain bike contour lines">
+  <defs>
+    <linearGradient id="cover-mtb-01-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#14361f"/><stop offset="100%" stop-color="#3f7f4d"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-mtb-01-sky)"/>
+  <path d="M180,392 C300,250 520,196 700,300 C840,372 1000,396 1180,372" fill="none" stroke="#0f2a18" stroke-width="3.4" opacity="0.75" stroke-linecap="round"/>
+  <path d="M149.4,398 C266,233 533.6,168.8 734,289.8 C877.4,365.2 1034,400 1214,377" fill="none" stroke="#0b2012" stroke-width="3.18" opacity="0.68" stroke-linecap="round"/>
+  <path d="M118.8,404 C232,216 547.2,141.6 768,279.6 C914.8,358.4 1068,404 1248,382" fill="none" stroke="#0f2a18" stroke-width="2.96" opacity="0.61" stroke-linecap="round"/>
+  <path d="M88.2,410 C198,199 560.8,114.4 802,269.4 C952.2,351.6 1102,408 1282,387" fill="none" stroke="#0b2012" stroke-width="2.74" opacity="0.54" stroke-linecap="round"/>
+  <path d="M57.6,416 C164,182 574.4,87.2 836,259.2 C989.6,344.8 1136,412 1316,392" fill="none" stroke="#0f2a18" stroke-width="2.52" opacity="0.47" stroke-linecap="round"/>
+  <path d="M27,422 C130,165 588,60 870,249 C1027,338 1170,416 1350,397" fill="none" stroke="#0b2012" stroke-width="2.3" opacity="0.4" stroke-linecap="round"/>
+  <path d="M-3.6,428 C96,148 601.6,32.8 904,238.8 C1064.4,331.2 1204,420 1384,402" fill="none" stroke="#0f2a18" stroke-width="2.08" opacity="0.33" stroke-linecap="round"/>
+  <circle cx="712" cy="252" r="15" fill="#ffe9a3" opacity="0.92"/>
+  <path d="M0,414 L1200,392 L1200,450 L0,450 Z" fill="#0b2012" opacity="0.85"/>
+</svg>

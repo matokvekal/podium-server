@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 
 try {
@@ -79,6 +80,23 @@ const envSchema = z.object({
   // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
   // On by default so it's visible without any setup; set to "false" to go quiet.
   CONSOLE_TRACE: boolFlag(true),
+
+  // Where a rider's uploaded avatar/cover bytes live. This MUST be outside the directory a
+  // deployment replaces: git checkout, npm build, pm2 restart and the GitHub Actions deploy
+  // all rewrite /var/www/podium, and an upload root underneath it would be erased by a
+  // routine release. Production is /var/lib/podium/uploads and is required there — see
+  // resolveUploadsDir() below, which refuses to start rather than fall back to a path a
+  // deploy can reach. The dev default is repo-local and gitignored.
+  UPLOADS_DIR: z.string().optional(),
+
+  // Absolute origin this API is reachable at, used to build image URLs. It has to be
+  // absolute: the web client is served from a different host (app.domain.com) than the API
+  // (api.domain.com), so a relative "/uploads/..." would resolve against the wrong origin.
+  PUBLIC_BASE_URL: z.string().optional(),
+
+  // Preset art (assets/presets/), which ships WITH the code and is read-only at runtime.
+  // Unlike UPLOADS_DIR this is meant to be replaced by every deploy.
+  ASSETS_DIR: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -107,13 +125,34 @@ function resolveSecret(
   if (value) {
     console.warn(
       `${envVarName} is shorter than 32 characters — using it anyway in ${nodeEnv}, ` +
-      "but this would be rejected in production.",
+        "but this would be rejected in production.",
     );
     return value;
   }
 
   console.warn(`${envVarName} is not set — using an insecure development-only default.`);
   return devFallback;
+}
+
+/**
+ * The upload root. Unset is fine in development — a repo-local, gitignored directory. In
+ * production it is required and must be absolute: the whole point of the setting is that a
+ * deployment cannot reach it, and a relative default would sit inside the code tree that
+ * every release replaces.
+ */
+function resolveUploadsDir(value: string | undefined, nodeEnv: (typeof data)["NODE_ENV"]): string {
+  if (value && value.trim() !== "") return path.resolve(value.trim());
+
+  if (nodeEnv === "production") {
+    console.error(
+      "UPLOADS_DIR is required in production and must point OUTSIDE the deployment " +
+        "directory (e.g. /var/lib/podium/uploads). Uploads written inside the app directory " +
+        "are destroyed by the next deploy.",
+    );
+    process.exit(1);
+  }
+
+  return path.resolve(process.cwd(), "var/uploads");
 }
 
 export const env = {
@@ -123,6 +162,17 @@ export const env = {
     "JWT_ACCESS_SECRET",
     "dev-only-access-secret-do-not-use-in-production-0001",
     data.NODE_ENV,
+  ),
+  UPLOADS_DIR: resolveUploadsDir(data.UPLOADS_DIR, data.NODE_ENV),
+  ASSETS_DIR: path.resolve(
+    data.ASSETS_DIR && data.ASSETS_DIR.trim() !== ""
+      ? data.ASSETS_DIR.trim()
+      : path.join(process.cwd(), "assets"),
+  ),
+  /** No trailing slash, so callers can always concatenate a leading-slash path. */
+  PUBLIC_BASE_URL: (data.PUBLIC_BASE_URL?.trim() || `http://localhost:${data.PORT}`).replace(
+    /\/+$/,
+    "",
   ),
 };
 

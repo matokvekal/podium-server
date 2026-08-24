@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Open road at dusk">
+  <defs>
+    <linearGradient id="cover-road-01-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#243b53"/><stop offset="100%" stop-color="#5b7fa6"/></linearGradient>
+    <linearGradient id="cover-road-01-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2b3138"/><stop offset="100%" stop-color="#3d454e"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-road-01-sky)"/>
+  <circle cx="1000" cy="112" r="48" fill="#ffd98a" opacity="0.85"/>
+  <path d="M0,258 L200,222 L420,262 L640,218 L860,258 L1080,220 L1200,246 L1200,450 L0,450 Z" fill="#1b2d40" opacity="0.8"/>
+  <path d="M0,318 L1200,292 L1200,450 L0,450 Z" fill="#16242f" opacity="0.95"/>
+  <path d="M330,450 C430,372 560,338 742,312 L900,296 L900,330 L770,344 C610,368 500,398 430,450 Z" fill="url(#cover-road-01-gnd)"/>
+  <path d="M392,444 C480,378 596,350 762,326" stroke="#ffd98a" stroke-width="7" stroke-linecap="round" stroke-dasharray="30 34" fill="none" opacity="0.75"/>
+</svg>

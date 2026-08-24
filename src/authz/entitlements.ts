@@ -6,12 +6,14 @@
 // resolution folds them into one answer that the rest of the product can use without knowing
 // which of those it came from.
 
+import { resolveEffectiveLimits } from "../config/plan-limits.js";
 import { query, queryOne, withTransaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
+import { selectUserLimits } from "../queries/userLimits.queries.js";
 import type { Feature } from "./capabilities.js";
 import { FEATURES } from "./capabilities.js";
-import { isPlanCode, mergeLimits, type PlanCode, type PlanDefinition, PLANS } from "./plans.js";
 import type { PlanLimits } from "./plans.js";
+import { isPlanCode, mergeLimits, PLANS, type PlanCode, type PlanDefinition } from "./plans.js";
 
 export const GRANT_SOURCES = ["subscription", "coupon", "purchase", "trial", "manual"] as const;
 export type GrantSource = (typeof GRANT_SOURCES)[number];
@@ -100,7 +102,9 @@ async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
 export async function resolveEntitlements(userId: number | null): Promise<Entitlements> {
   if (userId === null) return ANONYMOUS_ENTITLEMENTS;
 
-  const rows = await selectLiveGrants(userId);
+  // Two independent sources, one round trip: what the user was GRANTED (a plan, features)
+  // and what has been set for them SPECIFICALLY (user_limits). Neither blocks the other.
+  const [rows, limitRow] = await Promise.all([selectLiveGrants(userId), selectUserLimits(userId)]);
 
   const activePlans: PlanDefinition[] = [];
   const features = new Set<Feature>();
@@ -137,8 +141,16 @@ export async function resolveEntitlements(userId: number | null): Promise<Entitl
   return {
     plan,
     features,
-    // Most generous per limit, independently — see mergeLimits.
-    limits: mergeLimits([plan, ...activePlans]),
+    // Two steps, in this order:
+    //   1. mergeLimits — most generous per limit across every plan the user holds, so a beta
+    //      coupon stacked on a subscription never leaves someone worse off than either alone.
+    //   2. the per-user override on top, where a set column wins outright.
+    //
+    // The override is applied LAST and wins even when it is lower, because it is the explicit
+    // answer for one account: "give this organizer 20 rides a week" and "hold this one account
+    // to 1" are the same mechanism. With no row, or a row of NULLs, this is exactly step 1 —
+    // which is what makes the change invisible until somebody sets a value.
+    limits: resolveEffectiveLimits(mergeLimits([plan, ...activePlans]), limitRow),
     grants,
   };
 }
@@ -221,7 +233,12 @@ export async function grantEntitlement(input: NewGrant): Promise<number> {
   );
   if (!row) throw new Error("grantEntitlement returned no row");
   logger.info(
-    { userId: input.userId, planCode: input.planCode, feature: input.feature, source: input.source },
+    {
+      userId: input.userId,
+      planCode: input.planCode,
+      feature: input.feature,
+      source: input.source,
+    },
     "entitlement granted",
   );
   return row.id;

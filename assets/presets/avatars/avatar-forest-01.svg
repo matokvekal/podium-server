@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Forest conifers">
+  <defs>
+    <linearGradient id="avatar-forest-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0f5c4a"/><stop offset="100%" stop-color="#4aa88a"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-forest-01-bg)"/>
+  <path d="M24,214 L66,122 L108,214 Z" fill="#06302a" opacity="0.7"/>
+  <path d="M33.24,182.72 L66,99.92 L98.76,182.72 Z" fill="#06302a" opacity="0.7"/>
+  <path d="M152,214 L190,134 L228,214 Z" fill="#06302a" opacity="0.6"/>
+  <path d="M160.36,186.8 L190,114.8 L219.64,186.8 Z" fill="#06302a" opacity="0.6"/>
+  <path d="M74,226 L128,102 L182,226 Z" fill="#06302a" opacity="0.95"/>
+  <path d="M85.88,183.84 L128,72.24 L170.12,183.84 Z" fill="#06302a" opacity="0.95"/>
+  <rect y="222" width="256" height="34" fill="#06302a" opacity="0.85"/>
+</svg>

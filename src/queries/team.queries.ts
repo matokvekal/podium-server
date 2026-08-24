@@ -2,6 +2,7 @@
 
 import { execute, query, queryOne, withTransaction } from "../db/pool.js";
 import type { Team, TeamMember, TeamMemberStatus } from "../db/types.js";
+import { resolveImageUrl } from "../lib/user-images.js";
 
 interface TeamRow {
   id: number;
@@ -25,6 +26,8 @@ interface TeamMemberRow {
   /** Joined from users — same read-time resolution the start list uses. */
   display_name?: string | null;
   avatar_url?: string | null;
+  avatar_type?: string | null;
+  avatar_value?: string | null;
 }
 
 function mapTeam(row: TeamRow): Team {
@@ -46,7 +49,8 @@ function mapMember(row: TeamMemberRow): TeamMember {
     // Same rule as event participants: the row's own name when set, otherwise the linked
     // account's, resolved on read so fixing a profile fixes it everywhere.
     name: row.display_name ?? row.name,
-    avatarUrl: row.avatar_url ?? null,
+    // Effective avatar, same rule as the start list — see queries/event.queries.ts.
+    avatarUrl: resolveImageUrl("avatar", row.avatar_type, row.avatar_value, row.avatar_url ?? null),
     email: row.email,
     phone: row.phone,
     status: row.status,
@@ -60,7 +64,9 @@ const MEMBER_DISPLAY_COLUMNS = `
     NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
     u.nickname
   ) AS display_name,
-  u.avatar_url`;
+  u.avatar_url,
+  u.avatar_type,
+  u.avatar_value`;
 
 export async function insertTeam(input: {
   name: string;
@@ -234,10 +240,10 @@ export async function updateMemberStatus(
 }
 
 export async function deleteMember(memberId: number, teamId: number): Promise<boolean> {
-  return (await execute("DELETE FROM team_members WHERE id = $1 AND team_id = $2", [
-    memberId,
-    teamId,
-  ])) > 0;
+  return (
+    (await execute("DELETE FROM team_members WHERE id = $1 AND team_id = $2", [memberId, teamId])) >
+    0
+  );
 }
 
 // ---- a team's schedule --------------------------------------------------------------------
@@ -260,10 +266,12 @@ export async function insertFollow(followerId: number, followeeId: number): Prom
 }
 
 export async function deleteFollow(followerId: number, followeeId: number): Promise<boolean> {
-  return (await execute(
-    "DELETE FROM user_follows WHERE follower_id = $1 AND followee_id = $2",
-    [followerId, followeeId],
-  )) > 0;
+  return (
+    (await execute("DELETE FROM user_follows WHERE follower_id = $1 AND followee_id = $2", [
+      followerId,
+      followeeId,
+    ])) > 0
+  );
 }
 
 export async function selectFollowingIds(followerId: number): Promise<number[]> {

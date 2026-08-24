@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Summer woodland">
+  <defs>
+    <linearGradient id="cover-forest-02-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#5c7a1e"/><stop offset="100%" stop-color="#a8c94a"/></linearGradient>
+    <linearGradient id="cover-forest-02-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#222d0c"/><stop offset="100%" stop-color="#334412"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-forest-02-sky)"/>
+  <circle cx="960" cy="112" r="44" fill="#fff3b0" opacity="0.85"/>
+  <path d="M0,286 L180,214 L340,278 L520,206 L700,272 L880,212 L1060,276 L1200,232 L1200,450 L0,450 Z" fill="#42591a" opacity="0.8"/>
+  <path d="M0,342 L1200,318 L1200,450 L0,450 Z" fill="#334412" opacity="0.94"/>
+  <path d="M-8.24,404.16 L14.71,300.62 L37.66,404.16 Z" fill="#2c3d10" opacity="0.79"/>
+  <path d="M39.28,402.1 L66.87,284.85 L94.46,402.1 Z" fill="#2c3d10" opacity="0.83"/>
+  <path d="M83.88,400.23 L114.26,314.77 L144.64,400.23 Z" fill="#2c3d10" opacity="0.93"/>
+  <path d="M124.44,397.15 L151.21,262.86 L177.98,397.15 Z" fill="#2c3d10" opacity="0.84"/>
+  <path d="M173.65,402.86 L196.32,279.33 L218.99,402.86 Z" fill="#2c3d10" opacity="0.92"/>
+  <path d="M229.94,401.69 L252,292.1 L274.06,401.69 Z" fill="#2c3d10" opacity="0.81"/>
+  <path d="M270.14,407.35 L295.78,311.65 L321.42,407.35 Z" fill="#2c3d10" opacity="0.8"/>
+  <path d="M334.38,400.43 L355.61,284.55 L376.84,400.43 Z" fill="#2c3d10" opacity="0.91"/>
+  <path d="M379.21,393.9 L407.52,280.83 L435.83,393.9 Z" fill="#2c3d10" opacity="0.8"/>
+  <path d="M420.35,403.48 L449.68,313.13 L479.01,403.48 Z" fill="#2c3d10" opacity="0.89"/>
+  <path d="M480.09,395.88 L509.41,292.79 L538.73,395.88 Z" fill="#2c3d10" opacity="0.95"/>
+  <path d="M514.75,397.49 L544.51,287.1 L574.27,397.49 Z" fill="#2c3d10" opacity="0.95"/>
+  <path d="M566.73,405.46 L597.55,316.73 L628.37,405.46 Z" fill="#2c3d10" opacity="0.81"/>
+  <path d="M612.95,397.46 L637.88,292.1 L662.81,397.46 Z" fill="#2c3d10" opacity="0.88"/>
+  <path d="M673.68,402.87 L699.21,284.13 L724.74,402.87 Z" fill="#2c3d10" opacity="0.83"/>
+  <path d="M709.78,396.28 L737.26,291.49 L764.74,396.28 Z" fill="#2c3d10" opacity="0.84"/>
+  <path d="M758.73,407.02 L786.56,320.79 L814.39,407.02 Z" fill="#2c3d10" opacity="0.72"/>
+  <path d="M808.79,399.33 L835.48,280.68 L862.17,399.33 Z" fill="#2c3d10" opacity="0.94"/>
+  <path d="M846.95,403.55 L872.8,305.74 L898.65,403.55 Z" fill="#2c3d10" opacity="0.78"/>
+  <path d="M908.76,394.85 L929.67,290.27 L950.58,394.85 Z" fill="#2c3d10" opacity="0.78"/>
+  <path d="M950.86,398.1 L973.22,275.62 L995.58,398.1 Z" fill="#2c3d10" opacity="0.81"/>
+  <path d="M997.16,392.17 L1025.63,303.36 L1054.1,392.17 Z" fill="#2c3d10" opacity="0.81"/>
+  <path d="M1040.82,399.04 L1061,262.59 L1081.18,399.04 Z" fill="#2c3d10" opacity="0.75"/>
+  <path d="M1087.66,400.96 L1109.13,288.22 L1130.6,400.96 Z" fill="#2c3d10" opacity="0.83"/>
+  <path d="M1153.01,398.07 L1180.32,264.31 L1207.63,398.07 Z" fill="#2c3d10" opacity="0.83"/>
+  <path d="M1185.23,400.72 L1216.86,285.6 L1248.49,400.72 Z" fill="#2c3d10" opacity="0.78"/>
+  <path d="M0,404 L1200,388 L1200,450 L0,450 Z" fill="url(#cover-forest-02-gnd)"/>
+</svg>

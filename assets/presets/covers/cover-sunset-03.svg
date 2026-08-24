@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Warm evening light">
+  <defs>
+    <linearGradient id="cover-sunset-03-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8c3b2f"/><stop offset="100%" stop-color="#e08b5c"/></linearGradient>
+    <linearGradient id="cover-sunset-03-gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2c1512"/><stop offset="100%" stop-color="#45201b"/></linearGradient>
+  </defs>
+  <rect width="1200" height="450" fill="url(#cover-sunset-03-sky)"/>
+  <circle cx="212" cy="126" r="52" fill="#ffd98a" opacity="0.9"/>
+  <path d="M0,268 L150,208 L280,256 L430,190 L580,250 L730,196 L880,254 L1030,204 L1200,250 L1200,450 L0,450 Z" fill="#5e2a22" opacity="0.85"/>
+  <path d="M0,322 L170,286 L330,326 L500,282 L660,322 L820,280 L990,320 L1200,286 L1200,450 L0,450 Z" fill="#45201b" opacity="0.92"/>
+  <path d="M0,372 L1200,346 L1200,450 L0,450 Z" fill="url(#cover-sunset-03-gnd)"/>
+  <path d="M498,450 C560,392 630,378 780,358 L840,352 L700,352 C580,372 470,398 372,450 Z" fill="#f3d6b8" opacity="0.72"/>
+</svg>

@@ -5,7 +5,6 @@
 // location_points column names match that app's JSON. Neither may be renamed.
 
 import { execute, query, queryOne } from "../db/pool.js";
-import { logger } from "../lib/logger.js";
 import type {
   ActivityType,
   DisplayMode,
@@ -18,6 +17,8 @@ import type {
   RegistrationStatus,
   RiderLevel,
 } from "../db/types.js";
+import { logger } from "../lib/logger.js";
+import { resolveImageUrl } from "../lib/user-images.js";
 
 interface EventRow {
   id: string;
@@ -76,6 +77,8 @@ interface EventParticipantRow {
   // `SELECT *` leaves both undefined, which mapParticipant treats as "nothing to fall back to".
   display_name?: string | null;
   avatar_url?: string | null;
+  avatar_type?: string | null;
+  avatar_value?: string | null;
 }
 
 /**
@@ -93,7 +96,11 @@ export const PARTICIPANT_DISPLAY_COLUMNS = `
     NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''),
     u.nickname
   ) AS display_name,
-  u.avatar_url`;
+  u.avatar_url,
+  -- The rider's own chosen avatar, resolved into avatarUrl by mapParticipant so every start
+  -- list, LIVE payload and result row shows the same picture as their profile does.
+  u.avatar_type,
+  u.avatar_value`;
 
 function mapEvent(row: EventRow): Event {
   return {
@@ -142,7 +149,9 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
     // display_name is undefined on queries that did not join `users`; the row's own name is
     // still the right answer there (manual entries always have one).
     name: row.display_name ?? row.name,
-    avatarUrl: row.avatar_url ?? null,
+    // The EFFECTIVE avatar: their upload, else their chosen preset, else the Google picture.
+    // Resolved here so the field keeps the exact shape every existing client already reads.
+    avatarUrl: resolveImageUrl("avatar", row.avatar_type, row.avatar_value, row.avatar_url ?? null),
     email: row.email,
     phone: row.phone,
     category: row.category,

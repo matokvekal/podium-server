@@ -52,3 +52,8 @@ node_modules/
 /playwright/.cache/
 
 TODO.md
+
+# User avatar/cover uploads. In production these live in UPLOADS_DIR
+# (/var/lib/podium/uploads) OUTSIDE the deployment tree; this is only the
+# repo-local default a dev machine falls back to.
+/var/uploads

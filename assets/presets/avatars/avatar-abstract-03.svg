@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Overlapping orbs">
+  <defs>
+    <linearGradient id="avatar-abstract-03-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#2d1b4e"/><stop offset="100%" stop-color="#7b4397"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-abstract-03-bg)"/>
+  <circle cx="94" cy="102" r="70" fill="#ffb56b" opacity="0.55"/>
+  <circle cx="168" cy="140" r="70" fill="#e8d3f2" opacity="0.5"/>
+  <circle cx="118" cy="180" r="58" fill="#ffb56b" opacity="0.42"/>
+</svg>

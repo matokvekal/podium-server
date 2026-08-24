@@ -10,6 +10,7 @@
 // and product decisions belong in review and in git history. Adding a tier is an entry here;
 // granting it to someone is a row in entitlement_grants.
 
+import { DEFAULT_FREE_PLAN_LIMITS } from "../config/plan-limits.js";
 import type { Feature } from "./capabilities.js";
 
 export interface PlanLimits {
@@ -50,10 +51,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Free",
     rank: 0,
     limits: {
-      eventsPerWeek: 3,
-      participantsPerEvent: 50,
-      groupsPerEvent: 2,
-      teamsPerOwner: 1,
+      eventsPerWeek: DEFAULT_FREE_PLAN_LIMITS.eventsPerWeek,
+      participantsPerEvent: DEFAULT_FREE_PLAN_LIMITS.participantsPerEvent,
+      groupsPerEvent: DEFAULT_FREE_PLAN_LIMITS.groupsPerEvent,
+      teamsPerOwner: DEFAULT_FREE_PLAN_LIMITS.teamsPerOwner,
     },
     // ⚠ PRICING SWITCH — the one line that decides whether private rides are sellable.
     //

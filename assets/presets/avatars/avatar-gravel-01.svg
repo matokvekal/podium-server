@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Gravel chevrons">
+  <defs>
+    <linearGradient id="avatar-gravel-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6b6134"/><stop offset="100%" stop-color="#bdae72"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-gravel-01-bg)"/>
+  <circle cx="158.72" cy="46.52" r="4.34" fill="#3d381d" opacity="0.25"/>
+  <circle cx="85.78" cy="178.51" r="3.33" fill="#3d381d" opacity="0.14"/>
+  <circle cx="33.16" cy="186.97" r="1.75" fill="#3d381d" opacity="0.14"/>
+  <circle cx="252.24" cy="211.42" r="2.68" fill="#3d381d" opacity="0.27"/>
+  <circle cx="159.08" cy="151.55" r="3.48" fill="#3d381d" opacity="0.16"/>
+  <circle cx="101.5" cy="103.29" r="4" fill="#3d381d" opacity="0.16"/>
+  <circle cx="61.36" cy="249.04" r="2.14" fill="#3d381d" opacity="0.25"/>
+  <circle cx="112.2" cy="142.2" r="3.63" fill="#3d381d" opacity="0.27"/>
+  <circle cx="92.03" cy="205.9" r="1.64" fill="#3d381d" opacity="0.24"/>
+  <circle cx="111.43" cy="138.08" r="2.59" fill="#3d381d" opacity="0.24"/>
+  <circle cx="252.86" cy="242.7" r="4.22" fill="#3d381d" opacity="0.16"/>
+  <circle cx="185.24" cy="251.28" r="3.83" fill="#3d381d" opacity="0.27"/>
+  <circle cx="249.8" cy="246.67" r="4.34" fill="#3d381d" opacity="0.21"/>
+  <circle cx="5.13" cy="173.04" r="4.36" fill="#3d381d" opacity="0.25"/>
+  <circle cx="11.52" cy="112.17" r="1.61" fill="#3d381d" opacity="0.16"/>
+  <circle cx="154.54" cy="241.97" r="3.35" fill="#3d381d" opacity="0.13"/>
+  <circle cx="159.88" cy="225.21" r="2.56" fill="#3d381d" opacity="0.23"/>
+  <circle cx="79.39" cy="144.58" r="2.15" fill="#3d381d" opacity="0.13"/>
+  <circle cx="128.45" cy="43.92" r="2.38" fill="#3d381d" opacity="0.17"/>
+  <circle cx="86.53" cy="63.77" r="2.26" fill="#3d381d" opacity="0.22"/>
+  <circle cx="73.01" cy="151.11" r="3.63" fill="#3d381d" opacity="0.18"/>
+  <circle cx="222.27" cy="179.35" r="4.24" fill="#3d381d" opacity="0.14"/>
+  <path d="M56,108 L128,78 L200,108" fill="none" stroke="#3d381d" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+  <path d="M56,154 L128,124 L200,154" fill="none" stroke="#3d381d" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity="0.73"/>
+  <path d="M56,200 L128,170 L200,200" fill="none" stroke="#3d381d" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity="0.51"/>
+</svg>

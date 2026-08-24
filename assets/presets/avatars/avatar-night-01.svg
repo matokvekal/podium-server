@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Crescent moon">
+  <defs>
+    <linearGradient id="avatar-night-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#231b42"/><stop offset="100%" stop-color="#6f5cc4"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-night-01-bg)"/>
+  <circle cx="158.7" cy="50.54" r="2.6" fill="#fdf7ff" opacity="0.58"/>
+  <circle cx="209.42" cy="202.59" r="3.1" fill="#fdf7ff" opacity="0.85"/>
+  <circle cx="157.33" cy="242.56" r="3.12" fill="#fdf7ff" opacity="0.41"/>
+  <circle cx="73.55" cy="131.92" r="2.55" fill="#fdf7ff" opacity="0.63"/>
+  <circle cx="194.38" cy="207.05" r="3.94" fill="#fdf7ff" opacity="0.52"/>
+  <circle cx="102.63" cy="128.48" r="1.4" fill="#fdf7ff" opacity="0.57"/>
+  <circle cx="32.2" cy="216.43" r="2.55" fill="#fdf7ff" opacity="0.85"/>
+  <circle cx="219.93" cy="56.56" r="3.2" fill="#fdf7ff" opacity="0.49"/>
+  <circle cx="180.62" cy="75.99" r="2.02" fill="#fdf7ff" opacity="0.63"/>
+  <circle cx="101.42" cy="77.57" r="2.24" fill="#fdf7ff" opacity="0.8"/>
+  <circle cx="215.38" cy="48.41" r="2.96" fill="#fdf7ff" opacity="0.54"/>
+  <circle cx="222.28" cy="174.59" r="3.94" fill="#fdf7ff" opacity="0.47"/>
+  <circle cx="120.71" cy="130.26" r="1.66" fill="#fdf7ff" opacity="0.87"/>
+  <circle cx="39.4" cy="76.83" r="1.91" fill="#fdf7ff" opacity="0.69"/>
+  <circle cx="47.78" cy="240.52" r="1.95" fill="#fdf7ff" opacity="0.8"/>
+  <circle cx="221.85" cy="96.13" r="2.58" fill="#fdf7ff" opacity="0.88"/>
+  <circle cx="140" cy="118" r="62" fill="#fdf7ff" opacity="0.95"/>
+  <circle cx="110" cy="102" r="56" fill="#231b42"/>
+</svg>

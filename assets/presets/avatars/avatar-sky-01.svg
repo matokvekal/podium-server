@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Sun and clouds">
+  <defs>
+    <linearGradient id="avatar-sky-01-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1b3a6b"/><stop offset="100%" stop-color="#7fb2e0"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-sky-01-bg)"/>
+  <circle cx="128" cy="112" r="46" fill="#ffe07a" opacity="0.95"/>
+  <path d="M40,178 C40,160 56,148 74,151 C82,134 108,132 118,148 C138,146 150,160 148,178 Z" fill="#f4f9ff" opacity="0.85"/>
+  <path d="M118,214 C118,198 132,188 148,191 C156,176 180,174 189,189 C207,187 218,199 216,214 Z" fill="#f4f9ff" opacity="0.6"/>
+</svg>

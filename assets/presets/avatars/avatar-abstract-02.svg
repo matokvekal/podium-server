@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Diagonal bands">
+  <defs>
+    <linearGradient id="avatar-abstract-02-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#7a1f3d"/><stop offset="100%" stop-color="#c9506f"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#avatar-abstract-02-bg)"/>
+  <path d="M-70,256 L-12,0 L22,0 L-36,256 Z" fill="#ffe3d6" opacity="0.18"/>
+  <path d="M-8,256 L50,0 L84,0 L26,256 Z" fill="#ffe3d6" opacity="0.31"/>
+  <path d="M54,256 L112,0 L146,0 L88,256 Z" fill="#ffe3d6" opacity="0.44"/>
+  <path d="M116,256 L174,0 L208,0 L150,256 Z" fill="#ffe3d6" opacity="0.57"/>
+  <path d="M178,256 L236,0 L270,0 L212,256 Z" fill="#ffe3d6" opacity="0.7"/>
+</svg>
