@@ -1,0 +1,52 @@
+name: Deploy Server to Production
+
+on:
+  push:
+    branches:
+      - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.ELNINO_GITHUB_DEPLOY }}
+          source: "dist,package.json,package-lock.json"
+          target: "/opt/elnino"
+          overwrite: true
+
+      - name: Install production deps and restart
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.ELNINO_GITHUB_DEPLOY }}
+          script: |
+            cd /opt/elnino
+            npm ci --omit=dev
+            sudo systemctl restart elnino
