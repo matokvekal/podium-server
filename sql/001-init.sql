@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS event_participants (
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     left_at TIMESTAMPTZ
 );
-
+-------------
 -- The join upsert conflicts on this pair. NULLs count as distinct, so any number of
 -- account-less participants coexist while a real user cannot join twice.
 CREATE UNIQUE INDEX IF NOT EXISTS event_participants_event_id_user_id_key
