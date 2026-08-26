@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 -- Join by code / QR scan.
 CREATE UNIQUE INDEX IF NOT EXISTS events_code_key ON events (code);
-
+----------------
 -- ⚠ event_participants.id IS `participantId` — the id the transmitter stores after joining
 -- and sends with every location batch. Never change its meaning.
 CREATE TABLE IF NOT EXISTS event_participants (
