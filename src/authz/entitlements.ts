@@ -9,7 +9,7 @@
 import { resolveEffectiveLimits } from "../config/plan-limits.js";
 import { query, queryOne, withTransaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
-import { selectUserLimits } from "../queries/userLimits.queries.js";
+import { selectUserEntitlements } from "../queries/userEntitlements.queries.js";
 import type { Feature } from "./capabilities.js";
 import { FEATURES } from "./capabilities.js";
 import type { PlanLimits } from "./plans.js";
@@ -103,8 +103,11 @@ export async function resolveEntitlements(userId: number | null): Promise<Entitl
   if (userId === null) return ANONYMOUS_ENTITLEMENTS;
 
   // Two independent sources, one round trip: what the user was GRANTED (a plan, features)
-  // and what has been set for them SPECIFICALLY (user_limits). Neither blocks the other.
-  const [rows, limitRow] = await Promise.all([selectLiveGrants(userId), selectUserLimits(userId)]);
+  // and what has been set for them SPECIFICALLY (user_entitlements). Neither blocks the other.
+  const [rows, entRow] = await Promise.all([
+    selectLiveGrants(userId),
+    selectUserEntitlements(userId),
+  ]);
 
   const activePlans: PlanDefinition[] = [];
   const features = new Set<Feature>();
@@ -147,10 +150,10 @@ export async function resolveEntitlements(userId: number | null): Promise<Entitl
     //   2. the per-user override on top, where a set column wins outright.
     //
     // The override is applied LAST and wins even when it is lower, because it is the explicit
-    // answer for one account: "give this organizer 20 rides a week" and "hold this one account
-    // to 1" are the same mechanism. With no row, or a row of NULLs, this is exactly step 1 —
-    // which is what makes the change invisible until somebody sets a value.
-    limits: resolveEffectiveLimits(mergeLimits([plan, ...activePlans]), limitRow),
+    // answer for one account: "give this organizer 200 riders a ride" and "hold this one
+    // account to 1" are the same mechanism. With no user_entitlements row this is exactly
+    // step 1 — which is what makes the change invisible until somebody writes a row.
+    limits: resolveEffectiveLimits(mergeLimits([plan, ...activePlans]), entRow),
     grants,
   };
 }

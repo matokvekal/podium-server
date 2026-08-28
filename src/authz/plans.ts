@@ -15,13 +15,13 @@ import type { Feature } from "./capabilities.js";
 
 export interface PlanLimits {
   /** Rides an organizer may create in a rolling 7 days — not a calendar week. */
-  eventsPerWeek: number;
+  maxEventsPerWeek: number;
   /** Riders on one start list, however they got there (self-joined, added, imported). */
-  participantsPerEvent: number;
+  maxParticipantsPerEvent: number;
   /** Ride groups within one event. */
-  groupsPerEvent: number;
+  maxGroupsPerEvent: number;
   /** Teams one person may own. */
-  teamsPerOwner: number;
+  maxTeamsPerOwner: number;
 }
 
 export interface PlanDefinition {
@@ -51,10 +51,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Free",
     rank: 0,
     limits: {
-      eventsPerWeek: DEFAULT_FREE_PLAN_LIMITS.eventsPerWeek,
-      participantsPerEvent: DEFAULT_FREE_PLAN_LIMITS.participantsPerEvent,
-      groupsPerEvent: DEFAULT_FREE_PLAN_LIMITS.groupsPerEvent,
-      teamsPerOwner: DEFAULT_FREE_PLAN_LIMITS.teamsPerOwner,
+      maxEventsPerWeek: DEFAULT_FREE_PLAN_LIMITS.maxEventsPerWeek,
+      maxParticipantsPerEvent: DEFAULT_FREE_PLAN_LIMITS.maxParticipantsPerEvent,
+      maxGroupsPerEvent: DEFAULT_FREE_PLAN_LIMITS.maxGroupsPerEvent,
+      maxTeamsPerOwner: DEFAULT_FREE_PLAN_LIMITS.maxTeamsPerOwner,
     },
     // ⚠ PRICING SWITCH — the one line that decides whether private rides are sellable.
     //
@@ -71,10 +71,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Organizer Pro",
     rank: 10,
     limits: {
-      eventsPerWeek: 30,
-      participantsPerEvent: 500,
-      groupsPerEvent: 10,
-      teamsPerOwner: 5,
+      maxEventsPerWeek: 30,
+      maxParticipantsPerEvent: 500,
+      maxGroupsPerEvent: 10,
+      maxTeamsPerOwner: 5,
     },
     features: ["private_events", "advanced_results"],
   },
@@ -84,10 +84,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Club",
     rank: 20,
     limits: {
-      eventsPerWeek: 250,
-      participantsPerEvent: 5000,
-      groupsPerEvent: 25,
-      teamsPerOwner: 50,
+      maxEventsPerWeek: 250,
+      maxParticipantsPerEvent: 5000,
+      maxGroupsPerEvent: 25,
+      maxTeamsPerOwner: 50,
     },
     // "Multiple admins, many events, large groups and advanced management." Defined so the
     // policy already honours it; nothing sells it yet.
@@ -111,9 +111,9 @@ export function isPlanCode(value: string): value is PlanCode {
 export function mergeLimits(plans: readonly PlanDefinition[]): PlanLimits {
   const all = plans.length > 0 ? plans : [FREE_PLAN];
   return {
-    eventsPerWeek: Math.max(...all.map((p) => p.limits.eventsPerWeek)),
-    participantsPerEvent: Math.max(...all.map((p) => p.limits.participantsPerEvent)),
-    groupsPerEvent: Math.max(...all.map((p) => p.limits.groupsPerEvent)),
-    teamsPerOwner: Math.max(...all.map((p) => p.limits.teamsPerOwner)),
+    maxEventsPerWeek: Math.max(...all.map((p) => p.limits.maxEventsPerWeek)),
+    maxParticipantsPerEvent: Math.max(...all.map((p) => p.limits.maxParticipantsPerEvent)),
+    maxGroupsPerEvent: Math.max(...all.map((p) => p.limits.maxGroupsPerEvent)),
+    maxTeamsPerOwner: Math.max(...all.map((p) => p.limits.maxTeamsPerOwner)),
   };
 }

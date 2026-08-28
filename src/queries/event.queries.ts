@@ -4,7 +4,7 @@
 // ⚠ event_participants.id is `participantId` in the frozen Android contract, and the
 // location_points column names match that app's JSON. Neither may be renamed.
 
-import { execute, query, queryOne } from "../db/pool.js";
+import { execute, query, queryOne, withTransaction } from "../db/pool.js";
 import type {
   ActivityType,
   DisplayMode,
@@ -613,6 +613,99 @@ export async function upsertParticipant(input: {
   );
   if (!row) throw new Error("upsertParticipant returned no row");
   return mapParticipant(row);
+}
+
+/**
+ * Start-list occupancy, split the way the capacity rule needs it (see
+ * authz/participant-capacity.ts): `approved` = registration_status in ('registered','approved'),
+ * `pending` = 'waiting_approval', both with left_at IS NULL. Rejected / left riders are excluded.
+ * Plain read — the concurrency-safe path is insertParticipantIfRoom.
+ */
+export async function countJoinedParticipants(
+  eventId: string,
+): Promise<{ approved: number; pending: number }> {
+  const row = await queryOne<{ approved: string; pending: string }>(
+    `SELECT
+        COUNT(*) FILTER (
+          WHERE registration_status IN ('registered', 'approved') AND left_at IS NULL
+        )::text AS approved,
+        COUNT(*) FILTER (
+          WHERE registration_status = 'waiting_approval' AND left_at IS NULL
+        )::text AS pending
+       FROM event_participants
+      WHERE event_id = $1`,
+    [eventId],
+  );
+  return { approved: Number(row?.approved ?? 0), pending: Number(row?.pending ?? 0) };
+}
+
+/**
+ * The concurrency-safe join write. A per-event advisory lock (held to end of transaction)
+ * serialises concurrent joins for the same event, so two riders cannot both pass the capacity
+ * check and land on a full list.
+ *
+ * A rider who already has a row holds a slot: their join is idempotent and skips the capacity
+ * check entirely (bib is updated if a new one was given, left_at is cleared). Only a genuinely
+ * new rider is counted against `maxParticipants`.
+ */
+export async function insertParticipantIfRoom(input: {
+  eventId: string;
+  userId: number;
+  bib: string | undefined;
+  initialStatus: RegistrationStatus;
+  maxParticipants: number;
+}): Promise<
+  | { ok: true; participant: EventParticipant }
+  | { ok: false; approved: number; pending: number; limit: number }
+> {
+  return withTransaction(async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`event-join:${input.eventId}`]);
+
+    const existing = await tx.queryOne<EventParticipantRow>(
+      "SELECT * FROM event_participants WHERE event_id = $1 AND user_id = $2",
+      [input.eventId, input.userId],
+    );
+    if (existing) {
+      const updated = await tx.queryOne<EventParticipantRow>(
+        `UPDATE event_participants
+            SET bib = COALESCE($3, bib), left_at = NULL
+          WHERE event_id = $1 AND user_id = $2
+          RETURNING *`,
+        [input.eventId, input.userId, input.bib ?? null],
+      );
+      if (!updated) throw new Error("insertParticipantIfRoom: update returned no row");
+      return { ok: true, participant: mapParticipant(updated) };
+    }
+
+    const countRow = await tx.queryOne<{ approved: string; pending: string }>(
+      `SELECT
+          COUNT(*) FILTER (
+            WHERE registration_status IN ('registered', 'approved') AND left_at IS NULL
+          )::text AS approved,
+          COUNT(*) FILTER (
+            WHERE registration_status = 'waiting_approval' AND left_at IS NULL
+          )::text AS pending
+         FROM event_participants
+        WHERE event_id = $1`,
+      [input.eventId],
+    );
+    const approved = Number(countRow?.approved ?? 0);
+    const pending = Number(countRow?.pending ?? 0);
+    if (approved + pending >= input.maxParticipants) {
+      return { ok: false, approved, pending, limit: input.maxParticipants };
+    }
+
+    const inserted = await tx.queryOne<EventParticipantRow>(
+      `INSERT INTO event_participants (event_id, user_id, bib, registration_status)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (event_id, user_id)
+        DO UPDATE SET bib = COALESCE($3, event_participants.bib), left_at = NULL
+        RETURNING *`,
+      [input.eventId, input.userId, input.bib ?? null, input.initialStatus],
+    );
+    if (!inserted) throw new Error("insertParticipantIfRoom: insert returned no row");
+    return { ok: true, participant: mapParticipant(inserted) };
+  });
 }
 
 export async function selectParticipantForUser(

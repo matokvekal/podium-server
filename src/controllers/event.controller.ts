@@ -1,11 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
+import { buildActor } from "../authz/actor.js";
 import { EVENT_CAPABILITIES } from "../authz/capabilities.js";
 import { eventCapabilitiesFor } from "../authz/policy.js";
 import type { Event, EventParticipant, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { traceLog } from "../lib/trace-log.js";
 import { userImageFieldsOf } from "../lib/user-images.js";
-import { selectParticipantByEventAndUser } from "../queries/event.queries.js";
+import { countJoinedParticipants, selectParticipantByEventAndUser } from "../queries/event.queries.js";
+import { countGroupsForEvent } from "../queries/group.queries.js";
 import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
 import { selectUserById } from "../queries/user.queries.js";
 import {
@@ -85,6 +87,12 @@ function toEventDetail(
   owner: User | null = null,
   view: EventView | null = null,
   canSeeInfoOverride: boolean | null = null,
+  capacity: {
+    participantCount: number;
+    maxParticipants: number;
+    groupCount: number;
+    maxGroups: number;
+  } | null = null,
 ) {
   const canSeeInfo = canSeeInfoOverride ?? true;
   const summary = toEventSummary(event);
@@ -149,6 +157,19 @@ function toEventDetail(
           attendanceStatus: myParticipant.attendanceStatus,
         }
       : null,
+    /**
+     * Start-list occupancy and ride-group counts, both against the EVENT OWNER's entitlement
+     * (user_entitlements folded onto their plan). `participantCount` = approved + still-pending
+     * riders — the same rule the join path enforces. Additive; a client that ignores these is
+     * unaffected. Defaults are the free tier (50 riders, 2 groups) when capacity was not
+     * resolved for this call.
+     */
+    participantCount: capacity?.participantCount ?? 0,
+    maxParticipants: capacity?.maxParticipants ?? null,
+    isFull:
+      capacity !== null ? capacity.participantCount >= capacity.maxParticipants : false,
+    groupCount: capacity?.groupCount ?? 0,
+    maxGroups: capacity?.maxGroups ?? null,
   };
 }
 
@@ -167,11 +188,31 @@ function toEventDetail(
 async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
   const { event } = view;
   const canSeeRoute = canViewRoute(view);
-  const [route, owner, myParticipant] = await Promise.all([
+  const [route, owner, myParticipant, counts, groupCount, ownerActor] = await Promise.all([
     canSeeRoute ? getEventRouteSummary(event.id) : Promise.resolve(null),
     event.ownerId === null ? Promise.resolve(null) : selectUserById(event.ownerId),
     viewerId === null ? Promise.resolve(null) : selectParticipantByEventAndUser(event.id, viewerId),
+    countJoinedParticipants(event.id),
+    countGroupsForEvent(event.id),
+    // The owner's entitlement drives the caps. Reuse the viewer's actor when the viewer IS the
+    // owner (the common owner-mutation reply), otherwise resolve the owner's.
+    event.ownerId === null
+      ? Promise.resolve(null)
+      : view.actor.userId === event.ownerId
+        ? Promise.resolve(view.actor)
+        : buildActor(event.ownerId),
   ]);
+
+  const limits = ownerActor?.entitlements.limits ?? null;
+  const capacity = limits
+    ? {
+        participantCount: counts.approved + counts.pending,
+        maxParticipants: limits.maxParticipantsPerEvent,
+        groupCount,
+        maxGroups: limits.maxGroupsPerEvent,
+      }
+    : null;
+
   return toEventDetail(
     event,
     viewerId,
@@ -181,6 +222,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
     owner,
     view,
     canViewEventInfo(view),
+    capacity,
   );
 }
 

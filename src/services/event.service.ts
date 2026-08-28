@@ -12,7 +12,7 @@ import type {
 } from "../db/types.js";
 import { buildActor, buildEventContext, denyFeature } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
-import { assertWithinEventsPerWeek, assertWithinParticipantLimit } from "../authz/limits.js";
+import { assertWithinEventsPerWeek } from "../authz/limits.js";
 import type { Actor, EventContext } from "../authz/policy.js";
 import { canAccount, canEvent } from "../authz/policy.js";
 import { ApiError } from "../lib/api-error.js";
@@ -24,6 +24,7 @@ import {
   insertEvent,
   insertLocationPoints,
   type LocationPointInput,
+  insertParticipantIfRoom,
   selectActiveEventByCode,
   selectEventById,
   selectEventCodesWithPrefix,
@@ -96,22 +97,42 @@ export async function joinEvent(
     throw new ApiError(400, "This event requires a bib number");
   }
 
-  // A self-joiner counts against the organizer's cap too — otherwise a public ride's start
-  // list is unlimited and only manual adds are capped, which is the wrong way round.
-  const existing = await selectParticipantByEventAndUser(event.id, userId);
-  if (!existing && event.ownerId !== null) {
-    // The organizer's plan governs their start list, not the joining rider's — a rider on a
-    // free plan joining a Pro organizer's 300-person ride must not be turned away.
-    const [organizer, current] = await Promise.all([
-      buildActor(event.ownerId),
-      selectParticipantsForEvent(event.id),
-    ]);
-    assertWithinParticipantLimit(organizer, current.length, 1);
-  }
-
   const initialStatus: RegistrationStatus = event.requiresApproval
     ? "waiting_approval"
     : "registered";
+
+  // The start-list cap is the EVENT OWNER's entitlement, not the joining rider's — a rider on
+  // the free plan joining a Pro organizer's 300-person ride must not be turned away. Capacity
+  // counts approved + still-pending riders (authz/participant-capacity.ts); an existing
+  // participant re-joining always keeps their slot. insertParticipantIfRoom does the check and
+  // the write under one per-event advisory lock so a burst of joins cannot overfill the list.
+  if (event.ownerId !== null) {
+    const organizer = await buildActor(event.ownerId);
+    const result = await insertParticipantIfRoom({
+      eventId: event.id,
+      userId,
+      bib,
+      initialStatus,
+      maxParticipants: organizer.entitlements.limits.maxParticipantsPerEvent,
+    });
+    if (!result.ok) {
+      logger.warn(
+        { eventId: event.id, userId, ...result },
+        "joinEvent: rejected — ride at rider limit",
+      );
+      throw new ApiError(
+        409,
+        `This ride is full — ${result.approved + result.pending} of ${result.limit} riders (EVENT_FULL)`,
+      );
+    }
+    logger.info(
+      { eventId: event.id, userId, participantId: result.participant.id },
+      "user joined event",
+    );
+    return { event, participant: result.participant };
+  }
+
+  // Ownerless legacy event — no entitlement to resolve, fall back to the plain idempotent join.
   const participant = await upsertParticipant({ eventId: event.id, userId, bib, initialStatus });
   logger.info({ eventId: event.id, userId, participantId: participant.id }, "user joined event");
 

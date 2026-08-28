@@ -1,3 +1,6 @@
+-- ⚠ SUPERSEDED BY sql/020-user-entitlements.sql — do not apply. This table was never created
+-- on any database; 020 replaces it with the authoritative per-user entitlement model.
+--
 -- 018-user-limits.sql — per-user effective limits, so one person can be upgraded without a
 -- code deploy.
 --
