@@ -67,6 +67,7 @@ Skip 001 — those tables already exist.
 | `017-user-avatar-cover.sql` | `users.avatar_type/_value`, `cover_type/_value` | yes — additive |
 | `018-user-limits.sql` | ⚠ **SUPERSEDED by sql/020 — skip.** Never applied to any database | — |
 | `020-user-entitlements.sql` | `user_entitlements` — the authoritative per-user entitlement/limits model (`max_events_per_week` / `max_participants_per_event` / `max_groups_per_event`); no row = code defaults | yes — new table |
+| `021-events-elevation-gain.sql` | `events.elevation_gain_m` — the organizer's authoritative elevation-gain value (GPX import or manual), independent of any route; reads expose `COALESCE(this, route.elevation_m)`. Every existing row is `NULL` and unchanged | yes — additive |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

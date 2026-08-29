@@ -29,6 +29,7 @@ import {
   selectEventById,
   selectEventCodesWithPrefix,
   countEventsCreatedSince,
+  type EventListItem,
   selectEventsForUser,
   selectLastLocation,
   selectLastLocationsForEvent,
@@ -41,6 +42,7 @@ import {
   selectUpcomingEventsForFollowed,
   type UpdateEventInput,
   updateEvent,
+  updateEventElevationGain,
   updateEventPaused,
   updateEventStatus,
   upsertParticipant,
@@ -235,6 +237,9 @@ export async function createEvent(
     activityType?: ActivityType;
     level?: RiderLevel;
     organizerGroup?: string;
+    /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
+     *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
+    elevationGainM?: number | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -289,6 +294,13 @@ export async function createEvent(
   // of truth; this row is the extensible form of it, and the only way to express an operator.
   await insertEventMember(event.id, ownerId, "owner");
 
+  // Elevation gain is written on its own (own column, own guarded statement — see
+  // updateEventElevationGain). The reply is re-read by the controller, so the returned `event`
+  // not carrying it yet is fine.
+  if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
+    await updateEventElevationGain(event.id, input.elevationGainM);
+  }
+
   // Owning a ride and riding it are different things — event_members says who runs it,
   // event_participants says who is on the start list. An organizer who ticked "I'm riding
   // too" belongs in both, linked to their real user_id so the client can tell it is them.
@@ -310,7 +322,10 @@ export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "f
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
 
-export async function listMyEvents(userId: number, filter: EventsFilter): Promise<Event[]> {
+export async function listMyEvents(
+  userId: number,
+  filter: EventsFilter,
+): Promise<EventListItem[]> {
   // Asks a different question from "events I own or joined", so it gets its own query rather
   // than filtering that list down to nothing. Covers both people I follow and teams I am in —
   // a team's rides are meant to appear wherever a rider's rides normally do, so they do not
@@ -342,7 +357,7 @@ export async function listMyEvents(userId: number, filter: EventsFilter): Promis
  */
 export function listPublicEvents(
   filters: Omit<PublicEventFilters, "sort"> & { sort?: PublicEventFilters["sort"] },
-): Promise<{ events: Event[]; total: number }> {
+): Promise<{ events: EventListItem[]; total: number }> {
   const sort = filters.sort ?? (filters.bucket === "finished" ? "latest" : "soonest");
   return selectPublicEvents({ ...filters, sort });
 }
@@ -452,6 +467,14 @@ export async function updateEventDetails(
 
   const updated = await updateEvent(eventId, input);
   if (!updated) throw new Error(`updateEventDetails: event ${eventId} not found after update`);
+
+  // Elevation gain has its own column and its own guarded statement — updateEvent above never
+  // touches it. `undefined` means the caller left it out; `null` means "clear it, fall back to
+  // the route".
+  if (input.elevationGainM !== undefined) {
+    await updateEventElevationGain(eventId, input.elevationGainM);
+  }
+
   logger.info({ eventId, userId }, "event updated");
   return updated;
 }

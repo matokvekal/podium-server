@@ -149,6 +149,14 @@ export interface Event {
   requiresApproval: boolean; // self-join sets registration_status=waiting_approval instead of registered
   isPaused: boolean; // live display frozen; never affects location ingest — see event.service.ts
 
+  /**
+   * The organizer's authoritative elevation-gain value (metres), or null. Independent of any
+   * attached route: it covers manual entry with no route and a corrected GPX import. Reads
+   * expose the EFFECTIVE climb as COALESCE(this, attached route.elevation_m). See
+   * sql/021-events-elevation-gain.sql.
+   */
+  elevationGainM: number | null;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;

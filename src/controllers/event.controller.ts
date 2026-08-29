@@ -6,7 +6,11 @@ import type { Event, EventParticipant, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { traceLog } from "../lib/trace-log.js";
 import { userImageFieldsOf } from "../lib/user-images.js";
-import { countJoinedParticipants, selectParticipantByEventAndUser } from "../queries/event.queries.js";
+import {
+  countJoinedParticipants,
+  type EventListItem,
+  selectParticipantByEventAndUser,
+} from "../queries/event.queries.js";
 import { countGroupsForEvent } from "../queries/group.queries.js";
 import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
 import { selectUserById } from "../queries/user.queries.js";
@@ -47,7 +51,10 @@ import {
 import { getEventRouteSummary } from "../services/eventRoute.service.js";
 import { toRouteSummary } from "./routeLibrary.controller.js";
 
-function toEventSummary(event: Event) {
+function toEventSummary(event: Event | EventListItem) {
+  // Present on a LIST row (EventListItem), absent when toEventDetail reuses this for a single
+  // event — there the detail-specific fields below carry the same numbers.
+  const summary = event as Partial<EventListItem>;
   return {
     id: event.id,
     code: event.code,
@@ -66,6 +73,13 @@ function toEventSummary(event: Event) {
     level: event.level,
     organizerGroup: event.organizerGroup,
     teamId: event.teamId,
+    // Lightweight route + roster summary so a card renders Distance / Elevation / Riders
+    // straight from GET /events — no per-card route or participants call, no localStorage
+    // dependency. `elevationGain` is the EFFECTIVE climb (organizer's value, else the route's).
+    // null / undefined here means "not known from the list" — a card shows a dash, never a 0.
+    distanceKm: summary.distanceKm ?? null,
+    elevationGain: summary.elevationGain ?? null,
+    participantCount: summary.participantCount ?? null,
   };
 }
 
@@ -93,6 +107,9 @@ function toEventDetail(
     groupCount: number;
     maxGroups: number;
   } | null = null,
+  /** `route` (the geometry preview) is nulled when false; the headline Distance / Elevation
+   *  numbers below are shown regardless, exactly as the list card does. */
+  canSeeRouteGeometry = true,
 ) {
   const canSeeInfo = canSeeInfoOverride ?? true;
   const summary = toEventSummary(event);
@@ -132,7 +149,14 @@ function toEventDetail(
     showResults: event.showResults,
     /** Preview geometry only — the full line is GET /routes/:routeId, the same second call
      *  the browse cards make. Null when the event has no route, or this viewer may not see it. */
-    route: route ? toRouteSummary(route) : null,
+    route: canSeeRouteGeometry && route ? toRouteSummary(route) : null,
+    /** The same effective Distance / Elevation a list card shows, so Event Detail, the Edit
+     *  form and the card all read one server value. `distanceKm` is the attached route's;
+     *  `elevationGain` is the organizer's elevation_gain_m, else the route's climb, else null.
+     *  `route` (geometry) may be nulled for a viewer who can't see it while these stay
+     *  populated — they are headline figures, not the line. */
+    distanceKm: route?.distanceKm ?? null,
+    elevationGain: event.elevationGainM ?? route?.elevationM ?? null,
     /** Who is running this ride. Until now the payload carried only `ownerId`, so the client
      *  displayed a fake name invented from the event id (event-visuals.ts's mockOrganizerName)
      *  — every ride in the app showed an organizer who does not exist. */
@@ -189,7 +213,10 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
   const { event } = view;
   const canSeeRoute = canViewRoute(view);
   const [route, owner, myParticipant, counts, groupCount, ownerActor] = await Promise.all([
-    canSeeRoute ? getEventRouteSummary(event.id) : Promise.resolve(null),
+    // Always fetched: the headline Distance / Elevation come from it even for a viewer who may
+    // not see the geometry (same figures the list card shows everyone). The geometry preview
+    // itself is gated in toEventDetail via canSeeRoute.
+    getEventRouteSummary(event.id),
     event.ownerId === null ? Promise.resolve(null) : selectUserById(event.ownerId),
     viewerId === null ? Promise.resolve(null) : selectParticipantByEventAndUser(event.id, viewerId),
     countJoinedParticipants(event.id),
@@ -223,6 +250,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
     view,
     canViewEventInfo(view),
     capacity,
+    canSeeRoute,
   );
 }
 

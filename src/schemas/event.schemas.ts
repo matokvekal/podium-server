@@ -65,6 +65,12 @@ export const createEventSchema = z.object({
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
   organizerGroup: z.string().max(200).optional(),
+
+  // The organizer's elevation-gain value (metres). Imported from a GPX by the client, or typed
+  // by hand — either way this is the number they chose to publish. `null` clears it (fall back
+  // to the attached route's climb). Omitted = leave the stored value alone. Stored in
+  // events.elevation_gain_m; see sql/021-events-elevation-gain.sql.
+  elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -88,6 +94,9 @@ export const updateEventSchema = z.object({
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
   organizerGroup: z.string().max(200).optional(),
+
+  // See createEventSchema. `null` clears the organizer's value; omitted leaves it untouched.
+  elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
 });
 
 export const changeEventStatusSchema = z.object({

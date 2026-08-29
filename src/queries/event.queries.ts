@@ -45,6 +45,7 @@ interface EventRow {
   team_id: number | null;
   requires_approval: boolean;
   is_paused: boolean;
+  elevation_gain_m: number | null;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -128,12 +129,72 @@ function mapEvent(row: EventRow): Event {
     teamId: row.team_id,
     requiresApproval: row.requires_approval,
     isPaused: row.is_paused,
+    // undefined on a database that has not had sql/021 applied yet — treated as "not set".
+    elevationGainM: row.elevation_gain_m ?? null,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
     showLiveLocations: row.show_live_locations,
     showHistoryLocations: row.show_history_locations,
     showResults: row.show_results,
+  };
+}
+
+/**
+ * An event as it appears in a LIST response (GET /events, GET /events/public), carrying the
+ * lightweight route + roster summary a card needs so it never has to open the event detail or
+ * the route endpoint per card. All three come from existing tables — see EVENT_SUMMARY_*.
+ */
+export interface EventListItem extends Event {
+  /** The attached route's distance, or null when the event has no route. */
+  distanceKm: number | null;
+  /** EFFECTIVE climb: the organizer's elevation_gain_m, else the attached route's, else null. */
+  elevationGain: number | null;
+  /** Approved + pending riders, still on the list (rejected / left excluded) — the same rule
+   *  the join-capacity check and the event-detail payload use. */
+  participantCount: number;
+}
+
+/**
+ * The two correlated lookups every list query bolts on: the newest attached route's
+ * distance/climb, and the live roster count. Written as LEFT JOIN LATERAL so the list stays a
+ * single round trip — never a route/participant query per row.
+ */
+const EVENT_SUMMARY_JOINS = `
+  LEFT JOIN LATERAL (
+    SELECT r.distance_km, r.elevation_m
+      FROM event_routes er
+      JOIN routes r ON r.id = er.route_id
+     WHERE er.event_id = e.id
+     ORDER BY er.created_at DESC
+     LIMIT 1
+  ) route_summary ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*)::int AS participant_count
+      FROM event_participants epc
+     WHERE epc.event_id = e.id
+       AND epc.registration_status IN ('registered', 'approved', 'waiting_approval')
+       AND epc.left_at IS NULL
+  ) roster_summary ON TRUE`;
+
+const EVENT_SUMMARY_COLUMNS = `
+  route_summary.distance_km AS route_distance_km,
+  route_summary.elevation_m AS route_elevation_m,
+  COALESCE(roster_summary.participant_count, 0) AS participant_count`;
+
+interface EventSummaryRow extends EventRow {
+  route_distance_km: number | null;
+  route_elevation_m: number | null;
+  participant_count: number;
+}
+
+function mapEventListItem(row: EventSummaryRow): EventListItem {
+  const event = mapEvent(row);
+  return {
+    ...event,
+    distanceKm: row.route_distance_km ?? null,
+    elevationGain: event.elevationGainM ?? row.route_elevation_m ?? null,
+    participantCount: Number(row.participant_count ?? 0),
   };
 }
 
@@ -193,19 +254,21 @@ export async function selectLiveEventForOwner(ownerId: number): Promise<Event | 
  * mine/joined/upcoming/live/past happens in the service — event counts per user are small
  * enough that one simple query beats five subtly different ones.
  */
-export async function selectEventsForUser(userId: number): Promise<Event[]> {
-  const rows = await query<EventRow>(
+export async function selectEventsForUser(userId: number): Promise<EventListItem[]> {
+  const rows = await query<EventSummaryRow>(
     // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
     // events this user OWNS but was rejected from, which cannot happen today but is exactly
     // the kind of thing that starts happening once co-organizers land.
-    `SELECT DISTINCT e.* FROM events e
+    `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
+       FROM events e
        LEFT JOIN event_participants ep
               ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+       ${EVENT_SUMMARY_JOINS}
       WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
       ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
     [userId],
   );
-  return rows.map(mapEvent);
+  return rows.map(mapEventListItem);
 }
 
 /**
@@ -213,12 +276,14 @@ export async function selectEventsForUser(userId: number): Promise<Event[]> {
  * "may see next future rides" half of following someone. Public only: following a person is
  * not an invitation to their private rides.
  */
-export async function selectUpcomingEventsForFollowed(userId: number): Promise<Event[]> {
-  const rows = await query<EventRow>(
-    `SELECT DISTINCT e.* FROM events e
+export async function selectUpcomingEventsForFollowed(userId: number): Promise<EventListItem[]> {
+  const rows = await query<EventSummaryRow>(
+    `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
+       FROM events e
        LEFT JOIN user_follows f ON f.followee_id = e.owner_id AND f.follower_id = $1
        LEFT JOIN team_members tm
               ON tm.team_id = e.team_id AND tm.user_id = $1 AND tm.status = 'approved'
+       ${EVENT_SUMMARY_JOINS}
       WHERE e.visibility = 'public'
         AND e.status IN ('published', 'registration_open', 'ready', 'live')
         AND e.owner_id <> $1
@@ -226,7 +291,7 @@ export async function selectUpcomingEventsForFollowed(userId: number): Promise<E
       ORDER BY e.starts_at ASC NULLS LAST`,
     [userId],
   );
-  return rows.map(mapEvent);
+  return rows.map(mapEventListItem);
 }
 
 /** Rides this user created in the last 7 days — the free plan's rolling window. */
@@ -280,7 +345,7 @@ function isMissingColumnError(err: unknown): err is { code: string; message?: st
  */
 export async function selectPublicEvents(
   filters: PublicEventFilters,
-): Promise<{ events: Event[]; total: number }> {
+): Promise<{ events: EventListItem[]; total: number }> {
   const where = `visibility = 'public'
         AND status NOT IN ('cancelled', 'draft')
         AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR location ILIKE '%' || $1 || '%')
@@ -313,15 +378,18 @@ export async function selectPublicEvents(
   }[filters.sort];
 
   try {
-    const rows = await query<EventRow>(
-      `SELECT * FROM events WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
+    const rows = await query<EventSummaryRow>(
+      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}
+         FROM events e
+         ${EVENT_SUMMARY_JOINS}
+        WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
       [...params, filters.limit, filters.offset],
     );
     const countRow = await queryOne<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM events WHERE ${where}`,
       params,
     );
-    return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
+    return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
   } catch (err) {
     if (!isMissingColumnError(err)) throw err;
 
@@ -343,15 +411,18 @@ export async function selectPublicEvents(
         )`;
     const legacyParams = [filters.q ?? null, filters.type ?? null, filters.bucket ?? null];
 
-    const rows = await query<EventRow>(
-      `SELECT * FROM events WHERE ${legacyWhere} ORDER BY ${orderBy} LIMIT $4 OFFSET $5`,
+    const rows = await query<EventSummaryRow>(
+      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}
+         FROM events e
+         ${EVENT_SUMMARY_JOINS}
+        WHERE ${legacyWhere} ORDER BY ${orderBy} LIMIT $4 OFFSET $5`,
       [...legacyParams, filters.limit, filters.offset],
     );
     const countRow = await queryOne<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM events WHERE ${legacyWhere}`,
       legacyParams,
     );
-    return { events: rows.map(mapEvent), total: Number(countRow?.count ?? 0) };
+    return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
   }
 }
 
@@ -502,6 +573,10 @@ export interface UpdateEventInput {
   activityType?: ActivityType;
   level?: RiderLevel;
   organizerGroup?: string;
+  /** Handled by updateEventElevationGain, NOT the updateEvent SQL below — it is listed here
+   *  only so the service can pass the parsed body straight through. undefined = leave alone,
+   *  null = clear. */
+  elevationGainM?: number | null;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -556,6 +631,33 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
     ],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
+}
+
+/**
+ * Writes events.elevation_gain_m on its own. Kept separate from insertEvent/updateEvent, and
+ * guarded against a database that has not had sql/021-events-elevation-gain.sql applied yet, so
+ * the core create/edit path never depends on the new column. Pass null to clear the
+ * organizer's value (reads then fall back to the attached route's climb, then to nothing).
+ */
+export async function updateEventElevationGain(
+  eventId: string,
+  elevationGainM: number | null,
+): Promise<void> {
+  try {
+    await execute("UPDATE events SET elevation_gain_m = $2, updated_at = NOW() WHERE id = $1", [
+      eventId,
+      elevationGainM,
+    ]);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn(
+        { err },
+        "events.elevation_gain_m missing — run sql/021-events-elevation-gain.sql",
+      );
+      return;
+    }
+    throw err;
+  }
 }
 
 /** Pause/resume only ever touches this one column — general edits are locked out while live. */
