@@ -43,6 +43,7 @@ import {
   type UpdateEventInput,
   updateEvent,
   updateEventElevationGain,
+  updateEventRidePlan,
   updateEventPaused,
   updateEventStatus,
   upsertParticipant,
@@ -240,6 +241,11 @@ export async function createEvent(
     /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
+    /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible
+     *  via updateEventRidePlan. undefined = not set. */
+    durationMin?: number | null;
+    restStops?: number | null;
+    isAccessible?: boolean;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -299,6 +305,20 @@ export async function createEvent(
   // not carrying it yet is fine.
   if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
     await updateEventElevationGain(event.id, input.elevationGainM);
+  }
+
+  // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
+  // guarded statement, only touched for keys the create request actually carried.
+  if (
+    input.durationMin !== undefined ||
+    input.restStops !== undefined ||
+    input.isAccessible !== undefined
+  ) {
+    await updateEventRidePlan(event.id, {
+      durationMin: input.durationMin,
+      restStops: input.restStops,
+      isAccessible: input.isAccessible,
+    });
   }
 
   // Owning a ride and riding it are different things — event_members says who runs it,
@@ -473,6 +493,19 @@ export async function updateEventDetails(
   // the route".
   if (input.elevationGainM !== undefined) {
     await updateEventElevationGain(eventId, input.elevationGainM);
+  }
+
+  // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
+  if (
+    input.durationMin !== undefined ||
+    input.restStops !== undefined ||
+    input.isAccessible !== undefined
+  ) {
+    await updateEventRidePlan(eventId, {
+      durationMin: input.durationMin,
+      restStops: input.restStops,
+      isAccessible: input.isAccessible,
+    });
   }
 
   logger.info({ eventId, userId }, "event updated");

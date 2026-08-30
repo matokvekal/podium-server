@@ -73,6 +73,13 @@ function toEventSummary(event: Event | EventListItem) {
     level: event.level,
     organizerGroup: event.organizerGroup,
     teamId: event.teamId,
+    // Organizer-set ride plan — on the SUMMARY so a card fills its "Est. Time" slot, shows an
+    // accessibility marker and the rest-stop count without a per-card detail call. `null` for
+    // duration / restStops means "not stated" (card shows a dash / omits it); isAccessible is
+    // always a real boolean. See sql/022-event-ride-plan.sql.
+    durationMin: event.durationMin ?? null,
+    restStops: event.restStops ?? null,
+    isAccessible: event.isAccessible ?? false,
     // Lightweight route + roster summary so a card renders Distance / Elevation / Riders
     // straight from GET /events — no per-card route or participants call, no localStorage
     // dependency. `elevationGain` is the EFFECTIVE climb (organizer's value, else the route's).

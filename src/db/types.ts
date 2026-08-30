@@ -157,6 +157,18 @@ export interface Event {
    */
   elevationGainM: number | null;
 
+  /**
+   * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,
+   * so they are stored, not computed.
+   *   durationMin  expected ride time in whole minutes, or null when not stated
+   *   restStops    number of rest / regroup stops (0 = none), or null when not stated
+   *   isAccessible the organizer marked the ride suitable for riders who need assistance /
+   *                adaptive equipment; defaults false
+   */
+  durationMin: number | null;
+  restStops: number | null;
+  isAccessible: boolean;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;

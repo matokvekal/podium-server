@@ -71,6 +71,12 @@ export const createEventSchema = z.object({
   // to the attached route's climb). Omitted = leave the stored value alone. Stored in
   // events.elevation_gain_m; see sql/021-events-elevation-gain.sql.
   elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
+
+  // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
+  // means "not stated / leave alone", a value sets it. duration in whole minutes.
+  durationMin: z.number().int().positive().max(2880).nullable().optional(),
+  restStops: z.number().int().min(0).max(20).nullable().optional(),
+  isAccessible: z.boolean().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -97,6 +103,11 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. `null` clears the organizer's value; omitted leaves it untouched.
   elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
+
+  // See createEventSchema. `null` clears the field; omitted leaves it untouched.
+  durationMin: z.number().int().positive().max(2880).nullable().optional(),
+  restStops: z.number().int().min(0).max(20).nullable().optional(),
+  isAccessible: z.boolean().optional(),
 });
 
 export const changeEventStatusSchema = z.object({

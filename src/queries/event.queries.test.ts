@@ -7,15 +7,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
 const queryOne = vi.fn();
+const execute = vi.fn();
 
 vi.mock("../db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args),
   queryOne: (...args: unknown[]) => queryOne(...args),
-  execute: vi.fn(),
+  execute: (...args: unknown[]) => execute(...args),
   withTransaction: vi.fn(),
 }));
 
-const { selectEventsForUser, selectPublicEvents } = await import("./event.queries.js");
+const { selectEventsForUser, selectPublicEvents, updateEventRidePlan } = await import(
+  "./event.queries.js"
+);
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -44,6 +47,9 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     requires_approval: false,
     is_paused: false,
     elevation_gain_m: null,
+    duration_min: null,
+    rest_stops: null,
+    is_accessible: false,
     show_event_info: true,
     show_participants: false,
     show_route: true,
@@ -61,6 +67,7 @@ function eventRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   query.mockReset();
   queryOne.mockReset();
+  execute.mockReset();
 });
 
 describe("selectEventsForUser", () => {
@@ -120,5 +127,51 @@ describe("selectPublicEvents", () => {
 
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toMatch(/LEFT JOIN LATERAL/);
+  });
+
+  it("carries the organizer-set ride plan through the mapper", async () => {
+    query.mockResolvedValueOnce([
+      eventRow({ duration_min: 165, rest_stops: 2, is_accessible: true }),
+    ]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    const { events } = await selectPublicEvents({ sort: "soonest", limit: 20, offset: 0 });
+
+    expect(events[0].durationMin).toBe(165);
+    expect(events[0].restStops).toBe(2);
+    expect(events[0].isAccessible).toBe(true);
+  });
+});
+
+describe("updateEventRidePlan", () => {
+  it("writes only the columns the caller passed", async () => {
+    await updateEventRidePlan("e1", { durationMin: 120 });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const [sql, values] = execute.mock.calls[0];
+    expect(sql).toMatch(/duration_min = \$2/);
+    expect(sql).not.toMatch(/rest_stops/);
+    expect(sql).not.toMatch(/is_accessible/);
+    expect(values).toEqual(["e1", 120]);
+  });
+
+  it("clears a field when passed null, and sets several at once", async () => {
+    await updateEventRidePlan("e1", { durationMin: null, restStops: 0, isAccessible: true });
+
+    const [sql, values] = execute.mock.calls[0];
+    expect(sql).toMatch(/duration_min = \$2/);
+    expect(sql).toMatch(/rest_stops = \$3/);
+    expect(sql).toMatch(/is_accessible = \$4/);
+    expect(values).toEqual(["e1", null, 0, true]);
+  });
+
+  it("no-ops when nothing was passed", async () => {
+    await updateEventRidePlan("e1", {});
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("swallows a missing-column error on a database without sql/022", async () => {
+    execute.mockRejectedValueOnce({ code: "42703" });
+    await expect(updateEventRidePlan("e1", { durationMin: 60 })).resolves.toBeUndefined();
   });
 });

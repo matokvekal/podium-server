@@ -46,6 +46,9 @@ interface EventRow {
   requires_approval: boolean;
   is_paused: boolean;
   elevation_gain_m: number | null;
+  duration_min: number | null;
+  rest_stops: number | null;
+  is_accessible: boolean;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -131,6 +134,11 @@ function mapEvent(row: EventRow): Event {
     isPaused: row.is_paused,
     // undefined on a database that has not had sql/021 applied yet — treated as "not set".
     elevationGainM: row.elevation_gain_m ?? null,
+    // undefined on a database without sql/022 — duration/stops read as "not stated", the
+    // accessibility marker as false (the safe default the column also backfills to).
+    durationMin: row.duration_min ?? null,
+    restStops: row.rest_stops ?? null,
+    isAccessible: row.is_accessible ?? false,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -577,6 +585,11 @@ export interface UpdateEventInput {
    *  only so the service can pass the parsed body straight through. undefined = leave alone,
    *  null = clear. */
   elevationGainM?: number | null;
+  /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
+   *  a value (null included, for duration/restStops) = set it. */
+  durationMin?: number | null;
+  restStops?: number | null;
+  isAccessible?: boolean;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -654,6 +667,51 @@ export async function updateEventElevationGain(
         { err },
         "events.elevation_gain_m missing — run sql/021-events-elevation-gain.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes the organizer's ride-plan columns (events.duration_min / rest_stops / is_accessible)
+ * on their own. Kept separate from insertEvent/updateEvent — exactly like updateEventElevationGain
+ * — and guarded against a database that has not had sql/022-event-ride-plan.sql applied yet, so
+ * the core create/edit path never depends on the new columns.
+ *
+ * Each key: `undefined` means "leave it alone"; any other value (null included, for
+ * duration_min / rest_stops) is written as given. Builds the SET list from only the keys the
+ * caller actually passed, so a partial PATCH never clears a field it did not mention.
+ */
+export async function updateEventRidePlan(
+  eventId: string,
+  input: { durationMin?: number | null; restStops?: number | null; isAccessible?: boolean },
+): Promise<void> {
+  const sets: string[] = [];
+  const values: unknown[] = [eventId];
+
+  if (input.durationMin !== undefined) {
+    values.push(input.durationMin);
+    sets.push(`duration_min = $${values.length}`);
+  }
+  if (input.restStops !== undefined) {
+    values.push(input.restStops);
+    sets.push(`rest_stops = $${values.length}`);
+  }
+  if (input.isAccessible !== undefined) {
+    values.push(input.isAccessible);
+    sets.push(`is_accessible = $${values.length}`);
+  }
+  if (sets.length === 0) return;
+
+  try {
+    await execute(
+      `UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`,
+      values,
+    );
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events ride-plan columns missing — run sql/022-event-ride-plan.sql");
       return;
     }
     throw err;
