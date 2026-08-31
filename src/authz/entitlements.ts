@@ -6,7 +6,7 @@
 // resolution folds them into one answer that the rest of the product can use without knowing
 // which of those it came from.
 
-import type { UserLimits } from "../config/plan-limits.js";
+import type { EffectiveLimits } from "../config/plan-limits.js";
 import { query, type Transaction, withTransaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
 import { applyPlanLimitsTx, selectUserLimitsOrThrow } from "../queries/userLimits.queries.js";
@@ -105,9 +105,10 @@ async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
 export async function resolveEntitlements(userId: number | null): Promise<Entitlements> {
   if (userId === null) return ANONYMOUS_ENTITLEMENTS;
 
-  // Two independent sources, one round trip — but they answer DIFFERENT questions now.
-  // Grants decide the plan label and the feature set. user_limits decides the numbers, and
-  // is the only thing consulted for them.
+  // Two independent sources, one round trip: what the user was GRANTED (a plan, features)
+  // and what has been set for them SPECIFICALLY (user_limits). But they answer DIFFERENT
+  // questions: grants decide the plan label and the feature set, user_limits decides the
+  // numbers and is the only thing consulted for them.
   const [rows, limits] = await Promise.all([
     selectLiveGrants(userId),
     selectUserLimitsOrThrow(userId),
@@ -227,7 +228,7 @@ export interface NewGrant {
  *
  * ⚠ Expiry is the open edge. A grant with an `expires_at` stops being live on its own, with
  * nobody writing a row, so the user keeps the elevated numbers until something calls this
- * again. A sweeper is needed before timed plans are sold; see the note in the deliverables.
+ * again. A sweeper is needed before timed plans are sold.
  */
 export async function syncUserLimitsFromGrantsTx(tx: Transaction, userId: number): Promise<void> {
   const rows = await tx.query<GrantRow>(LIVE_GRANTS_SQL, [userId]);
@@ -244,7 +245,7 @@ export async function syncUserLimitsFromGrantsTx(tx: Transaction, userId: number
   // Most generous per limit across every plan held, so a beta coupon stacked on a subscription
   // never leaves someone worse off than either alone. This is the ONE place that still merges
   // plans — and its output is written to the row, not returned to a request.
-  const limits: UserLimits = mergeLimits([plan, ...activePlans]);
+  const limits: EffectiveLimits = mergeLimits([plan, ...activePlans]);
 
   await applyPlanLimitsTx(tx, userId, limits, `plan:${plan.code}`);
 }

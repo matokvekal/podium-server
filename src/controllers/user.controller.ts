@@ -68,9 +68,18 @@ async function toAccount(user: User) {
     safeCountTeamsForOwner(user.id),
   ]);
 
+  const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } = actor.entitlements.limits;
+
   return {
     ...toProfile(user),
     capabilities: accountCapabilitiesFor(actor, ACCOUNT_CAPABILITIES),
+    /**
+     * The authoritative per-user limits (user_entitlements folded onto the plan). Top-level and
+     * teams-free so a client can mirror exactly what the server enforces on create / join /
+     * groups without reading `plan`. `plan.limits` still carries the same three plus
+     * maxTeamsPerOwner for an account screen.
+     */
+    entitlements: { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent },
     plan: {
       code: actor.entitlements.plan.code,
       label: actor.entitlements.plan.label,

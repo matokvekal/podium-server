@@ -20,7 +20,7 @@ function overLimit(code: string, message: string, current: number, limit: number
 }
 
 export function assertWithinEventsPerWeek(actor: Actor, current: number): void {
-  const limit = actor.entitlements.limits.eventsPerWeek;
+  const limit = actor.entitlements.limits.maxEventsPerWeek;
   if (current >= limit) {
     overLimit("EVENTS_PER_WEEK", "You have reached your rides for this week", current, limit);
   }
@@ -32,21 +32,21 @@ export function assertWithinEventsPerWeek(actor: Actor, current: number): void {
  * than a clean refusal.
  */
 export function assertWithinParticipantLimit(actor: Actor, current: number, adding: number): void {
-  const limit = actor.entitlements.limits.participantsPerEvent;
+  const limit = actor.entitlements.limits.maxParticipantsPerEvent;
   if (current + adding > limit) {
     overLimit("PARTICIPANTS", "This ride is at its rider limit", current, limit);
   }
 }
 
 export function assertWithinGroupLimit(actor: Actor, current: number): void {
-  const limit = actor.entitlements.limits.groupsPerEvent;
+  const limit = actor.entitlements.limits.maxGroupsPerEvent;
   if (current >= limit) {
     overLimit("GROUPS", "This ride is at its ride-group limit", current, limit);
   }
 }
 
 export function assertWithinTeamLimit(actor: Actor, current: number): void {
-  const limit = actor.entitlements.limits.teamsPerOwner;
+  const limit = actor.entitlements.limits.maxTeamsPerOwner;
   if (current >= limit) {
     overLimit("TEAMS", "You have reached your team limit", current, limit);
   }

@@ -33,10 +33,10 @@ const { grantEntitlement, resolveEntitlements, syncUserLimitsFromGrantsTx } = aw
 const { UserLimitsNotFoundError } = await import("../queries/userLimits.queries.js");
 
 const FREE_ROW = {
-  eventsPerWeek: 3,
-  participantsPerEvent: 50,
-  groupsPerEvent: 2,
-  teamsPerOwner: 2,
+  maxEventsPerWeek: 3,
+  maxParticipantsPerEvent: 50,
+  maxGroupsPerEvent: 2,
+  maxTeamsPerOwner: 2,
 };
 
 beforeEach(() => {
@@ -49,20 +49,20 @@ beforeEach(() => {
 
 describe("resolveEntitlements — user_limits is the only source of the numbers", () => {
   it("hands back exactly what the row says", async () => {
-    limitsQuery.mockResolvedValue({ ...FREE_ROW, eventsPerWeek: 10 });
+    limitsQuery.mockResolvedValue({ ...FREE_ROW, maxEventsPerWeek: 10 });
 
     const result = await resolveEntitlements(42);
 
-    expect(result.limits).toEqual({ ...FREE_ROW, eventsPerWeek: 10 });
+    expect(result.limits).toEqual({ ...FREE_ROW, maxEventsPerWeek: 10 });
   });
 
   it("a DB change from 3 to 10 takes effect with no deploy and no config change", async () => {
     limitsQuery.mockResolvedValue(FREE_ROW);
-    expect((await resolveEntitlements(42)).limits.eventsPerWeek).toBe(3);
+    expect((await resolveEntitlements(42)).limits.maxEventsPerWeek).toBe(3);
 
     // The only thing that changed is the row.
-    limitsQuery.mockResolvedValue({ ...FREE_ROW, eventsPerWeek: 10 });
-    expect((await resolveEntitlements(42)).limits.eventsPerWeek).toBe(10);
+    limitsQuery.mockResolvedValue({ ...FREE_ROW, maxEventsPerWeek: 10 });
+    expect((await resolveEntitlements(42)).limits.maxEventsPerWeek).toBe(10);
   });
 
   it("does NOT let a Pro plan grant raise the numbers on its own", async () => {
@@ -89,7 +89,7 @@ describe("resolveEntitlements — user_limits is the only source of the numbers"
 
     const result = await resolveEntitlements(42);
 
-    expect(result.limits.eventsPerWeek).toBe(3);
+    expect(result.limits.maxEventsPerWeek).toBe(3);
     // The plan LABEL and its features still come from the grant — only the numbers moved.
     expect(result.plan.code).toBe("organizer_pro");
     expect(result.features.has("advanced_results")).toBe(true);
@@ -119,7 +119,7 @@ describe("syncUserLimitsFromGrantsTx — the bridge that keeps plans meaningful"
     expect(applyPlanLimits).toHaveBeenCalledWith(
       expect.anything(),
       42,
-      { eventsPerWeek: 30, participantsPerEvent: 500, groupsPerEvent: 10, teamsPerOwner: 5 },
+      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
       "plan:organizer_pro",
     );
   });
@@ -140,7 +140,7 @@ describe("syncUserLimitsFromGrantsTx — the bridge that keeps plans meaningful"
     expect(applyPlanLimits).toHaveBeenCalledWith(
       expect.anything(),
       42,
-      { eventsPerWeek: 250, participantsPerEvent: 5000, groupsPerEvent: 25, teamsPerOwner: 50 },
+      { maxEventsPerWeek: 250, maxParticipantsPerEvent: 5000, maxGroupsPerEvent: 25, maxTeamsPerOwner: 50 },
       "plan:club",
     );
   });

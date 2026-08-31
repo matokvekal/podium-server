@@ -1,79 +1,138 @@
-// The limit CHECK itself: usage is counted from the real tables and compared against the
-// number in user_limits. These tests exist to pin "3 means 3" and "10 means 10" at the point
-// where the rider actually gets refused.
-
 import { describe, expect, it } from "vitest";
+import { type EffectiveLimits, getDefaultUserLimits } from "../config/plan-limits.js";
+import { ApiError } from "../lib/api-error.js";
 import {
   assertWithinEventsPerWeek,
   assertWithinGroupLimit,
   assertWithinParticipantLimit,
   assertWithinTeamLimit,
 } from "./limits.js";
+import { hasRoomForParticipants, joinedParticipantCount } from "./participant-capacity.js";
 import type { Actor } from "./policy.js";
 
-function actorWith(eventsPerWeek: number): Actor {
+// The assert helpers only ever read actor.entitlements.limits — a bare stub is all they need.
+function actorWithLimits(limits: Partial<EffectiveLimits> = {}): Actor {
   return {
-    entitlements: {
-      limits: {
-        eventsPerWeek,
-        participantsPerEvent: 50,
-        groupsPerEvent: 2,
-        teamsPerOwner: 2,
-      },
-    },
+    userId: 1,
+    globalRole: "RIDER",
+    entitlements: { limits: { ...getDefaultUserLimits(), ...limits } },
   } as unknown as Actor;
 }
 
-describe("assertWithinEventsPerWeek", () => {
-  it("permits up to the limit and refuses at it", () => {
-    const actor = actorWith(3);
+const DEFAULT_ACTOR = actorWithLimits();
 
-    expect(() => assertWithinEventsPerWeek(actor, 2)).not.toThrow();
-    expect(() => assertWithinEventsPerWeek(actor, 3)).toThrow(/reached your rides for this week/);
+function expect409(fn: () => void) {
+  expect(fn).toThrow(ApiError);
+  try {
+    fn();
+  } catch (err) {
+    expect((err as ApiError).status).toBe(409);
+  }
+}
+
+describe("assertWithinEventsPerWeek — default limit 3", () => {
+  it("allows a create while under the limit", () => {
+    expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 2)).not.toThrow();
   });
 
-  it("raising the row from 3 to 10 permits the 4th through 10th ride", () => {
-    // The support case end-to-end, at the check: same code, different number from the DB.
-    const raised = actorWith(10);
-
-    expect(() => assertWithinEventsPerWeek(raised, 3)).not.toThrow();
-    expect(() => assertWithinEventsPerWeek(raised, 9)).not.toThrow();
-    expect(() => assertWithinEventsPerWeek(raised, 10)).toThrow(/PLAN_LIMIT_EVENTS_PER_WEEK/);
-  });
-
-  it("puts the numbers in the message so the client need not make a second call", () => {
-    expect(() => assertWithinEventsPerWeek(actorWith(3), 3)).toThrow(/used 3 of 3/);
-  });
-
-  it("answers 409, not 403 — out of allowance, not forbidden", () => {
-    try {
-      assertWithinEventsPerWeek(actorWith(3), 3);
-      expect.unreachable("should have thrown");
-    } catch (err) {
-      expect((err as { status: number }).status).toBe(409);
-    }
-  });
-
-  it("a limit of 0 refuses the very first ride", () => {
-    expect(() => assertWithinEventsPerWeek(actorWith(0), 0)).toThrow();
+  it("rejects once the limit is reached", () => {
+    expect409(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3));
   });
 });
 
-describe("the other three limits read the same row", () => {
-  const actor = actorWith(3);
-
-  it("refuses an import that would cross the participant limit as a whole", () => {
-    expect(() => assertWithinParticipantLimit(actor, 40, 10)).not.toThrow();
-    expect(() => assertWithinParticipantLimit(actor, 40, 11)).toThrow(/rider limit/);
+describe("assertWithinParticipantLimit — default limit 50, capacity = pending + approved", () => {
+  it("allows the 50th rider (49 already on the list, adding 1)", () => {
+    expect(() => assertWithinParticipantLimit(DEFAULT_ACTOR, 49, 1)).not.toThrow();
   });
 
-  it("refuses the group past the limit", () => {
-    expect(() => assertWithinGroupLimit(actor, 1)).not.toThrow();
-    expect(() => assertWithinGroupLimit(actor, 2)).toThrow(/ride-group limit/);
+  it("rejects the 51st (50 already on the list, adding 1)", () => {
+    expect409(() => assertWithinParticipantLimit(DEFAULT_ACTOR, 50, 1));
   });
 
-  it("refuses the team past the limit", () => {
-    expect(() => assertWithinTeamLimit(actor, 1)).not.toThrow();
-    expect(() => assertWithinTeamLimit(actor, 2)).toThrow(/team limit/);
+  it("counts approved + pending together — 42 + 8 is already full", () => {
+    const current = joinedParticipantCount({ approved: 42, pending: 8 });
+    expect(current).toBe(50);
+    expect409(() => assertWithinParticipantLimit(DEFAULT_ACTOR, current, 1));
+  });
+
+  it("pending alone can fill a ride — 50 waiting, 0 approved", () => {
+    const current = joinedParticipantCount({ approved: 0, pending: 50 });
+    expect409(() => assertWithinParticipantLimit(DEFAULT_ACTOR, current, 1));
+  });
+
+  it("honours a raised per-user limit — 60 on a 200 ride is fine", () => {
+    expect(() =>
+      assertWithinParticipantLimit(actorWithLimits({ maxParticipantsPerEvent: 200 }), 60, 1),
+    ).not.toThrow();
+  });
+});
+
+describe("assertWithinGroupLimit — default limit 2", () => {
+  it("allows a second group (1 already exists)", () => {
+    expect(() => assertWithinGroupLimit(DEFAULT_ACTOR, 1)).not.toThrow();
+  });
+
+  it("rejects a third group (2 already exist)", () => {
+    expect409(() => assertWithinGroupLimit(DEFAULT_ACTOR, 2));
+  });
+});
+
+describe("assertWithinTeamLimit — default limit 2", () => {
+  it("rejects a third team", () => {
+    expect409(() => assertWithinTeamLimit(DEFAULT_ACTOR, 2));
+  });
+});
+
+describe("hasRoomForParticipants — the shared pending+approved capacity rule", () => {
+  it.each([
+    [{ approved: 40, pending: 9 }, 1, 50, true], // 49 -> ok
+    [{ approved: 49, pending: 1 }, 1, 50, false], // 50 -> full
+    [{ approved: 42, pending: 8 }, 1, 50, false], // 42 + 8 -> full
+    [{ approved: 0, pending: 50 }, 1, 50, false], // pending alone fills it
+    [{ approved: 10, pending: 0 }, 40, 50, true], // an import that exactly fits
+    [{ approved: 10, pending: 0 }, 41, 50, false], // an import one over
+  ])("counts %o + %d against %d -> %s", (counts, adding, max, ok) => {
+    expect(hasRoomForParticipants(counts, adding, max)).toBe(ok);
+  });
+});
+
+describe("the OWNER's actor is what the caps are checked against", () => {
+  // Full DB integration is not possible in this repo (no test database). This documents the
+  // contract that event.service.joinEvent / participant.service.assertRoomForRiders /
+  // group.service.createGroup all resolve buildActor(event.ownerId) — never the caller — so a
+  // free-plan rider joining a Pro organizer's ride is measured against the organizer's limit.
+  it("a Pro owner's 500-rider limit admits rider #300 regardless of who is joining", () => {
+    const owner = actorWithLimits({ maxParticipantsPerEvent: 500 });
+    expect(() => assertWithinParticipantLimit(owner, 299, 1)).not.toThrow();
+  });
+});
+
+// ── Added with the user_limits single-source-of-truth work ─────────────────────────────────
+// The numbers above come from the config template only because these actors are stubs. In the
+// running server every one of them comes from the user's user_limits row, so what matters is
+// that the check honours whatever number it is handed — including one raised in the database.
+
+describe("the limit is whatever user_limits says, not what the config says", () => {
+  it("raising a user from 3 to 10 admits their 4th through 10th ride", () => {
+    const raised = actorWithLimits({ maxEventsPerWeek: 10 });
+
+    expect(() => assertWithinEventsPerWeek(raised, 3)).not.toThrow();
+    expect(() => assertWithinEventsPerWeek(raised, 9)).not.toThrow();
+    expect409(() => assertWithinEventsPerWeek(raised, 10));
+  });
+
+  it("tightening a single account below the default still refuses", () => {
+    expect409(() => assertWithinEventsPerWeek(actorWithLimits({ maxEventsPerWeek: 1 }), 1));
+  });
+
+  it("a limit of 0 refuses the very first ride", () => {
+    expect409(() => assertWithinEventsPerWeek(actorWithLimits({ maxEventsPerWeek: 0 }), 0));
+  });
+
+  it("puts both numbers in the message so the client need not make a second call", () => {
+    expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3)).toThrow(/used 3 of 3/);
+    expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3)).toThrow(
+      /PLAN_LIMIT_EVENTS_PER_WEEK/,
+    );
   });
 });

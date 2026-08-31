@@ -10,15 +10,15 @@
 // and product decisions belong in review and in git history. Adding a tier is an entry here;
 // granting it to someone is a row in entitlement_grants.
 
-import { getDefaultUserLimits, type UserLimits } from "../config/plan-limits.js";
+import { type EffectiveLimits, getDefaultUserLimits } from "../config/plan-limits.js";
 import type { Feature } from "./capabilities.js";
 
 /**
  * A plan's limits have the same shape as a user's limits, because granting a plan COPIES these
- * numbers into the user's user_limits row (syncUserLimitsToPlan). They are not read on the
- * request path — user_limits is.
+ * numbers into the user's user_limits row (syncUserLimitsFromGrantsTx). They are not read on
+ * the request path — user_limits is.
  */
-export type PlanLimits = UserLimits;
+export type PlanLimits = EffectiveLimits;
 
 // The free tier IS the signup default, read once at module load. A plan grant that is later
 // revoked or expires returns the user to exactly these numbers.
@@ -66,10 +66,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Organizer Pro",
     rank: 10,
     limits: {
-      eventsPerWeek: 30,
-      participantsPerEvent: 500,
-      groupsPerEvent: 10,
-      teamsPerOwner: 5,
+      maxEventsPerWeek: 30,
+      maxParticipantsPerEvent: 500,
+      maxGroupsPerEvent: 10,
+      maxTeamsPerOwner: 5,
     },
     features: ["private_events", "advanced_results"],
   },
@@ -79,10 +79,10 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     label: "Club",
     rank: 20,
     limits: {
-      eventsPerWeek: 250,
-      participantsPerEvent: 5000,
-      groupsPerEvent: 25,
-      teamsPerOwner: 50,
+      maxEventsPerWeek: 250,
+      maxParticipantsPerEvent: 5000,
+      maxGroupsPerEvent: 25,
+      maxTeamsPerOwner: 50,
     },
     // "Multiple admins, many events, large groups and advanced management." Defined so the
     // policy already honours it; nothing sells it yet.
@@ -106,9 +106,9 @@ export function isPlanCode(value: string): value is PlanCode {
 export function mergeLimits(plans: readonly PlanDefinition[]): PlanLimits {
   const all = plans.length > 0 ? plans : [FREE_PLAN];
   return {
-    eventsPerWeek: Math.max(...all.map((p) => p.limits.eventsPerWeek)),
-    participantsPerEvent: Math.max(...all.map((p) => p.limits.participantsPerEvent)),
-    groupsPerEvent: Math.max(...all.map((p) => p.limits.groupsPerEvent)),
-    teamsPerOwner: Math.max(...all.map((p) => p.limits.teamsPerOwner)),
+    maxEventsPerWeek: Math.max(...all.map((p) => p.limits.maxEventsPerWeek)),
+    maxParticipantsPerEvent: Math.max(...all.map((p) => p.limits.maxParticipantsPerEvent)),
+    maxGroupsPerEvent: Math.max(...all.map((p) => p.limits.maxGroupsPerEvent)),
+    maxTeamsPerOwner: Math.max(...all.map((p) => p.limits.maxTeamsPerOwner)),
   };
 }

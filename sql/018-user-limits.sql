@@ -1,3 +1,9 @@
+-- ⚠ MERGE NOTE (2026-08-31). A parallel branch marked this file "SUPERSEDED BY
+-- sql/020-user-entitlements.sql — do not apply. This table was never created on any database."
+-- That is no longer true. `user_limits` EXISTS IN PRODUCTION with a row for every user, and
+-- sql/019 has been applied to it. The user_entitlements model was not adopted; this one was.
+-- Do not re-mark this file superseded.
+--
 -- 018-user-limits.sql — per-user limits. THE single runtime source of truth for what one
 -- person may do.
 --

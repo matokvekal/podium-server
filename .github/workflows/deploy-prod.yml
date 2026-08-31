@@ -57,6 +57,17 @@ jobs:
           username: ${{ secrets.PROD_USER }}
           key: ${{ secrets.ELNINO_GITHUB_DEPLOY }}
           script: |
+            set -e
             cd /opt/elnino
             npm ci --omit=dev
-            sudo systemctl restart elnino
+            # The app runs under PM2, owned by the `elnino` user's own PM2 daemon
+            # (process: elnino-server). There is a SEPARATE root PM2 daemon running
+            # `commissaire-api` on this host — it must never be touched here. Restart
+            # against the elnino daemon whether GitHub connects as elnino or as root.
+            if [ "$(id -un)" = "elnino" ]; then
+              pm2 restart elnino-server --update-env
+              pm2 save
+            else
+              sudo -u elnino -H pm2 restart elnino-server --update-env
+              sudo -u elnino -H pm2 save
+            fi

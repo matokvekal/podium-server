@@ -12,7 +12,7 @@ import type {
 } from "../db/types.js";
 import { buildActor, buildEventContext, denyFeature } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
-import { assertWithinEventsPerWeek, assertWithinParticipantLimit } from "../authz/limits.js";
+import { assertWithinEventsPerWeek } from "../authz/limits.js";
 import type { Actor, EventContext } from "../authz/policy.js";
 import { canAccount, canEvent } from "../authz/policy.js";
 import { ApiError } from "../lib/api-error.js";
@@ -24,10 +24,12 @@ import {
   insertEvent,
   insertLocationPoints,
   type LocationPointInput,
+  insertParticipantIfRoom,
   selectActiveEventByCode,
   selectEventById,
   selectEventCodesWithPrefix,
   countEventsCreatedSince,
+  type EventListItem,
   selectEventsForUser,
   selectLastLocation,
   selectLastLocationsForEvent,
@@ -40,6 +42,8 @@ import {
   selectUpcomingEventsForFollowed,
   type UpdateEventInput,
   updateEvent,
+  updateEventElevationGain,
+  updateEventRidePlan,
   updateEventPaused,
   updateEventStatus,
   upsertParticipant,
@@ -96,22 +100,42 @@ export async function joinEvent(
     throw new ApiError(400, "This event requires a bib number");
   }
 
-  // A self-joiner counts against the organizer's cap too — otherwise a public ride's start
-  // list is unlimited and only manual adds are capped, which is the wrong way round.
-  const existing = await selectParticipantByEventAndUser(event.id, userId);
-  if (!existing && event.ownerId !== null) {
-    // The organizer's plan governs their start list, not the joining rider's — a rider on a
-    // free plan joining a Pro organizer's 300-person ride must not be turned away.
-    const [organizer, current] = await Promise.all([
-      buildActor(event.ownerId),
-      selectParticipantsForEvent(event.id),
-    ]);
-    assertWithinParticipantLimit(organizer, current.length, 1);
-  }
-
   const initialStatus: RegistrationStatus = event.requiresApproval
     ? "waiting_approval"
     : "registered";
+
+  // The start-list cap is the EVENT OWNER's entitlement, not the joining rider's — a rider on
+  // the free plan joining a Pro organizer's 300-person ride must not be turned away. Capacity
+  // counts approved + still-pending riders (authz/participant-capacity.ts); an existing
+  // participant re-joining always keeps their slot. insertParticipantIfRoom does the check and
+  // the write under one per-event advisory lock so a burst of joins cannot overfill the list.
+  if (event.ownerId !== null) {
+    const organizer = await buildActor(event.ownerId);
+    const result = await insertParticipantIfRoom({
+      eventId: event.id,
+      userId,
+      bib,
+      initialStatus,
+      maxParticipants: organizer.entitlements.limits.maxParticipantsPerEvent,
+    });
+    if (!result.ok) {
+      logger.warn(
+        { eventId: event.id, userId, ...result },
+        "joinEvent: rejected — ride at rider limit",
+      );
+      throw new ApiError(
+        409,
+        `This ride is full — ${result.approved + result.pending} of ${result.limit} riders (EVENT_FULL)`,
+      );
+    }
+    logger.info(
+      { eventId: event.id, userId, participantId: result.participant.id },
+      "user joined event",
+    );
+    return { event, participant: result.participant };
+  }
+
+  // Ownerless legacy event — no entitlement to resolve, fall back to the plain idempotent join.
   const participant = await upsertParticipant({ eventId: event.id, userId, bib, initialStatus });
   logger.info({ eventId: event.id, userId, participantId: participant.id }, "user joined event");
 
@@ -214,6 +238,14 @@ export async function createEvent(
     activityType?: ActivityType;
     level?: RiderLevel;
     organizerGroup?: string;
+    /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
+     *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
+    elevationGainM?: number | null;
+    /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible
+     *  via updateEventRidePlan. undefined = not set. */
+    durationMin?: number | null;
+    restStops?: number | null;
+    isAccessible?: boolean;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -268,6 +300,27 @@ export async function createEvent(
   // of truth; this row is the extensible form of it, and the only way to express an operator.
   await insertEventMember(event.id, ownerId, "owner");
 
+  // Elevation gain is written on its own (own column, own guarded statement — see
+  // updateEventElevationGain). The reply is re-read by the controller, so the returned `event`
+  // not carrying it yet is fine.
+  if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
+    await updateEventElevationGain(event.id, input.elevationGainM);
+  }
+
+  // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
+  // guarded statement, only touched for keys the create request actually carried.
+  if (
+    input.durationMin !== undefined ||
+    input.restStops !== undefined ||
+    input.isAccessible !== undefined
+  ) {
+    await updateEventRidePlan(event.id, {
+      durationMin: input.durationMin,
+      restStops: input.restStops,
+      isAccessible: input.isAccessible,
+    });
+  }
+
   // Owning a ride and riding it are different things — event_members says who runs it,
   // event_participants says who is on the start list. An organizer who ticked "I'm riding
   // too" belongs in both, linked to their real user_id so the client can tell it is them.
@@ -289,7 +342,10 @@ export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "f
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
 
-export async function listMyEvents(userId: number, filter: EventsFilter): Promise<Event[]> {
+export async function listMyEvents(
+  userId: number,
+  filter: EventsFilter,
+): Promise<EventListItem[]> {
   // Asks a different question from "events I own or joined", so it gets its own query rather
   // than filtering that list down to nothing. Covers both people I follow and teams I am in —
   // a team's rides are meant to appear wherever a rider's rides normally do, so they do not
@@ -321,7 +377,7 @@ export async function listMyEvents(userId: number, filter: EventsFilter): Promis
  */
 export function listPublicEvents(
   filters: Omit<PublicEventFilters, "sort"> & { sort?: PublicEventFilters["sort"] },
-): Promise<{ events: Event[]; total: number }> {
+): Promise<{ events: EventListItem[]; total: number }> {
   const sort = filters.sort ?? (filters.bucket === "finished" ? "latest" : "soonest");
   return selectPublicEvents({ ...filters, sort });
 }
@@ -431,6 +487,27 @@ export async function updateEventDetails(
 
   const updated = await updateEvent(eventId, input);
   if (!updated) throw new Error(`updateEventDetails: event ${eventId} not found after update`);
+
+  // Elevation gain has its own column and its own guarded statement — updateEvent above never
+  // touches it. `undefined` means the caller left it out; `null` means "clear it, fall back to
+  // the route".
+  if (input.elevationGainM !== undefined) {
+    await updateEventElevationGain(eventId, input.elevationGainM);
+  }
+
+  // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
+  if (
+    input.durationMin !== undefined ||
+    input.restStops !== undefined ||
+    input.isAccessible !== undefined
+  ) {
+    await updateEventRidePlan(eventId, {
+      durationMin: input.durationMin,
+      restStops: input.restStops,
+      isAccessible: input.isAccessible,
+    });
+  }
+
   logger.info({ eventId, userId }, "event updated");
   return updated;
 }

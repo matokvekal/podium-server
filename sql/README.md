@@ -42,18 +42,11 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 
 Skip 001 — those tables already exist.
 
-**Outstanding on production (191.215.39.19/elnino), as of 2026-08-31**
+**Production status (191.215.39.19/elnino), verified 2026-08-31**
 
-A schema introspection found these never applied. Run in this order:
-
-```
-020-production-schema-gaps.sql   the parts of 011 and 014 that are missing
-018-user-limits.sql              creates user_limits
-019-user-limits-backfill.sql     ⚠ REQUIRED with 018, same maintenance window
-```
-
-018 without 019 leaves an empty table, and authorization no longer falls back — every
-existing user would fail a limit check until 019 runs.
+`018`, `019` and the contents of `023` are APPLIED. `user_limits` holds a row per user,
+all four limit columns `NOT NULL`. `020-user-entitlements.sql` is NOT applied and must not
+be. Do not re-run `019`.
 
 ## The files
 
@@ -78,9 +71,12 @@ existing user would fail a limit check until 019 runs.
 | `015-local-schema-compat.sql` | local-only catch-up. ⚠ creates `entitlement_grants` but NOT the coupon tables, which makes 014 look applied when it is not | local databases only |
 | `016-schema-sync.sql` | broad convergence file; a superset of 011 and 014 | yes — additive |
 | `017-user-avatar-cover.sql` | `users.avatar_type/_value`, `cover_type/_value` | yes — additive |
-| `018-user-limits.sql` | `user_limits` — the single runtime source of truth for limits, every column NOT NULL | yes — new table |
-| `019-user-limits-backfill.sql` | a `user_limits` row for every existing user. ⚠ **REQUIRED with 018** — without it existing users fail authorization | yes — never overwrites an existing row |
-| `020-production-schema-gaps.sql` | the parts of 011 and 014 never applied to production | yes — additive |
+| `018-user-limits.sql` | `user_limits` — the single runtime source of truth for limits, every column NOT NULL. **Applied in production** | yes — new table |
+| `019-user-limits-backfill.sql` | a `user_limits` row for every existing user + `SET NOT NULL`. ⚠ **REQUIRED with 018**. **Applied in production 2026-08-31** | yes — never overwrites an existing row |
+| `020-user-entitlements.sql` | ⚠ **NOT ADOPTED — do not apply.** A competing `user_entitlements` model with a runtime fallback chain. Superseded by 018+019, which are live. Kept for history | — |
+| `021-events-elevation-gain.sql` | `events.elevation_gain_m` — the organizer's authoritative elevation-gain value (GPX import or manual), independent of any route; reads expose `COALESCE(this, route.elevation_m)`. Every existing row is `NULL` and unchanged | yes — additive |
+| `022-event-ride-plan.sql` | `events.duration_min` / `rest_stops` / `is_accessible` — organizer-set ride plan: expected time, number of rest/regroup stops, accessibility marker. Existing rows: `duration_min`/`rest_stops` `NULL`, `is_accessible` `FALSE` | yes — additive |
+| `023-production-schema-gaps.sql` | the parts of 011 and 014 never applied to production (renumbered from 020 on merge) | yes — additive |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

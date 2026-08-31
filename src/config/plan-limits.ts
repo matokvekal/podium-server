@@ -15,13 +15,21 @@
 // ── What this file is NOT ──────────────────────────────────────────────────────────────────
 //
 // It is NOT a runtime fallback. There is deliberately no `?? DEFAULT_...` anywhere in the
-// request path any more: a user with no user_limits row is a data-integrity fault and raises
+// request path: a user with no user_limits row is a data-integrity fault and raises
 // UserLimitsNotFoundError rather than being silently handed the free tier. The previous
 // behaviour — a missing table quietly resolving every user to 3 events a week — is exactly
 // what this replaces.
 //
+// ⚠ HISTORICAL NOTE FOR ANYONE MERGING
+// An earlier branch modelled the same feature as `user_entitlements` with a per-field
+// `override ?? plan ?? default` chain (sql/020-user-entitlements.sql,
+// queries/userEntitlements.queries.ts). That approach was superseded: production runs
+// `user_limits`, populated by sql/019, and the fallback chain is deliberately gone. The
+// FIELD NAMES from that branch (maxEventsPerWeek, …) were kept, because controllers and
+// services across the codebase already read them.
+//
 // It holds no usage counters. What a user HAS used is counted from the real tables at check
-// time (countEventsCreatedSince, countParticipantsForEvent, countGroupsForEvent,
+// time (countEventsCreatedSince, countJoinedParticipants, countGroupsForEvent,
 // countTeamsForOwner), so a stored counter can never drift from what actually happened.
 //
 // It holds no prices. What a plan costs is a billing concern; see the note atop authz/plans.ts.
@@ -29,21 +37,18 @@
 import { env } from "./env.js";
 
 /**
- * One user's limits, as authorization consumes them. Every field is a real number: there is no
- * "unset" state, because a row always carries actual values.
- *
- * `teamsPerOwner` is the same thing the DB column calls `teams_owned`; the two names are
- * bridged in exactly one place, mapUserLimitsRow() in queries/userLimits.queries.ts.
+ * The four resolved limits, as every caller downstream reads them. A user's row always carries
+ * real numbers for all four — there is no "unset" state.
  */
-export interface UserLimits {
+export interface EffectiveLimits {
   /** Rides one organizer may create in a rolling 7 days — not a calendar week. */
-  eventsPerWeek: number;
+  maxEventsPerWeek: number;
   /** Riders on one start list, however they got there: self-joined, added, or imported. */
-  participantsPerEvent: number;
+  maxParticipantsPerEvent: number;
   /** Ride groups within one event. */
-  groupsPerEvent: number;
+  maxGroupsPerEvent: number;
   /** Teams one person may own. */
-  teamsPerOwner: number;
+  maxTeamsPerOwner: number;
 }
 
 /**
@@ -53,11 +58,11 @@ export interface UserLimits {
  * env vars and observe the effect, and so the read happens at call time rather than at module
  * load. Callers must not cache the result across a config change.
  */
-export function getDefaultUserLimits(): UserLimits {
+export function getDefaultUserLimits(): EffectiveLimits {
   return {
-    eventsPerWeek: env.DEFAULT_EVENTS_PER_WEEK,
-    participantsPerEvent: env.DEFAULT_PARTICIPANTS_PER_EVENT,
-    groupsPerEvent: env.DEFAULT_GROUPS_PER_EVENT,
-    teamsPerOwner: env.DEFAULT_TEAMS_OWNED,
+    maxEventsPerWeek: env.DEFAULT_EVENTS_PER_WEEK,
+    maxParticipantsPerEvent: env.DEFAULT_PARTICIPANTS_PER_EVENT,
+    maxGroupsPerEvent: env.DEFAULT_GROUPS_PER_EVENT,
+    maxTeamsPerOwner: env.DEFAULT_TEAMS_OWNED,
   };
 }

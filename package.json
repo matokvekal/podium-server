@@ -1,6 +1,6 @@
 {
   "name": "commissaire-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Commissaire API: Google/SMS-authenticated backend for the Commissaire app and the Transmiter Android app",
   "type": "module",
   "engines": {

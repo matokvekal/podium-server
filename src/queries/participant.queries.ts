@@ -261,11 +261,14 @@ export async function updateRegistrationStatus(
   if (target.user_id !== null) {
     const rows = await query<EventParticipantRow>(
       // Legacy DBs can carry duplicate rows for the same event/user pair. Keep them in sync,
-      // then return one canonical row for API responses.
+      // then return one canonical row for API responses. Matched on (event_id, user_id) rather
+      // than the row id, so `participantId` is deliberately NOT a parameter of this branch —
+      // binding it without referencing it made Postgres fail the parse with 42P18 ("could not
+      // determine data type of parameter $1").
       `WITH updated AS (
          UPDATE event_participants
-            SET registration_status = $3
-          WHERE event_id = $2 AND user_id = $4
+            SET registration_status = $2
+          WHERE event_id = $1 AND user_id = $3
           RETURNING *
        )
        SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
@@ -282,7 +285,7 @@ export async function updateRegistrationStatus(
           CASE WHEN ep.left_at IS NULL THEN 0 ELSE 1 END,
           ep.joined_at DESC,
           ep.id DESC`,
-      [participantId, eventId, status, target.user_id],
+      [eventId, status, target.user_id],
     );
     return rows[0] ? mapParticipant(rows[0]) : null;
   }

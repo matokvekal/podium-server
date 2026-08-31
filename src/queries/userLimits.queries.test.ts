@@ -48,10 +48,10 @@ describe("selectUserLimitsOrThrow", () => {
     query.mockResolvedValue([{ ...ROW, events_per_week: 10 }]);
 
     await expect(selectUserLimitsOrThrow(42)).resolves.toEqual({
-      eventsPerWeek: 10,
-      participantsPerEvent: 50,
-      groupsPerEvent: 2,
-      teamsPerOwner: 2,
+      maxEventsPerWeek: 10,
+      maxParticipantsPerEvent: 50,
+      maxGroupsPerEvent: 2,
+      maxTeamsPerOwner: 2,
     });
   });
 
@@ -83,7 +83,7 @@ describe("selectUserLimitsOrThrow", () => {
 
   it("treats 0 as a real limit rather than an absent one", async () => {
     query.mockResolvedValue([{ ...ROW, events_per_week: 0 }]);
-    await expect(selectUserLimitsOrThrow(42)).resolves.toMatchObject({ eventsPerWeek: 0 });
+    await expect(selectUserLimitsOrThrow(42)).resolves.toMatchObject({ maxEventsPerWeek: 0 });
   });
 });
 
@@ -95,8 +95,8 @@ describe("selectUserLimits", () => {
 });
 
 describe("mapUserLimitsRow", () => {
-  it("bridges teams_owned onto teamsPerOwner", () => {
-    expect(mapUserLimitsRow({ ...ROW, teams_owned: 9 }).teamsPerOwner).toBe(9);
+  it("bridges teams_owned onto maxTeamsPerOwner", () => {
+    expect(mapUserLimitsRow({ ...ROW, teams_owned: 9 }).maxTeamsPerOwner).toBe(9);
   });
 });
 
@@ -124,7 +124,7 @@ describe("insertUserLimitsTx", () => {
     await insertUserLimitsTx(
       tx,
       42,
-      { eventsPerWeek: 30, participantsPerEvent: 500, groupsPerEvent: 10, teamsPerOwner: 5 },
+      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
       "plan:organizer_pro",
     );
 
@@ -138,7 +138,7 @@ describe("applyPlanLimitsTx", () => {
     await applyPlanLimitsTx(
       tx,
       42,
-      { eventsPerWeek: 30, participantsPerEvent: 500, groupsPerEvent: 10, teamsPerOwner: 5 },
+      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
       "plan:organizer_pro",
     );
 

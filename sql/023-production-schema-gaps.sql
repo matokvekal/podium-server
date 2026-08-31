@@ -1,4 +1,4 @@
--- 020-production-schema-gaps.sql — the pieces of 011 and 014 that were never applied to the
+-- 023-production-schema-gaps.sql — the pieces of 011 and 014 that were never applied to the
 -- production database (191.215.39.19/elnino).
 --
 -- WHY A SEPARATE FILE RATHER THAN RE-RUNNING 011 AND 014
@@ -31,7 +31,7 @@
 -- destroy or rewrite existing rows.
 --
 -- HOW TO RUN
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/020-production-schema-gaps.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/023-production-schema-gaps.sql
 
 BEGIN;
 

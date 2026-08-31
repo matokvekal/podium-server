@@ -65,6 +65,18 @@ export const createEventSchema = z.object({
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
   organizerGroup: z.string().max(200).optional(),
+
+  // The organizer's elevation-gain value (metres). Imported from a GPX by the client, or typed
+  // by hand — either way this is the number they chose to publish. `null` clears it (fall back
+  // to the attached route's climb). Omitted = leave the stored value alone. Stored in
+  // events.elevation_gain_m; see sql/021-events-elevation-gain.sql.
+  elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
+
+  // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
+  // means "not stated / leave alone", a value sets it. duration in whole minutes.
+  durationMin: z.number().int().positive().max(2880).nullable().optional(),
+  restStops: z.number().int().min(0).max(20).nullable().optional(),
+  isAccessible: z.boolean().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -88,6 +100,14 @@ export const updateEventSchema = z.object({
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
   organizerGroup: z.string().max(200).optional(),
+
+  // See createEventSchema. `null` clears the organizer's value; omitted leaves it untouched.
+  elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
+
+  // See createEventSchema. `null` clears the field; omitted leaves it untouched.
+  durationMin: z.number().int().positive().max(2880).nullable().optional(),
+  restStops: z.number().int().min(0).max(20).nullable().optional(),
+  isAccessible: z.boolean().optional(),
 });
 
 export const changeEventStatusSchema = z.object({

@@ -6,7 +6,7 @@
 // than quietly handing back the free tier. Rows are created in the same transaction as the
 // user (insertUserLimitsTx) and backfilled for pre-existing users by sql/019.
 
-import { getDefaultUserLimits, type UserLimits } from "../config/plan-limits.js";
+import { getDefaultUserLimits, type EffectiveLimits } from "../config/plan-limits.js";
 import { query, type Transaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
 
@@ -43,12 +43,12 @@ export class UserLimitsNotFoundError extends Error {
 }
 
 /** The DB spells it teams_owned; the rest of the code says teamsPerOwner. Bridged only here. */
-export function mapUserLimitsRow(row: UserLimitsRow): UserLimits {
+export function mapUserLimitsRow(row: UserLimitsRow): EffectiveLimits {
   return {
-    eventsPerWeek: row.events_per_week,
-    participantsPerEvent: row.participants_per_event,
-    groupsPerEvent: row.groups_per_event,
-    teamsPerOwner: row.teams_owned,
+    maxEventsPerWeek: row.events_per_week,
+    maxParticipantsPerEvent: row.participants_per_event,
+    maxGroupsPerEvent: row.groups_per_event,
+    maxTeamsPerOwner: row.teams_owned,
   };
 }
 
@@ -71,7 +71,7 @@ export async function selectUserLimits(userId: number): Promise<UserLimitsRow | 
  * the raw Postgres 42P01 and takes the request down with it, on purpose — the old code caught
  * that code and returned null, which is how an unapplied migration stayed invisible.
  */
-export async function selectUserLimitsOrThrow(userId: number): Promise<UserLimits> {
+export async function selectUserLimitsOrThrow(userId: number): Promise<EffectiveLimits> {
   const row = await selectUserLimits(userId);
   if (!row) throw new UserLimitsNotFoundError(userId);
   return mapUserLimitsRow(row);
@@ -86,7 +86,7 @@ export async function selectUserLimitsOrThrow(userId: number): Promise<UserLimit
 export async function insertUserLimitsTx(
   tx: Transaction,
   userId: number,
-  limits: UserLimits = getDefaultUserLimits(),
+  limits: EffectiveLimits = getDefaultUserLimits(),
   note = "created with user",
 ): Promise<void> {
   await tx.query(
@@ -96,10 +96,10 @@ export async function insertUserLimitsTx(
       ON CONFLICT (user_id) DO NOTHING`,
     [
       userId,
-      limits.eventsPerWeek,
-      limits.participantsPerEvent,
-      limits.groupsPerEvent,
-      limits.teamsPerOwner,
+      limits.maxEventsPerWeek,
+      limits.maxParticipantsPerEvent,
+      limits.maxGroupsPerEvent,
+      limits.maxTeamsPerOwner,
       note,
     ],
   );
@@ -116,7 +116,7 @@ export async function insertUserLimitsTx(
 export async function applyPlanLimitsTx(
   tx: Transaction,
   userId: number,
-  limits: UserLimits,
+  limits: EffectiveLimits,
   note: string,
 ): Promise<void> {
   await tx.query(
@@ -132,10 +132,10 @@ export async function applyPlanLimitsTx(
              updated_at             = NOW()`,
     [
       userId,
-      limits.eventsPerWeek,
-      limits.participantsPerEvent,
-      limits.groupsPerEvent,
-      limits.teamsPerOwner,
+      limits.maxEventsPerWeek,
+      limits.maxParticipantsPerEvent,
+      limits.maxGroupsPerEvent,
+      limits.maxTeamsPerOwner,
       note,
     ],
   );
@@ -151,7 +151,7 @@ export async function applyPlanLimitsTx(
  */
 export async function upsertUserLimits(
   userId: number,
-  limits: UserLimits,
+  limits: EffectiveLimits,
   note: string | null = null,
 ): Promise<void> {
   await query(
@@ -167,10 +167,10 @@ export async function upsertUserLimits(
              updated_at             = NOW()`,
     [
       userId,
-      limits.eventsPerWeek,
-      limits.participantsPerEvent,
-      limits.groupsPerEvent,
-      limits.teamsPerOwner,
+      limits.maxEventsPerWeek,
+      limits.maxParticipantsPerEvent,
+      limits.maxGroupsPerEvent,
+      limits.maxTeamsPerOwner,
       note,
     ],
   );

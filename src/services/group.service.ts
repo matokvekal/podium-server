@@ -57,10 +57,13 @@ export async function createGroup(
   userId: number,
   input: { name: string; startsAt?: Date; routeId?: number },
 ): Promise<EventGroup> {
-  await assertEventOwner(eventId, userId);
+  const event = await assertEventOwner(eventId, userId);
 
+  // The group cap is the event OWNER's entitlement. assertEventOwner has already verified
+  // userId === event.ownerId, so these are the same person today; naming the owner explicitly
+  // keeps it correct once operators (event_members.role) can create groups too.
   const [actor, existing] = await Promise.all([
-    buildActor(userId),
+    buildActor(event.ownerId ?? userId),
     countGroupsForEvent(eventId),
   ]);
   assertWithinGroupLimit(actor, existing);

@@ -10,7 +10,8 @@ import type {
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import { buildActor } from "../authz/actor.js";
-import { assertWithinParticipantLimit } from "../authz/limits.js";
+import { hasRoomForParticipants } from "../authz/participant-capacity.js";
+import { countJoinedParticipants } from "../queries/event.queries.js";
 import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
 import {
   deleteParticipant as deleteParticipantRow,
@@ -61,17 +62,26 @@ export async function listParticipantsForViewer(
   return { participants: await selectParticipantsForEvent(eventId), tier };
 }
 
-/** The plan cap applies to the whole start list, however riders got onto it. */
+/**
+ * The start-list cap applies however riders got onto it. It is the event OWNER's entitlement,
+ * and capacity is counted the same way joinEvent counts it — approved + still-pending, never
+ * rejected or left (authz/participant-capacity.ts). Callers here are owner-only, so a plain
+ * read-then-check is enough; the concurrency-safe path is only needed for self-service joins.
+ */
 async function assertRoomForRiders(
   eventId: string,
-  userId: number,
+  ownerId: number,
   adding: number,
 ): Promise<void> {
-  const [actor, current] = await Promise.all([
-    buildActor(userId),
-    selectParticipantsForEvent(eventId),
+  const [actor, counts] = await Promise.all([
+    buildActor(ownerId),
+    countJoinedParticipants(eventId),
   ]);
-  assertWithinParticipantLimit(actor, current.length, adding);
+  const max = actor.entitlements.limits.maxParticipantsPerEvent;
+  if (!hasRoomForParticipants(counts, adding, max)) {
+    const current = counts.approved + counts.pending;
+    throw new ApiError(409, `This ride is full — ${current} of ${max} riders (EVENT_FULL)`);
+  }
 }
 
 async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
