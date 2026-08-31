@@ -10,19 +10,19 @@
 // and product decisions belong in review and in git history. Adding a tier is an entry here;
 // granting it to someone is a row in entitlement_grants.
 
-import { DEFAULT_FREE_PLAN_LIMITS } from "../config/plan-limits.js";
+import { getDefaultUserLimits, type UserLimits } from "../config/plan-limits.js";
 import type { Feature } from "./capabilities.js";
 
-export interface PlanLimits {
-  /** Rides an organizer may create in a rolling 7 days — not a calendar week. */
-  eventsPerWeek: number;
-  /** Riders on one start list, however they got there (self-joined, added, imported). */
-  participantsPerEvent: number;
-  /** Ride groups within one event. */
-  groupsPerEvent: number;
-  /** Teams one person may own. */
-  teamsPerOwner: number;
-}
+/**
+ * A plan's limits have the same shape as a user's limits, because granting a plan COPIES these
+ * numbers into the user's user_limits row (syncUserLimitsToPlan). They are not read on the
+ * request path — user_limits is.
+ */
+export type PlanLimits = UserLimits;
+
+// The free tier IS the signup default, read once at module load. A plan grant that is later
+// revoked or expires returns the user to exactly these numbers.
+const FREE_LIMITS = getDefaultUserLimits();
 
 export interface PlanDefinition {
   code: PlanCode;
@@ -50,12 +50,7 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     code: "free",
     label: "Free",
     rank: 0,
-    limits: {
-      eventsPerWeek: DEFAULT_FREE_PLAN_LIMITS.eventsPerWeek,
-      participantsPerEvent: DEFAULT_FREE_PLAN_LIMITS.participantsPerEvent,
-      groupsPerEvent: DEFAULT_FREE_PLAN_LIMITS.groupsPerEvent,
-      teamsPerOwner: DEFAULT_FREE_PLAN_LIMITS.teamsPerOwner,
-    },
+    limits: FREE_LIMITS,
     // ⚠ PRICING SWITCH — the one line that decides whether private rides are sellable.
     //
     // Ships INCLUDED on free, because "private rides could be a paid feature" was raised as an

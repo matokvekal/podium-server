@@ -6,10 +6,10 @@
 // resolution folds them into one answer that the rest of the product can use without knowing
 // which of those it came from.
 
-import { resolveEffectiveLimits } from "../config/plan-limits.js";
-import { query, queryOne, withTransaction } from "../db/pool.js";
+import type { UserLimits } from "../config/plan-limits.js";
+import { query, type Transaction, withTransaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
-import { selectUserLimits } from "../queries/userLimits.queries.js";
+import { applyPlanLimitsTx, selectUserLimitsOrThrow } from "../queries/userLimits.queries.js";
 import type { Feature } from "./capabilities.js";
 import { FEATURES } from "./capabilities.js";
 import type { PlanLimits } from "./plans.js";
@@ -71,26 +71,29 @@ function isFeature(value: string): value is Feature {
  * `scope_type IS NULL` filters to account-wide grants: an event-scoped grant belongs to that
  * one ride and must not quietly upgrade the whole account.
  */
-async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
-  try {
-    return await query<GrantRow>(
-      `SELECT * FROM entitlement_grants
+const LIVE_GRANTS_SQL = `SELECT * FROM entitlement_grants
         WHERE user_id = $1
           AND revoked_at IS NULL
           AND starts_at <= NOW()
           AND (expires_at IS NULL OR expires_at > NOW())
           AND (quantity IS NULL OR consumed < quantity)
           AND scope_type IS NULL
-        ORDER BY id ASC`,
-      [userId],
-    );
+        ORDER BY id ASC`;
+
+async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
+  try {
+    return await query<GrantRow>(LIVE_GRANTS_SQL, [userId]);
   } catch (err) {
     const code =
       typeof err === "object" && err !== null && "code" in err
         ? (err as { code?: unknown }).code
         : undefined;
-    // Older local DBs may not have authz tables yet. Fallback to free plan instead of
+    // Older local DBs may not have authz tables yet. Fall back to the free plan rather than
     // failing /users/me and blocking sign-in.
+    //
+    // ⚠ This is NOT a limits fallback and cannot become one: limits come from user_limits,
+    // which is read separately and throws when absent. Losing this table costs the caller
+    // their plan LABEL and their FEATURE set, never their numbers.
     if (code === "42P01") {
       logger.warn({ userId, err }, "entitlement tables missing; falling back to free entitlements");
       return [];
@@ -102,9 +105,13 @@ async function selectLiveGrants(userId: number): Promise<GrantRow[]> {
 export async function resolveEntitlements(userId: number | null): Promise<Entitlements> {
   if (userId === null) return ANONYMOUS_ENTITLEMENTS;
 
-  // Two independent sources, one round trip: what the user was GRANTED (a plan, features)
-  // and what has been set for them SPECIFICALLY (user_limits). Neither blocks the other.
-  const [rows, limitRow] = await Promise.all([selectLiveGrants(userId), selectUserLimits(userId)]);
+  // Two independent sources, one round trip — but they answer DIFFERENT questions now.
+  // Grants decide the plan label and the feature set. user_limits decides the numbers, and
+  // is the only thing consulted for them.
+  const [rows, limits] = await Promise.all([
+    selectLiveGrants(userId),
+    selectUserLimitsOrThrow(userId),
+  ]);
 
   const activePlans: PlanDefinition[] = [];
   const features = new Set<Feature>();
@@ -141,16 +148,11 @@ export async function resolveEntitlements(userId: number | null): Promise<Entitl
   return {
     plan,
     features,
-    // Two steps, in this order:
-    //   1. mergeLimits — most generous per limit across every plan the user holds, so a beta
-    //      coupon stacked on a subscription never leaves someone worse off than either alone.
-    //   2. the per-user override on top, where a set column wins outright.
-    //
-    // The override is applied LAST and wins even when it is lower, because it is the explicit
-    // answer for one account: "give this organizer 20 rides a week" and "hold this one account
-    // to 1" are the same mechanism. With no row, or a row of NULLs, this is exactly step 1 —
-    // which is what makes the change invisible until somebody sets a value.
-    limits: resolveEffectiveLimits(mergeLimits([plan, ...activePlans]), limitRow),
+    // The row, verbatim. No merge with the plan, no coalesce, no default — user_limits IS
+    // the answer. A plan only ever reaches a user by having been COPIED into this row when
+    // the grant was written (syncUserLimitsFromGrantsTx), which is what lets the request path
+    // stay a single indexed lookup and never reason about grants at all.
+    limits,
     grants,
   };
 }
@@ -214,24 +216,70 @@ export interface NewGrant {
   expiresAt?: Date | null;
 }
 
-/** The single write path. Billing, coupons and support all land here. */
-export async function grantEntitlement(input: NewGrant): Promise<number> {
-  const row = await queryOne<{ id: number }>(
-    `INSERT INTO entitlement_grants
-        (user_id, plan_code, feature, quantity, source, source_ref, expires_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id`,
-    [
-      input.userId,
-      input.planCode ?? null,
-      input.feature ?? null,
-      input.quantity ?? null,
-      input.source,
-      input.sourceRef ?? null,
-      input.expiresAt ?? null,
-    ],
+/**
+ * Recompute which plan a user is on from their live grants, and COPY that plan's numbers into
+ * user_limits. This is the bridge that keeps plans meaningful now that the request path reads
+ * user_limits and nothing else.
+ *
+ * Runs inside the caller's transaction so a grant and the limits it implies commit together.
+ * With no live plan grant this writes the FREE numbers back — which is what makes it correct
+ * for a downgrade or a revocation as well as an upgrade.
+ *
+ * ⚠ Expiry is the open edge. A grant with an `expires_at` stops being live on its own, with
+ * nobody writing a row, so the user keeps the elevated numbers until something calls this
+ * again. A sweeper is needed before timed plans are sold; see the note in the deliverables.
+ */
+export async function syncUserLimitsFromGrantsTx(tx: Transaction, userId: number): Promise<void> {
+  const rows = await tx.query<GrantRow>(LIVE_GRANTS_SQL, [userId]);
+
+  const activePlans: PlanDefinition[] = [];
+  for (const row of rows) {
+    if (row.plan_code !== null && isPlanCode(row.plan_code)) activePlans.push(PLANS[row.plan_code]);
+  }
+
+  const plan = activePlans.reduce(
+    (best, candidate) => (candidate.rank > best.rank ? candidate : best),
+    PLANS.free,
   );
-  if (!row) throw new Error("grantEntitlement returned no row");
+  // Most generous per limit across every plan held, so a beta coupon stacked on a subscription
+  // never leaves someone worse off than either alone. This is the ONE place that still merges
+  // plans — and its output is written to the row, not returned to a request.
+  const limits: UserLimits = mergeLimits([plan, ...activePlans]);
+
+  await applyPlanLimitsTx(tx, userId, limits, `plan:${plan.code}`);
+}
+
+/**
+ * The single write path. Billing, coupons and support all land here.
+ *
+ * Transactional because a plan grant now has to move user_limits too: writing the grant alone
+ * would leave a paying user on numbers the runtime still reads as free.
+ */
+export async function grantEntitlement(input: NewGrant): Promise<number> {
+  const row = await withTransaction(async (tx) => {
+    const inserted = await tx.queryOne<{ id: number }>(
+      `INSERT INTO entitlement_grants
+          (user_id, plan_code, feature, quantity, source, source_ref, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id`,
+      [
+        input.userId,
+        input.planCode ?? null,
+        input.feature ?? null,
+        input.quantity ?? null,
+        input.source,
+        input.sourceRef ?? null,
+        input.expiresAt ?? null,
+      ],
+    );
+    if (!inserted) throw new Error("grantEntitlement returned no row");
+
+    // Only a PLAN changes the numbers. A feature-only grant (a private-ride credit) leaves
+    // user_limits alone — rewriting it would stamp a support override back to the plan value.
+    if (input.planCode) await syncUserLimitsFromGrantsTx(tx, input.userId);
+
+    return inserted;
+  });
   logger.info(
     {
       userId: input.userId,

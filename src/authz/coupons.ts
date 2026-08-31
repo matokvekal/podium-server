@@ -13,6 +13,7 @@ import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import type { Feature } from "./capabilities.js";
 import { FEATURES } from "./capabilities.js";
+import { syncUserLimitsFromGrantsTx } from "./entitlements.js";
 import { isPlanCode, type PlanCode } from "./plans.js";
 
 interface CouponRow {
@@ -94,6 +95,12 @@ export async function redeemCoupon(userId: number, rawCode: string): Promise<Red
       "INSERT INTO coupon_redemptions (coupon_code, user_id, grant_id) VALUES ($1, $2, $3)",
       [code, userId, grant.id],
     );
+
+    // A plan coupon must move the numbers the runtime actually reads. This writes user_limits
+    // in the SAME transaction as the grant and the redemption, so a beta Pro code either
+    // upgrades the rider completely or not at all. Feature-only coupons skip it — they change
+    // what is unlocked, not how much of it there is.
+    if (coupon.plan_code !== null) await syncUserLimitsFromGrantsTx(tx, userId);
     await tx.query("UPDATE coupons SET redeemed_count = redeemed_count + 1 WHERE code = $1", [
       code,
     ]);

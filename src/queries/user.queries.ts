@@ -6,6 +6,7 @@
 import type { UserImageKind, UserImageSource } from "../config/user-images.js";
 import { execute, query, queryOne, withTransaction } from "../db/pool.js";
 import type { AuthIdentity, AuthProviderType, Role, User } from "../db/types.js";
+import { insertUserLimitsTx } from "./userLimits.queries.js";
 
 interface UserRow {
   id: number;
@@ -105,7 +106,7 @@ export async function deleteIdentity(
 }
 
 /**
- * New account plus its first external identity — one transaction, never half of it.
+ * New account, its first external identity, and its limits — one transaction, never part of it.
  *
  * firstName/lastName/avatarUrl are whatever the provider already told us about this
  * person (Google's given_name, family_name and picture). They are only ever written
@@ -138,6 +139,12 @@ export async function insertUserWithIdentity(input: {
         VALUES ($1, $2, $3, $4, $5, $6, $6, $6)`,
       [userRow.id, input.provider, input.providerUserId, input.email, input.phone, input.now],
     );
+
+    // Limits are part of what a user IS, not something bolted on afterwards. Authorization
+    // reads user_limits and throws when the row is absent, so a user committed without one
+    // could not make a single authenticated request — hence the same transaction, not a
+    // follow-up write that a crash could skip.
+    await insertUserLimitsTx(tx, userRow.id);
 
     return mapUser(userRow);
   });

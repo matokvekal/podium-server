@@ -77,6 +77,17 @@ const envSchema = z.object({
   // and because it is what a real per-plan limit should read (see authz/plans.ts).
   MAX_CONCURRENT_LIVE_EVENTS_FREE: z.coerce.number().int().positive().default(2),
 
+  // ── Default limits for a NEW user ────────────────────────────────────────────────────────
+  //
+  // These are a TEMPLATE, not a runtime fallback. They are read exactly once per user, when
+  // their user_limits row is created (at signup, or by the sql/019 backfill). After that the
+  // row is the only thing authorization reads, so changing a number here does NOT move any
+  // existing user — that is a deliberate UPDATE against user_limits.
+  DEFAULT_EVENTS_PER_WEEK: z.coerce.number().int().nonnegative().default(3),
+  DEFAULT_PARTICIPANTS_PER_EVENT: z.coerce.number().int().nonnegative().default(50),
+  DEFAULT_GROUPS_PER_EVENT: z.coerce.number().int().nonnegative().default(2),
+  DEFAULT_TEAMS_OWNED: z.coerce.number().int().nonnegative().default(2),
+
   // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
   // On by default so it's visible without any setup; set to "false" to go quiet.
   CONSOLE_TRACE: boolFlag(true),

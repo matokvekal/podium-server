@@ -1,110 +1,54 @@
-import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_PLAN_LIMITS,
-  normalizeUserLimitValues,
-  resolveEffectiveLimits,
-} from "./plan-limits.js";
+// The defaults are a TEMPLATE, read once when a user_limits row is created. These tests pin
+// that they come from the environment, and — just as importantly — that nothing else reads
+// them on the request path. The runtime side of that is proved in authz/entitlements.test.ts.
 
-describe("plan limits", () => {
-  it("keeps the central defaults in one place", () => {
-    expect(DEFAULT_PLAN_LIMITS).toEqual({
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/** env.ts parses process.env at module load, so each case needs a fresh module graph. */
+async function loadDefaults(overrides: Record<string, string> = {}) {
+  vi.resetModules();
+  for (const [key, value] of Object.entries(overrides)) vi.stubEnv(key, value);
+  const { getDefaultUserLimits } = await import("./plan-limits.js");
+  return getDefaultUserLimits();
+}
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("getDefaultUserLimits", () => {
+  it("falls back to the documented product defaults when nothing is configured", async () => {
+    expect(await loadDefaults()).toEqual({
       eventsPerWeek: 3,
       participantsPerEvent: 50,
       groupsPerEvent: 2,
-      teamsOwned: 2,
+      teamsPerOwner: 2,
     });
   });
 
-  it("falls back to defaults when DB values are missing", () => {
-    expect(normalizeUserLimitValues(null)).toEqual(DEFAULT_PLAN_LIMITS);
-    expect(normalizeUserLimitValues({})).toEqual(DEFAULT_PLAN_LIMITS);
+  it("takes every value from the environment", async () => {
     expect(
-      normalizeUserLimitValues({
-        events_per_week: 10,
-        participants_per_event: 75,
-        groups_per_event: 4,
-        teams_owned: 5,
+      await loadDefaults({
+        DEFAULT_EVENTS_PER_WEEK: "7",
+        DEFAULT_PARTICIPANTS_PER_EVENT: "120",
+        DEFAULT_GROUPS_PER_EVENT: "4",
+        DEFAULT_TEAMS_OWNED: "9",
       }),
     ).toEqual({
-      eventsPerWeek: 10,
-      participantsPerEvent: 75,
+      eventsPerWeek: 7,
+      participantsPerEvent: 120,
       groupsPerEvent: 4,
-      teamsOwned: 5,
-    });
-  });
-});
-
-describe("resolveEffectiveLimits — override ?? plan", () => {
-  // What a free user's plan allows. PLANS.free reads DEFAULT_PLAN_LIMITS, so these are the
-  // same numbers by construction.
-  const FREE = {
-    eventsPerWeek: 3,
-    participantsPerEvent: 50,
-    groupsPerEvent: 2,
-    teamsPerOwner: 2,
-  };
-
-  const PRO = {
-    eventsPerWeek: 30,
-    participantsPerEvent: 500,
-    groupsPerEvent: 10,
-    teamsPerOwner: 5,
-  };
-
-  it("no row at all leaves the plan untouched — the pre-migration behaviour", () => {
-    expect(resolveEffectiveLimits(FREE, null)).toEqual(FREE);
-    expect(resolveEffectiveLimits(PRO, null)).toEqual(PRO);
-  });
-
-  it("a row of all NULLs is identical to no row", () => {
-    expect(resolveEffectiveLimits(PRO, {})).toEqual(PRO);
-    expect(
-      resolveEffectiveLimits(PRO, {
-        events_per_week: null,
-        participants_per_event: null,
-        groups_per_event: null,
-        teams_owned: null,
-      }),
-    ).toEqual(PRO);
-  });
-
-  it("raises one user without touching their other limits", () => {
-    expect(resolveEffectiveLimits(FREE, { events_per_week: 20 })).toEqual({
-      ...FREE,
-      eventsPerWeek: 20,
+      teamsPerOwner: 9,
     });
   });
 
-  it("can also tighten a single account", () => {
-    expect(resolveEffectiveLimits(PRO, { events_per_week: 1 })).toEqual({
-      ...PRO,
-      eventsPerWeek: 1,
-    });
+  it("DEFAULT_EVENTS_PER_WEEK=3 is what a new user is created with", async () => {
+    // The task's stated acceptance case, kept as its own test so it fails by name.
+    const defaults = await loadDefaults({ DEFAULT_EVENTS_PER_WEEK: "3" });
+    expect(defaults.eventsPerWeek).toBe(3);
   });
 
-  it("treats 0 as a real limit, not as absent", () => {
-    // The trap this guards: `||` would read 0 as "unset" and silently hand back the plan's
-    // number, which is the opposite of what setting 0 means.
-    expect(resolveEffectiveLimits(FREE, { events_per_week: 0 }).eventsPerWeek).toBe(0);
-  });
-
-  it("maps the teams_owned column onto teamsPerOwner", () => {
-    expect(resolveEffectiveLimits(FREE, { teams_owned: 9 }).teamsPerOwner).toBe(9);
-  });
-
-  it("overrides every limit at once", () => {
-    expect(
-      resolveEffectiveLimits(FREE, {
-        events_per_week: 20,
-        participants_per_event: 200,
-        groups_per_event: 8,
-        teams_owned: 4,
-      }),
-    ).toEqual({
-      eventsPerWeek: 20,
-      participantsPerEvent: 200,
-      groupsPerEvent: 8,
-      teamsPerOwner: 4,
-    });
+  it("accepts 0 — a real limit, not an unset value", async () => {
+    expect((await loadDefaults({ DEFAULT_EVENTS_PER_WEEK: "0" })).eventsPerWeek).toBe(0);
   });
 });

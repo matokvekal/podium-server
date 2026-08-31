@@ -1,106 +1,63 @@
-// The single source of truth for DEFAULT limits — what a brand-new user, on no plan, may do.
+// The TEMPLATE used to create a user's limits — and nothing else.
 //
-// ── Where a limit actually comes from ──────────────────────────────────────────────────────
+// ── The one rule ───────────────────────────────────────────────────────────────────────────
 //
-//   1. user_limits.<column>   a per-user override (sql/018-user-limits.sql). NULL = inherit.
-//   2. the user's plan        src/authz/plans.ts — a plan is granted by an entitlement_grants
-//                             row, so nobody is "on" a paid plan without one.
-//   3. DEFAULT_PLAN_LIMITS    below. These ARE the free plan's numbers: PLANS.free reads them,
-//                             so changing a number here changes it for every free user with no
-//                             override, with no other edit anywhere.
+// `user_limits` is the single runtime source of truth. Authorization reads that row and only
+// that row. The values below are copied into the row ONCE, when it is created (at signup, or
+// by the sql/019 backfill), and are never consulted again for that user.
 //
-//   effective = override ?? plan limit
+//   ENV / config  ──(once, at creation)──>  user_limits  ──(every request)──>  limit check
+//
+// So changing DEFAULT_EVENTS_PER_WEEK does NOT move a single existing user. Moving an existing
+// user is an UPDATE against user_limits — which takes effect on their next request, with no
+// deploy. That is the whole point of the design.
 //
 // ── What this file is NOT ──────────────────────────────────────────────────────────────────
+//
+// It is NOT a runtime fallback. There is deliberately no `?? DEFAULT_...` anywhere in the
+// request path any more: a user with no user_limits row is a data-integrity fault and raises
+// UserLimitsNotFoundError rather than being silently handed the free tier. The previous
+// behaviour — a missing table quietly resolving every user to 3 events a week — is exactly
+// what this replaces.
 //
 // It holds no usage counters. What a user HAS used is counted from the real tables at check
 // time (countEventsCreatedSince, countParticipantsForEvent, countGroupsForEvent,
 // countTeamsForOwner), so a stored counter can never drift from what actually happened.
 //
-// It holds no prices. What a plan costs is a billing concern; see the note at the top of
-// src/authz/plans.ts.
+// It holds no prices. What a plan costs is a billing concern; see the note atop authz/plans.ts.
 
-export const DEFAULT_PLAN_LIMITS = {
+import { env } from "./env.js";
+
+/**
+ * One user's limits, as authorization consumes them. Every field is a real number: there is no
+ * "unset" state, because a row always carries actual values.
+ *
+ * `teamsPerOwner` is the same thing the DB column calls `teams_owned`; the two names are
+ * bridged in exactly one place, mapUserLimitsRow() in queries/userLimits.queries.ts.
+ */
+export interface UserLimits {
   /** Rides one organizer may create in a rolling 7 days — not a calendar week. */
-  eventsPerWeek: 3,
-  /** Riders on one start list, however they got there: self-joined, added, or imported. */
-  participantsPerEvent: 50,
-  /** Ride groups within one event. */
-  groupsPerEvent: 2,
-  /** Teams one person may own. */
-  teamsOwned: 2,
-} as const;
-
-/**
- * One user_limits row as the database returns it, or null when the user has none.
- *
- * Every column is nullable and NULL means INHERIT, not zero — see sql/018-user-limits.sql.
- * A missing row and a row of all NULLs are therefore the same answer.
- */
-export type UserLimitDbRow = Partial<{
-  events_per_week: number | null;
-  participants_per_event: number | null;
-  teams_owned: number | null;
-  groups_per_event: number | null;
-}> | null;
-
-/**
- * An override row folded onto the defaults. Used where there is no plan in play — the
- * defaults ARE the free plan, so this is the free-tier answer.
- *
- * For the full resolution, which layers a plan in between, see resolveEffectiveLimits below.
- */
-export function normalizeUserLimitValues(row: UserLimitDbRow): {
   eventsPerWeek: number;
+  /** Riders on one start list, however they got there: self-joined, added, or imported. */
   participantsPerEvent: number;
+  /** Ride groups within one event. */
   groupsPerEvent: number;
-  teamsOwned: number;
-} {
-  return {
-    eventsPerWeek: row?.events_per_week ?? DEFAULT_PLAN_LIMITS.eventsPerWeek,
-    participantsPerEvent: row?.participants_per_event ?? DEFAULT_PLAN_LIMITS.participantsPerEvent,
-    groupsPerEvent: row?.groups_per_event ?? DEFAULT_PLAN_LIMITS.groupsPerEvent,
-    teamsOwned: row?.teams_owned ?? DEFAULT_PLAN_LIMITS.teamsOwned,
-  };
+  /** Teams one person may own. */
+  teamsPerOwner: number;
 }
 
-export const DEFAULT_FREE_PLAN_LIMITS = {
-  eventsPerWeek: DEFAULT_PLAN_LIMITS.eventsPerWeek,
-  participantsPerEvent: DEFAULT_PLAN_LIMITS.participantsPerEvent,
-  groupsPerEvent: DEFAULT_PLAN_LIMITS.groupsPerEvent,
-  teamsPerOwner: DEFAULT_PLAN_LIMITS.teamsOwned,
-} as const;
-
 /**
- * The one function that answers "what may this user actually do".
+ * The values a brand-new user's row is created with.
  *
- * `planLimits` is what the user's plan allows (PLANS.free's limits when they hold no plan
- * grant, which is DEFAULT_PLAN_LIMITS). `row` is their override. A non-NULL override column
- * wins outright — including a LOWER number, so a limit can be tightened for one account as
- * well as raised. A NULL column, or no row at all, inherits.
- *
- * Kept here rather than in authz/ so that the defaults, the shape of an override, and the
- * rule that combines them are all in the file someone opens to change a limit.
+ * Read through a function rather than exported as a frozen constant so that a test can set the
+ * env vars and observe the effect, and so the read happens at call time rather than at module
+ * load. Callers must not cache the result across a config change.
  */
-export function resolveEffectiveLimits(
-  planLimits: {
-    eventsPerWeek: number;
-    participantsPerEvent: number;
-    groupsPerEvent: number;
-    teamsPerOwner: number;
-  },
-  row: UserLimitDbRow,
-): {
-  eventsPerWeek: number;
-  participantsPerEvent: number;
-  groupsPerEvent: number;
-  teamsPerOwner: number;
-} {
+export function getDefaultUserLimits(): UserLimits {
   return {
-    eventsPerWeek: row?.events_per_week ?? planLimits.eventsPerWeek,
-    participantsPerEvent: row?.participants_per_event ?? planLimits.participantsPerEvent,
-    groupsPerEvent: row?.groups_per_event ?? planLimits.groupsPerEvent,
-    // The DB column is teams_owned; PlanLimits calls the same thing teamsPerOwner.
-    teamsPerOwner: row?.teams_owned ?? planLimits.teamsPerOwner,
+    eventsPerWeek: env.DEFAULT_EVENTS_PER_WEEK,
+    participantsPerEvent: env.DEFAULT_PARTICIPANTS_PER_EVENT,
+    groupsPerEvent: env.DEFAULT_GROUPS_PER_EVENT,
+    teamsPerOwner: env.DEFAULT_TEAMS_OWNED,
   };
 }

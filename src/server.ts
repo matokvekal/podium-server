@@ -20,7 +20,7 @@ void ensureUploadRoot().catch((err: Error) => {
 // as the event loop drained — a dead server that looked like a healthy one.
 const server = app.listen(env.PORT, () => {
   if (!server.listening) return;
-  logger.info(`Commissaire server listening on port ${env.PORT} (${env.NODE_ENV})`);
+  logger.info(`El nino server listening on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {

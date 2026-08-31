@@ -1,23 +1,27 @@
--- 018-user-limits.sql — per-user effective limits, so one person can be upgraded without a
--- code deploy.
+-- 018-user-limits.sql — per-user limits. THE single runtime source of truth for what one
+-- person may do.
 --
 -- WHY THIS TABLE EXISTS
---   Limits come from PLANS in src/authz/plans.ts, whose free tier reads the single default
---   config in src/config/plan-limits.ts. That is right for product-wide decisions and wrong
---   for "give THIS organizer 20 events a week": today that needs an entitlement_grants row
---   for a whole plan tier, or a deploy. This table is the per-user override.
+--   Limits used to be resolved per request from config + plans + an optional override, which
+--   meant the number a rider hit was assembled in code and existed nowhere you could look at
+--   it. Worse, every layer had a fallback, so this table not existing at all was invisible:
+--   everyone silently resolved to the free tier and the product looked like it worked.
 --
--- NULL MEANS INHERIT, and that is the important part.
---   A NULL column is not "zero" and not "the default" — it means "whatever this user's plan
---   says", resolved in code. So a row may override one limit and leave the rest alone, and
---   changing DEFAULT_PLAN_LIMITS in code still moves every user who has not been given an
---   explicit number. Writing literal defaults into every row would freeze today's numbers
---   into the data and silently demote anyone holding a paid plan grant.
+--   Now the row IS the answer. Authorization reads it and nothing else.
 --
---   effective limit = user_limits.<column>  when NOT NULL
---                     otherwise the plan limit (free plan = DEFAULT_PLAN_LIMITS)
+-- EVERY COLUMN IS NOT NULL, and that is the important part.
+--   There is no "inherit" state. A row always carries real numbers, written once at signup
+--   from the DEFAULT_* environment values (src/config/plan-limits.ts) and thereafter changed
+--   only by an explicit UPDATE — by support, or by the plan-grant sync. Changing the config
+--   defaults does NOT move an existing user; that is a deliberate property, not an oversight.
 --
---   no row at all   = the same as a row of all NULLs
+--   effective limit = user_limits.<column>          always
+--   no row          = UserLimitsNotFoundError       never a default
+--
+-- WHERE ROWS COME FROM
+--   new users        insertUserLimitsTx(), in the same transaction as the user
+--   existing users   sql/019-user-limits-backfill.sql
+--   plan changes     syncUserLimitsFromGrantsTx(), in the same transaction as the grant
 --
 -- NOT A USAGE COUNTER. This table records what a user MAY do. What they HAVE done is counted
 -- from the real tables (events, event_participants, event_groups, teams) at check time, so a
@@ -25,26 +29,30 @@
 --
 -- HOW TO RUN
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/018-user-limits.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/019-user-limits-backfill.sql   <- REQUIRED
 --
--- SAFE ON LIVE DATA and safe to run more than once. Creating a table nothing yet has rows in
--- changes no existing behaviour: with no row, every user resolves exactly as they do today.
--- No foreign key, per the house rule in sql/README.md — the application owns the relationship.
+--   ⚠ 018 ALONE IS NOT ENOUGH. An empty table means every existing user now fails
+--   authorization instead of falling back. Run 019 in the same maintenance window.
+--
+-- SAFE ON LIVE DATA and safe to run more than once. No foreign key, per the house rule in
+-- sql/README.md — the application owns the relationship.
 
 CREATE TABLE IF NOT EXISTS user_limits (
-    user_id              BIGINT PRIMARY KEY,   -- one row per user; no FK by house rule
-    events_per_week      INT,                  -- NULL = inherit from the user's plan
-    participants_per_event INT,
-    groups_per_event     INT,
-    teams_owned          INT,
-    /** Why this user has an override — support note, coupon reference, ticket id. Never a
-        price and never a payment identifier: billing writes entitlement_grants, not this. */
-    note                 TEXT,
-    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id                BIGINT PRIMARY KEY,   -- one row per user; no FK by house rule
+    events_per_week        INT NOT NULL,
+    participants_per_event INT NOT NULL,
+    groups_per_event       INT NOT NULL,
+    teams_owned            INT NOT NULL,
+    /** Why this user has these numbers — "created with user", "plan:organizer_pro", or a
+        support note / ticket id. Never a price and never a payment identifier: billing writes
+        entitlement_grants, not this. */
+    note                   TEXT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- A limit is a count, so a negative one is always a mistake. NULL passes a CHECK, which is
--- exactly what we want: it is the inherit case, not a value.
+-- A limit is a count, so a negative one is always a mistake. 0 is legitimate — it means "may
+-- create none" — so this is >= 0, not > 0.
 -- ADD CONSTRAINT has no IF NOT EXISTS, so it is guarded to keep this file re-runnable.
 DO $$
 BEGIN
@@ -54,10 +62,10 @@ BEGIN
         ALTER TABLE user_limits
             ADD CONSTRAINT user_limits_non_negative
             CHECK (
-                (events_per_week        IS NULL OR events_per_week        >= 0) AND
-                (participants_per_event IS NULL OR participants_per_event >= 0) AND
-                (groups_per_event       IS NULL OR groups_per_event       >= 0) AND
-                (teams_owned            IS NULL OR teams_owned            >= 0)
+                events_per_week        >= 0 AND
+                participants_per_event >= 0 AND
+                groups_per_event       >= 0 AND
+                teams_owned            >= 0
             );
     END IF;
 END $$;

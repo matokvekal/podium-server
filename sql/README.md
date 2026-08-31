@@ -42,6 +42,19 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001-init.sql
 
 Skip 001 — those tables already exist.
 
+**Outstanding on production (191.215.39.19/elnino), as of 2026-08-31**
+
+A schema introspection found these never applied. Run in this order:
+
+```
+020-production-schema-gaps.sql   the parts of 011 and 014 that are missing
+018-user-limits.sql              creates user_limits
+019-user-limits-backfill.sql     ⚠ REQUIRED with 018, same maintenance window
+```
+
+018 without 019 leaves an empty table, and authorization no longer falls back — every
+existing user would fail a limit check until 019 runs.
+
 ## The files
 
 | File | What it does | Safe on live data |
@@ -54,18 +67,20 @@ Skip 001 — those tables already exist.
 | `006-client-actions.sql` | offline de-duplication | yes — new table |
 | `007-users-avatar.sql` | `users.avatar_url` | yes — additive |
 | `008-registration-and-live.sql` | `requires_approval`, `is_paused`, one-live-event-per-owner index | yes — additive |
-<<<<<<< HEAD
 | `009-events-area.sql` | `events.area` free-text field | yes — additive |
-| `010-drop-one-live-per-owner.sql` | drops the one-live-event-per-owner index; the "at most N" limit now lives in the server | yes — drops an index only |
-=======
 | `009-results.sql` | `event_participants.team` / `country_code`, finisher index | yes — additive |
+| `010-drop-one-live-per-owner.sql` | drops the one-live-event-per-owner index; the "at most N" limit now lives in the server | yes — drops an index only |
 | `010-event-profile.sql` | `events.activity_type` / `level` / `organizer_group`, browse index | yes — additive |
 | `011-client-action-results.sql` | `client_actions.response_status` / `response_body` | yes — additive |
 | `012-ride-groups.sql` | `event_groups`, `event_participants.group_id` | yes — additive |
 | `013-teams-and-follows.sql` | `teams`, `team_members`, `user_follows`, `events.team_id` | yes — additive |
->>>>>>> 95543e474c16d9b47227287d3fb04f7947e77377
+| `014-authorization.sql` | `entitlement_grants`, `coupons`, `coupon_redemptions` | yes — new tables |
+| `015-local-schema-compat.sql` | local-only catch-up. ⚠ creates `entitlement_grants` but NOT the coupon tables, which makes 014 look applied when it is not | local databases only |
+| `016-schema-sync.sql` | broad convergence file; a superset of 011 and 014 | yes — additive |
 | `017-user-avatar-cover.sql` | `users.avatar_type/_value`, `cover_type/_value` | yes — additive |
-| `018-user-limits.sql` | `user_limits` — per-user limit overrides, NULL = inherit | yes — new table |
+| `018-user-limits.sql` | `user_limits` — the single runtime source of truth for limits, every column NOT NULL | yes — new table |
+| `019-user-limits-backfill.sql` | a `user_limits` row for every existing user. ⚠ **REQUIRED with 018** — without it existing users fail authorization | yes — never overwrites an existing row |
+| `020-production-schema-gaps.sql` | the parts of 011 and 014 never applied to production | yes — additive |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules
