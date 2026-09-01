@@ -130,6 +130,17 @@ function toEventDetail(
     location: canSeeInfo ? summary.location : null,
     requiresBib: event.requiresBib,
     description: canSeeInfo ? event.description : null,
+    /**
+     * How to reach the organizer about THIS ride — only what they typed into the create/edit
+     * form and saved. Never derived from their account: sign-in email and phone are
+     * authentication data, not a published way for strangers to contact somebody.
+     *
+     * On the DETAIL only, never on the list summary — a browse list must not carry anybody's
+     * phone number — and behind the same `canSeeInfo` gate as when and where the ride is, so a
+     * pending rider on a private ride is told nothing extra. null means none published.
+     */
+    contactPhone: canSeeInfo ? (event.contactPhone ?? null) : null,
+    contactEmail: canSeeInfo ? (event.contactEmail ?? null) : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
      *  is waiting on the organizer, and the fields above are nulled for them on purpose.
      *  @deprecated read `capabilities` instead — see AUTHORIZATION.md. */

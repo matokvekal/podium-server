@@ -176,6 +176,17 @@ export interface Event {
    */
   hasSupportVehicle: boolean;
 
+  /**
+   * Contact details the organizer chose to PUBLISH for this ride — see sql/025-event-contact.sql.
+   * null means they published none.
+   *
+   * These are event data, not profile data. The form pre-fills them from the caller's own
+   * account as a convenience, but nothing is published until the organizer saves the ride with
+   * the values still in the field. Never populate these from a user record on read.
+   */
+  contactPhone: string | null;
+  contactEmail: string | null;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;

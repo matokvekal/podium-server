@@ -95,6 +95,35 @@ export async function selectIdentity(
   return row ? mapAuthIdentity(row) : null;
 }
 
+/**
+ * The caller's OWN sign-in contact details, for pre-filling a form they are about to fill in
+ * anyway. Read only for `GET /users/me`, which is already self-only and authenticated.
+ *
+ * This is not a profile field and must never be exposed on any response describing somebody
+ * else. It exists so an organizer creating a ride is offered their own number and address to
+ * accept, edit or clear — publishing happens only when they save the ride with a value still
+ * in the field. See sql/025-event-contact.sql.
+ *
+ * Ordered so a VERIFIED identity wins over an unverified one, and the most recently used wins
+ * after that: someone with both a Google and an SMS identity gets the address and the number
+ * they actually still use.
+ */
+export async function selectOwnContactDefaults(
+  userId: number,
+): Promise<{ email: string | null; phone: string | null }> {
+  const rows = await query<{ email: string | null; phone: string | null }>(
+    `SELECT email, phone
+       FROM auth_identities
+      WHERE user_id = $1
+      ORDER BY (verified_at IS NOT NULL) DESC, last_used_at DESC NULLS LAST, id DESC`,
+    [userId],
+  );
+  return {
+    email: rows.find((r) => r.email)?.email ?? null,
+    phone: rows.find((r) => r.phone)?.phone ?? null,
+  };
+}
+
 export async function deleteIdentity(
   provider: AuthProviderType,
   providerUserId: string,

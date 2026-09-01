@@ -82,6 +82,28 @@ export const createEventSchema = z.object({
   // sql/024-event-support-vehicle.sql. Omitted means "not set", which the column stores as
   // false. Never nullable: unlike duration there is no third state worth keeping.
   hasSupportVehicle: z.boolean().optional(),
+
+  // Contact details the organizer publishes FOR THIS RIDE — see sql/025-event-contact.sql.
+  // Empty string normalises to null: a field the organizer cleared and one they never filled
+  // are the same thing, and storing "" would make the ride page render an empty contact block.
+  contactPhone: z
+    .string()
+    .trim()
+    .max(100)
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
+  contactEmail: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(255)
+    .refine((v) => v === "" || z.email().safeParse(v).success, {
+      message: "Not a valid email address",
+    })
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -116,6 +138,27 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
   hasSupportVehicle: z.boolean().optional(),
+
+  // See createEventSchema. null (or a cleared field) stops publishing it; omitted leaves
+  // the stored value alone.
+  contactPhone: z
+    .string()
+    .trim()
+    .max(100)
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
+  contactEmail: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(255)
+    .refine((v) => v === "" || z.email().safeParse(v).success, {
+      message: "Not a valid email address",
+    })
+    .transform((v) => (v === "" ? null : v))
+    .nullable()
+    .optional(),
 });
 
 export const changeEventStatusSchema = z.object({

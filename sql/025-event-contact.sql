@@ -1,0 +1,66 @@
+-- 025-event-contact.sql — optional per-ride organizer contact details:
+--   * contact_phone
+--   * contact_email
+--
+-- WHY THESE LIVE ON THE EVENT AND NOT ON THE USER
+--   The app already knows how to reach a signed-in person: auth_identities.email for a Google
+--   sign-in, auth_identities.phone for an SMS one, users.emergency_phone besides. NONE of that
+--   may be published. It is sign-in data, collected to authenticate somebody, never offered by
+--   them as a way for strangers to contact them.
+--
+--   Storing the contact details on the EVENT is what makes publishing an explicit act. The
+--   organizer sees their own details pre-filled on the create form, can change them, can clear
+--   them, and whatever is left in the field when they press Save is what they have chosen to
+--   publish FOR THAT RIDE. A different ride can carry a different number, or none. Nothing is
+--   ever copied out of a profile behind their back, and clearing the field on one ride does
+--   not touch their account.
+--
+--   This is also why the columns are not a foreign key or a flag like `show_my_phone`: a flag
+--   would mean the published value tracks whatever the account later becomes, which is exactly
+--   the thing the organizer did not agree to.
+--
+-- SHAPES
+--   contact_phone  VARCHAR(100)  NULL — NULL = not published. Free text on purpose: it holds
+--                                international formats, a second number, or "WhatsApp only".
+--                                Widths match auth_identities.phone / .email so a pre-filled
+--                                value can never be too long for the column it came from.
+--   contact_email  VARCHAR(255)  NULL — NULL = not published.
+--
+--   Both nullable with no default, so every existing ride reads as "no contact published",
+--   which is exactly what those rides are today.
+--
+-- WHO CAN READ THEM
+--   The server puts them on the event DETAIL response only, never on the list summary, and
+--   only for a viewer who may already see when and where the ride is (the same `canSeeInfo`
+--   gate as starts_at / location / description). A pending rider on a private ride is told
+--   nothing extra, and a browse list never carries anybody's phone number.
+--
+-- BACKWARDS COMPATIBILITY
+--   Every existing row gets NULL and stays valid. Reads use `SELECT *` and map with `?? null`,
+--   and writes go through updateEventContact, which has its OWN missing-column guard —
+--   deliberately separate from updateEventRidePlan so that a database missing one of these
+--   columns cannot take the ride-plan write down with it.
+--
+-- HOW TO RUN
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/025-event-contact.sql
+--
+-- SAFE ON LIVE DATA and safe to run more than once. Two nullable ADD COLUMN IF NOT EXISTS with
+-- no default: metadata-only, no table rewrite, no backfill scan, no long lock. Nothing is
+-- dropped, renamed, retyped or deleted.
+
+ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255);
+
+-- No index: these are only ever read as part of a row already selected by id. They are never
+-- filtered, sorted or searched on, and deliberately should not be — "find every ride by this
+-- phone number" is not a query this product wants to make cheap.
+
+-- Verify afterwards:
+--   SELECT column_name, data_type, character_maximum_length, is_nullable
+--     FROM information_schema.columns
+--    WHERE table_name = 'events' AND column_name IN ('contact_phone', 'contact_email');
+--   SELECT count(*) FILTER (WHERE contact_phone IS NOT NULL) AS with_phone,
+--          count(*) FILTER (WHERE contact_email IS NOT NULL) AS with_email,
+--          count(*) AS total
+--     FROM events;

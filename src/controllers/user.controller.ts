@@ -10,6 +10,7 @@ import { traceLog } from "../lib/trace-log.js";
 import { userImageFieldsOf } from "../lib/user-images.js";
 import { countEventsCreatedSince } from "../queries/event.queries.js";
 import { countTeamsForOwner } from "../queries/team.queries.js";
+import { selectOwnContactDefaults } from "../queries/user.queries.js";
 import { redeemCouponSchema, updateProfileSchema } from "../schemas/user.schemas.js";
 import { findUserById, needsProfile, updateProfile } from "../services/user.service.js";
 
@@ -17,6 +18,22 @@ function isMissingRelationError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const code = "code" in err ? (err as { code?: unknown }).code : undefined;
   return code === "42P01";
+}
+
+/**
+ * Pre-fill is a convenience; /users/me is how the app knows who is signed in. If reading the
+ * caller's own identities fails for any reason, the right answer is an empty pre-fill, never a
+ * broken account endpoint — the organizer simply types their number in.
+ */
+async function safeOwnContactDefaults(
+  userId: number,
+): Promise<{ email: string | null; phone: string | null }> {
+  try {
+    return await selectOwnContactDefaults(userId);
+  } catch (err) {
+    logger.warn({ userId, err }, "could not read own contact defaults; offering no pre-fill");
+    return { email: null, phone: null };
+  }
 }
 
 async function safeCountTeamsForOwner(userId: number): Promise<number> {
@@ -63,9 +80,10 @@ export function toProfile(user: User) {
 async function toAccount(user: User) {
   const actor = await buildActor(user.id);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [eventsThisWeek, teamsOwned] = await Promise.all([
+  const [eventsThisWeek, teamsOwned, contactDefaults] = await Promise.all([
     countEventsCreatedSince(user.id, weekAgo),
     safeCountTeamsForOwner(user.id),
+    safeOwnContactDefaults(user.id),
   ]);
 
   const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } = actor.entitlements.limits;
@@ -87,6 +105,18 @@ async function toAccount(user: User) {
       limits: actor.entitlements.limits,
     },
     usage: { eventsThisWeek, teamsOwned },
+    /**
+     * The caller's OWN sign-in email and phone, offered so the create-ride form can pre-fill
+     * the optional per-ride contact fields instead of making an organizer retype what the app
+     * already knows. See sql/025-event-contact.sql.
+     *
+     * Safe here and only here: /users/me is self-only and authenticated, so this tells the
+     * caller nothing about themselves they did not already provide. It is NOT profile data and
+     * must never appear on a response describing anybody else — and pre-filling a field is not
+     * publishing. Nothing reaches a ride page unless the organizer saves the ride with the
+     * value still in it.
+     */
+    contactDefaults,
     /** Live grants, for an account screen that can show "Pro until 12 March". */
     grants: actor.entitlements.grants,
   };

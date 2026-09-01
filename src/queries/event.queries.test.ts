@@ -16,9 +16,8 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { selectEventsForUser, selectPublicEvents, updateEventRidePlan } = await import(
-  "./event.queries.js"
-);
+const { selectEventsForUser, selectPublicEvents, updateEventContact, updateEventRidePlan } =
+  await import("./event.queries.js");
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,6 +50,8 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     rest_stops: null,
     is_accessible: false,
     has_support_vehicle: false,
+    contact_phone: null,
+    contact_email: null,
     show_event_info: true,
     show_participants: false,
     show_route: true,
@@ -149,6 +150,21 @@ describe("selectPublicEvents", () => {
     expect(events[0].hasSupportVehicle).toBe(true);
   });
 
+  it("carries published contact details through the mapper, and null when there are none", async () => {
+    query.mockResolvedValueOnce([
+      eventRow({ contact_phone: "050-1234567", contact_email: "ride@example.com" }),
+      eventRow({ id: "no-contact" }),
+    ]);
+    queryOne.mockResolvedValueOnce({ count: "2" });
+
+    const { events } = await selectPublicEvents({ sort: "soonest", limit: 20, offset: 0 });
+
+    expect(events[0].contactPhone).toBe("050-1234567");
+    expect(events[0].contactEmail).toBe("ride@example.com");
+    expect(events[1].contactPhone).toBeNull();
+    expect(events[1].contactEmail).toBeNull();
+  });
+
   it("reads has_support_vehicle as false on a database without sql/024", async () => {
     // `SELECT *` on a database that has not had the migration leaves the key absent, which is
     // exactly what an old ride means: no support vehicle stated.
@@ -208,5 +224,48 @@ describe("updateEventRidePlan", () => {
   it("swallows a missing-column error on a database without sql/022", async () => {
     execute.mockRejectedValueOnce({ code: "42703" });
     await expect(updateEventRidePlan("e1", { durationMin: 60 })).resolves.toBeUndefined();
+  });
+});
+
+describe("updateEventContact", () => {
+  it("writes only the columns the caller passed", async () => {
+    await updateEventContact("e1", { contactPhone: "050-1234567" });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const [sql, values] = execute.mock.calls[0];
+    expect(sql).toMatch(/contact_phone = \$2/);
+    expect(sql).not.toMatch(/contact_email/);
+    expect(values).toEqual(["e1", "050-1234567"]);
+  });
+
+  it("stops publishing a value when passed null", async () => {
+    await updateEventContact("e1", { contactPhone: null, contactEmail: null });
+
+    const [sql, values] = execute.mock.calls[0];
+    expect(sql).toMatch(/contact_phone = \$2/);
+    expect(sql).toMatch(/contact_email = \$3/);
+    expect(values).toEqual(["e1", null, null]);
+  });
+
+  it("no-ops when nothing was passed", async () => {
+    await updateEventContact("e1", {});
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("swallows a missing-column error on a database without sql/025", async () => {
+    execute.mockRejectedValueOnce({ code: "42703" });
+    await expect(updateEventContact("e1", { contactEmail: "a@b.com" })).resolves.toBeUndefined();
+  });
+
+  it("is a SEPARATE statement from the ride plan, so one missing column cannot sink both", async () => {
+    // The whole reason this function exists rather than two more columns on updateEventRidePlan:
+    // a single UPDATE across every column fails entirely on 42703, so a database missing only
+    // the contact columns would silently stop duration and accessibility saving too.
+    await updateEventRidePlan("e1", { durationMin: 90 });
+    await updateEventContact("e1", { contactEmail: "a@b.com" });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[0][0]).not.toMatch(/contact_/);
+    expect(execute.mock.calls[1][0]).not.toMatch(/duration_min/);
   });
 });

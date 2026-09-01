@@ -50,6 +50,8 @@ interface EventRow {
   rest_stops: number | null;
   is_accessible: boolean;
   has_support_vehicle: boolean;
+  contact_phone: string | null;
+  contact_email: string | null;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -143,6 +145,10 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
+    // undefined on a database without sql/025 — reads as "no contact published", which is
+    // what every ride created before this feature existed genuinely is.
+    contactPhone: row.contact_phone ?? null,
+    contactEmail: row.contact_email ?? null,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -595,6 +601,10 @@ export interface UpdateEventInput {
   restStops?: number | null;
   isAccessible?: boolean;
   hasSupportVehicle?: boolean;
+  /** Handled by updateEventContact, NOT the updateEvent SQL below. undefined = leave alone,
+   *  null = stop publishing it. */
+  contactPhone?: string | null;
+  contactEmail?: string | null;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -730,6 +740,47 @@ export async function updateEventRidePlan(
         { err },
         "events ride-plan columns missing — run sql/022-event-ride-plan.sql and sql/024-event-support-vehicle.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes the organizer's published contact details (events.contact_phone / contact_email).
+ *
+ * Deliberately its OWN statement rather than another pair of columns on updateEventRidePlan.
+ * That function builds one UPDATE across every column it was given, so a database missing ANY
+ * of them fails the whole statement with 42703 and the guard swallows all of it — a missing
+ * contact column would silently stop duration and accessibility saving too. Separate
+ * statements mean a partially-migrated database loses only the feature whose column is absent.
+ *
+ * Each key: `undefined` means "leave it alone"; `null` means "stop publishing it". An empty
+ * string never reaches here — the schema normalises it to null, because a field the organizer
+ * cleared and a field they never filled are the same thing.
+ */
+export async function updateEventContact(
+  eventId: string,
+  input: { contactPhone?: string | null; contactEmail?: string | null },
+): Promise<void> {
+  const sets: string[] = [];
+  const values: unknown[] = [eventId];
+
+  if (input.contactPhone !== undefined) {
+    values.push(input.contactPhone);
+    sets.push(`contact_phone = $${values.length}`);
+  }
+  if (input.contactEmail !== undefined) {
+    values.push(input.contactEmail);
+    sets.push(`contact_email = $${values.length}`);
+  }
+  if (sets.length === 0) return;
+
+  try {
+    await execute(`UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`, values);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events contact columns missing — run sql/025-event-contact.sql");
       return;
     }
     throw err;

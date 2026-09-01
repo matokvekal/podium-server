@@ -43,6 +43,7 @@ import {
   type UpdateEventInput,
   updateEvent,
   updateEventElevationGain,
+  updateEventContact,
   updateEventRidePlan,
   updateEventPaused,
   updateEventStatus,
@@ -247,6 +248,10 @@ export async function createEvent(
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
+    /** Contact details the organizer chose to publish for this ride — stored in
+     *  events.contact_phone / contact_email via updateEventContact. undefined = none given. */
+    contactPhone?: string | null;
+    contactEmail?: string | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -321,6 +326,15 @@ export async function createEvent(
       restStops: input.restStops,
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
+    });
+  }
+
+  // Published contact details — its own guarded statement, separate from the ride plan on
+  // purpose (see updateEventContact). Only touched when the request actually carried one.
+  if (input.contactPhone !== undefined || input.contactEmail !== undefined) {
+    await updateEventContact(event.id, {
+      contactPhone: input.contactPhone,
+      contactEmail: input.contactEmail,
     });
   }
 
@@ -514,6 +528,15 @@ export async function updateEventDetails(
     });
   }
 
+  // Contact details — separate guarded statement, same reason as on create.
+  const wroteContact = input.contactPhone !== undefined || input.contactEmail !== undefined;
+  if (wroteContact) {
+    await updateEventContact(eventId, {
+      contactPhone: input.contactPhone,
+      contactEmail: input.contactEmail,
+    });
+  }
+
   logger.info({ eventId, userId }, "event updated");
 
   // `updated` came from updateEvent's RETURNING *, which ran BEFORE the two statements above —
@@ -521,7 +544,7 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteRidePlan) {
+  if (wroteElevation || wroteRidePlan || wroteContact) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }
