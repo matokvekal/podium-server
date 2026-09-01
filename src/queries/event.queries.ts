@@ -49,6 +49,7 @@ interface EventRow {
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
+  has_support_vehicle: boolean;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -139,6 +140,9 @@ function mapEvent(row: EventRow): Event {
     durationMin: row.duration_min ?? null,
     restStops: row.rest_stops ?? null,
     isAccessible: row.is_accessible ?? false,
+    // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
+    // stated", which is the same thing the column itself backfills every existing ride to.
+    hasSupportVehicle: row.has_support_vehicle ?? false,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -590,6 +594,7 @@ export interface UpdateEventInput {
   durationMin?: number | null;
   restStops?: number | null;
   isAccessible?: boolean;
+  hasSupportVehicle?: boolean;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -674,10 +679,11 @@ export async function updateEventElevationGain(
 }
 
 /**
- * Writes the organizer's ride-plan columns (events.duration_min / rest_stops / is_accessible)
- * on their own. Kept separate from insertEvent/updateEvent — exactly like updateEventElevationGain
- * — and guarded against a database that has not had sql/022-event-ride-plan.sql applied yet, so
- * the core create/edit path never depends on the new columns.
+ * Writes the organizer's ride-plan columns (events.duration_min / rest_stops / is_accessible /
+ * has_support_vehicle) on their own. Kept separate from insertEvent/updateEvent — exactly like
+ * updateEventElevationGain — and guarded against a database that has not had
+ * sql/022-event-ride-plan.sql (or sql/024-event-support-vehicle.sql) applied yet, so the core
+ * create/edit path never depends on the new columns.
  *
  * Each key: `undefined` means "leave it alone"; any other value (null included, for
  * duration_min / rest_stops) is written as given. Builds the SET list from only the keys the
@@ -685,7 +691,12 @@ export async function updateEventElevationGain(
  */
 export async function updateEventRidePlan(
   eventId: string,
-  input: { durationMin?: number | null; restStops?: number | null; isAccessible?: boolean },
+  input: {
+    durationMin?: number | null;
+    restStops?: number | null;
+    isAccessible?: boolean;
+    hasSupportVehicle?: boolean;
+  },
 ): Promise<void> {
   const sets: string[] = [];
   const values: unknown[] = [eventId];
@@ -702,6 +713,10 @@ export async function updateEventRidePlan(
     values.push(input.isAccessible);
     sets.push(`is_accessible = $${values.length}`);
   }
+  if (input.hasSupportVehicle !== undefined) {
+    values.push(input.hasSupportVehicle);
+    sets.push(`has_support_vehicle = $${values.length}`);
+  }
   if (sets.length === 0) return;
 
   try {
@@ -711,7 +726,10 @@ export async function updateEventRidePlan(
     );
   } catch (err) {
     if (isMissingColumnError(err)) {
-      logger.warn({ err }, "events ride-plan columns missing — run sql/022-event-ride-plan.sql");
+      logger.warn(
+        { err },
+        "events ride-plan columns missing — run sql/022-event-ride-plan.sql and sql/024-event-support-vehicle.sql",
+      );
       return;
     }
     throw err;

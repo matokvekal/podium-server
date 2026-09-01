@@ -50,6 +50,7 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     duration_min: null,
     rest_stops: null,
     is_accessible: false,
+    has_support_vehicle: false,
     show_event_info: true,
     show_participants: false,
     show_route: true,
@@ -131,7 +132,12 @@ describe("selectPublicEvents", () => {
 
   it("carries the organizer-set ride plan through the mapper", async () => {
     query.mockResolvedValueOnce([
-      eventRow({ duration_min: 165, rest_stops: 2, is_accessible: true }),
+      eventRow({
+        duration_min: 165,
+        rest_stops: 2,
+        is_accessible: true,
+        has_support_vehicle: true,
+      }),
     ]);
     queryOne.mockResolvedValueOnce({ count: "1" });
 
@@ -140,6 +146,20 @@ describe("selectPublicEvents", () => {
     expect(events[0].durationMin).toBe(165);
     expect(events[0].restStops).toBe(2);
     expect(events[0].isAccessible).toBe(true);
+    expect(events[0].hasSupportVehicle).toBe(true);
+  });
+
+  it("reads has_support_vehicle as false on a database without sql/024", async () => {
+    // `SELECT *` on a database that has not had the migration leaves the key absent, which is
+    // exactly what an old ride means: no support vehicle stated.
+    const row = eventRow({});
+    delete (row as Record<string, unknown>).has_support_vehicle;
+    query.mockResolvedValueOnce([row]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    const { events } = await selectPublicEvents({ sort: "soonest", limit: 20, offset: 0 });
+
+    expect(events[0].hasSupportVehicle).toBe(false);
   });
 });
 
@@ -156,13 +176,28 @@ describe("updateEventRidePlan", () => {
   });
 
   it("clears a field when passed null, and sets several at once", async () => {
-    await updateEventRidePlan("e1", { durationMin: null, restStops: 0, isAccessible: true });
+    await updateEventRidePlan("e1", {
+      durationMin: null,
+      restStops: 0,
+      isAccessible: true,
+      hasSupportVehicle: true,
+    });
 
     const [sql, values] = execute.mock.calls[0];
     expect(sql).toMatch(/duration_min = \$2/);
     expect(sql).toMatch(/rest_stops = \$3/);
     expect(sql).toMatch(/is_accessible = \$4/);
-    expect(values).toEqual(["e1", null, 0, true]);
+    expect(sql).toMatch(/has_support_vehicle = \$5/);
+    expect(values).toEqual(["e1", null, 0, true, true]);
+  });
+
+  it("writes has_support_vehicle on its own, including turning it back off", async () => {
+    await updateEventRidePlan("e1", { hasSupportVehicle: false });
+
+    const [sql, values] = execute.mock.calls[0];
+    expect(sql).toMatch(/has_support_vehicle = \$2/);
+    expect(sql).not.toMatch(/duration_min/);
+    expect(values).toEqual(["e1", false]);
   });
 
   it("no-ops when nothing was passed", async () => {

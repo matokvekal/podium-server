@@ -80,6 +80,9 @@ function toEventSummary(event: Event | EventListItem) {
     durationMin: event.durationMin ?? null,
     restStops: event.restStops ?? null,
     isAccessible: event.isAccessible ?? false,
+    // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
+    // wants to see which rides have a vehicle behind them without opening each one.
+    hasSupportVehicle: event.hasSupportVehicle ?? false,
     // Lightweight route + roster summary so a card renders Distance / Elevation / Riders
     // straight from GET /events — no per-card route or participants call, no localStorage
     // dependency. `elevationGain` is the EFFECTIVE climb (organizer's value, else the route's).

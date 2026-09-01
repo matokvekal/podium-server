@@ -241,11 +241,12 @@ export async function createEvent(
     /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
-    /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible
-     *  via updateEventRidePlan. undefined = not set. */
+    /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible /
+     *  has_support_vehicle via updateEventRidePlan. undefined = not set. */
     durationMin?: number | null;
     restStops?: number | null;
     isAccessible?: boolean;
+    hasSupportVehicle?: boolean;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -312,12 +313,14 @@ export async function createEvent(
   if (
     input.durationMin !== undefined ||
     input.restStops !== undefined ||
-    input.isAccessible !== undefined
+    input.isAccessible !== undefined ||
+    input.hasSupportVehicle !== undefined
   ) {
     await updateEventRidePlan(event.id, {
       durationMin: input.durationMin,
       restStops: input.restStops,
       isAccessible: input.isAccessible,
+      hasSupportVehicle: input.hasSupportVehicle,
     });
   }
 
@@ -491,24 +494,37 @@ export async function updateEventDetails(
   // Elevation gain has its own column and its own guarded statement — updateEvent above never
   // touches it. `undefined` means the caller left it out; `null` means "clear it, fall back to
   // the route".
+  const wroteElevation = input.elevationGainM !== undefined;
   if (input.elevationGainM !== undefined) {
     await updateEventElevationGain(eventId, input.elevationGainM);
   }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
-  if (
+  const wroteRidePlan =
     input.durationMin !== undefined ||
     input.restStops !== undefined ||
-    input.isAccessible !== undefined
-  ) {
+    input.isAccessible !== undefined ||
+    input.hasSupportVehicle !== undefined;
+  if (wroteRidePlan) {
     await updateEventRidePlan(eventId, {
       durationMin: input.durationMin,
       restStops: input.restStops,
       isAccessible: input.isAccessible,
+      hasSupportVehicle: input.hasSupportVehicle,
     });
   }
 
   logger.info({ eventId, userId }, "event updated");
+
+  // `updated` came from updateEvent's RETURNING *, which ran BEFORE the two statements above —
+  // so it still carries the pre-edit elevation gain and ride plan. The PATCH reply is what the
+  // client merges into its ride list, so returning that row showed the OLD duration / rest
+  // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
+  // once, and only when one of those separate statements actually ran.
+  if (wroteElevation || wroteRidePlan) {
+    const fresh = await selectEventById(eventId);
+    if (fresh) return fresh;
+  }
   return updated;
 }
 

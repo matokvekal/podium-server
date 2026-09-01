@@ -169,6 +169,13 @@ export interface Event {
   restStops: number | null;
   isAccessible: boolean;
 
+  /**
+   * The organizer states a support / sag vehicle follows the ride — see
+   * sql/024-event-support-vehicle.sql. Defaults false, and false means "not stated" as much as
+   * it means "no": a rider must never plan around a vehicle nobody promised.
+   */
+  hasSupportVehicle: boolean;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;

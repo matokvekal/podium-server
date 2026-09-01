@@ -77,6 +77,11 @@ export const createEventSchema = z.object({
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
   restStops: z.number().int().min(0).max(20).nullable().optional(),
   isAccessible: z.boolean().optional(),
+
+  // The organizer states a support / sag vehicle follows the ride — see
+  // sql/024-event-support-vehicle.sql. Omitted means "not set", which the column stores as
+  // false. Never nullable: unlike duration there is no third state worth keeping.
+  hasSupportVehicle: z.boolean().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -108,6 +113,9 @@ export const updateEventSchema = z.object({
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
   restStops: z.number().int().min(0).max(20).nullable().optional(),
   isAccessible: z.boolean().optional(),
+
+  // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
+  hasSupportVehicle: z.boolean().optional(),
 });
 
 export const changeEventStatusSchema = z.object({
