@@ -66,6 +66,10 @@ function toEventSummary(event: Event | EventListItem) {
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     location: event.location,
+    // Free-text region/area (sql/009-events-area.sql). On the SUMMARY so the edit form
+    // prefills it, the "Find Rides" list can sort by it, and a card can show it — the
+    // client already sends it on create/PATCH and reads it back here.
+    area: event.area,
     ownerId: event.ownerId,
     // On the SUMMARY, not just the detail: these are exactly what a rider filters and scans
     // the "Find Rides" list by, and a list must not need a detail call per card to show them.
@@ -128,6 +132,7 @@ function toEventDetail(
     startsAt: canSeeInfo ? summary.startsAt : null,
     endsAt: canSeeInfo ? summary.endsAt : null,
     location: canSeeInfo ? summary.location : null,
+    area: canSeeInfo ? summary.area : null,
     requiresBib: event.requiresBib,
     description: canSeeInfo ? event.description : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
