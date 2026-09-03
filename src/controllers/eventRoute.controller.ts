@@ -7,11 +7,18 @@
 import type { NextFunction, Request, Response } from "express";
 import { traceLog } from "../lib/trace-log.js";
 import { eventIdParamSchema } from "../schemas/event.schemas.js";
-import { attachRouteSchema, setEventRouteSchema } from "../schemas/eventRoute.schemas.js";
+import {
+  attachRouteSchema,
+  copyRouteFromEventSchema,
+  eventRouteQuerySchema,
+  setEventRouteSchema,
+} from "../schemas/eventRoute.schemas.js";
 import {
   attachLibraryRouteToEvent,
+  copyTrackFromEvent,
   detachRouteFromEvent,
   getEventRouteGeometry,
+  getEventRouteWithUsage,
   setEventRouteFromPoints,
 } from "../services/eventRoute.service.js";
 import { toRouteSummary } from "./routeLibrary.controller.js";
@@ -21,12 +28,19 @@ import { toRouteSummary } from "./routeLibrary.controller.js";
 // 200 with { data: EventRoute } once a route is set, or { data: null } before one ever is —
 // "no route" is a normal state, not a 404. Same { data } envelope every other single-resource
 // read in this codebase uses (see toEventDetail, toParticipantSummary).
+//
+// `?preview=1` adds one field, `usedByRides` — the number of rides built on this track, which
+// the track gallery shows as "Downloads". WITHOUT the parameter the body is byte-identical to
+// what this endpoint has always returned; that path is a live PWA contract and does not move.
 export async function getEventRouteController(req: Request, res: Response, next: NextFunction) {
   try {
     const { eventId } = eventIdParamSchema.parse(req.params);
+    const { preview } = eventRouteQuerySchema.parse(req.query);
     const viewerId = req.auth?.userId ?? null;
-    traceLog("eventRoute.controller.getEventRouteController", { eventId, viewerId });
-    const route = await getEventRouteGeometry(eventId, viewerId);
+    traceLog("eventRoute.controller.getEventRouteController", { eventId, viewerId, preview });
+    const route = preview
+      ? await getEventRouteWithUsage(eventId, viewerId)
+      : await getEventRouteGeometry(eventId, viewerId);
     res.status(200).json({ data: route });
   } catch (err) {
     next(err);
@@ -35,16 +49,40 @@ export async function getEventRouteController(req: Request, res: Response, next:
 
 // POST /api/v1/events/:eventId/route
 //
-// One endpoint, two request bodies, two different responses — kept exactly as the clients
-// already send them:
+// One endpoint, three request bodies, kept exactly as the clients already send them:
 //
-//   { routeId }                        -> attach an existing library route
+//   { sourceEventId }                  -> copy the track from that ride: attaches THAT ride's
+//                                         own route row, records the copy, stamps the lineage
+//                                         -> 200 { data: RouteSummary }
+//   { routeId }                        -> attach an existing library route (Find Tracks)
 //                                         -> 200 { data: RouteSummary }
 //   { points, distanceKm, elevationM } -> store a drawn/imported line, then attach it
 //                                         -> 200 { data: { points, distanceKm, elevationM } }
+//
+// The first is new; the other two are untouched and answer exactly what they always did. Both
+// copy branches return the same RouteSummary shape, so a client does not have to care which of
+// the two it used.
 export async function setEventRouteController(req: Request, res: Response, next: NextFunction) {
   try {
     const { eventId } = eventIdParamSchema.parse(req.params);
+
+    if (
+      req.body &&
+      typeof req.body === "object" &&
+      // Object.hasOwn, not the hasOwnProperty.call below it: same test, and the form biome
+      // wants. The existing branch is left exactly as it was rather than reformatted here.
+      Object.hasOwn(req.body, "sourceEventId")
+    ) {
+      const { sourceEventId } = copyRouteFromEventSchema.parse(req.body);
+      traceLog("eventRoute.controller.setEventRouteController", {
+        eventId,
+        sourceEventId,
+        userId: req.auth!.userId,
+      });
+      const route = await copyTrackFromEvent(eventId, req.auth!.userId, sourceEventId);
+      res.status(200).json({ data: toRouteSummary(route) });
+      return;
+    }
 
     if (
       req.body &&

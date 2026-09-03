@@ -167,6 +167,21 @@ function toEventDetail(
      *  populated — they are headline figures, not the line. */
     distanceKm: route?.distanceKm ?? null,
     elevationGain: event.elevationGainM ?? route?.elevationM ?? null,
+    /**
+     * Where this ride's track came from — sql/025-track-copy-lineage.sql. Both null for a track
+     * uploaded or drawn; route id only for one picked out of Find Tracks, where there is no
+     * source ride.
+     *
+     * On the DETAIL payload, not the summary: it is a line on the ride's own page, not
+     * something a list card shows. Deliberately not gated on canSeeInfo — crediting whose ride
+     * a track came from is the point, and it reveals nothing the track itself does not.
+     *
+     * `copiedFromEventId` may name a ride that is gone. That is a normal end state, not a
+     * dangling reference: the ride and the track are separate entities and the record outlives
+     * the ride. The client renders the credit as plain text when it no longer resolves.
+     */
+    copiedFromEventId: event.copiedFromEventId ?? null,
+    copiedFromRouteId: event.copiedFromRouteId ?? null,
     /** Who is running this ride. Until now the payload carried only `ownerId`, so the client
      *  displayed a fake name invented from the event id (event-visuals.ts's mockOrganizerName)
      *  — every ride in the app showed an organizer who does not exist. */

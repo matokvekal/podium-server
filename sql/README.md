@@ -77,6 +77,9 @@ be. Do not re-run `019`.
 | `021-events-elevation-gain.sql` | `events.elevation_gain_m` — the organizer's authoritative elevation-gain value (GPX import or manual), independent of any route; reads expose `COALESCE(this, route.elevation_m)`. Every existing row is `NULL` and unchanged | yes — additive |
 | `022-event-ride-plan.sql` | `events.duration_min` / `rest_stops` / `is_accessible` — organizer-set ride plan: expected time, number of rest/regroup stops, accessibility marker. Existing rows: `duration_min`/`rest_stops` `NULL`, `is_accessible` `FALSE` | yes — additive |
 | `023-production-schema-gaps.sql` | the parts of 011 and 014 never applied to production (renumbered from 020 on merge) | yes — additive |
+| `024-event-support-vehicle.sql` | `events.has_support_vehicle` — organizer-set flag for a sag/support vehicle following the ride. Every existing row is `FALSE` | yes — additive |
+| `025-track-copy-lineage.sql` | `events.copied_from_event_id` / `copied_from_route_id` + the append-only `route_copies` ledger + `idx_event_routes_route`. Records which ride a track was copied from, and how many rides have been built on a track. Touches no existing row | yes — additive, new table starts empty |
+| `026-route-copies-backfill.sql` | seeds `route_copies` from the reuse already in `event_routes`. ⚠ **writes data** — run right after 025 while the table is empty, so the undo is `DELETE FROM route_copies`. Optional; without it every track starts at 0 | yes — `ON CONFLICT DO NOTHING`, insert-only |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

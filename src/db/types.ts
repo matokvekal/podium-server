@@ -176,6 +176,19 @@ export interface Event {
    */
   hasSupportVehicle: boolean;
 
+  /**
+   * Where this ride's track came from — see sql/025-track-copy-lineage.sql.
+   *
+   * Copied from another ride: both set. Picked from Find Tracks: only the route id, because
+   * there is no source ride in that flow. Track uploaded or drawn: both null.
+   *
+   * `copiedFromEventId` may name a ride that has since been cancelled or gone. That is not a
+   * broken reference — the ride and the track are separate entities, and the record of where a
+   * track came from outlives the ride it came from. Nothing here may assume it still resolves.
+   */
+  copiedFromEventId: string | null;
+  copiedFromRouteId: number | null;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;

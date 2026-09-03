@@ -50,6 +50,8 @@ interface EventRow {
   rest_stops: number | null;
   is_accessible: boolean;
   has_support_vehicle: boolean;
+  copied_from_event_id: string | null;
+  copied_from_route_id: number | null;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -143,6 +145,10 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
+    // undefined on a database without sql/025 — reads as null, i.e. "not copied from anywhere",
+    // which is also what every ride whose track was uploaded or drawn genuinely is.
+    copiedFromEventId: row.copied_from_event_id ?? null,
+    copiedFromRouteId: row.copied_from_route_id ?? null,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -730,6 +736,40 @@ export async function updateEventRidePlan(
         { err },
         "events ride-plan columns missing — run sql/022-event-ride-plan.sql and sql/024-event-support-vehicle.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Stamps where this ride's track came from — see sql/025-track-copy-lineage.sql.
+ *
+ * Kept separate from insertEvent/updateEvent for the same two reasons updateEventRidePlan is:
+ * the create path must not depend on a column that may not exist yet, and a missing column here
+ * must degrade rather than fail. If sql/025 has not been applied, this warns and returns — the
+ * track still attaches, the lineage just does not persist. Nothing a rider did is lost.
+ *
+ * `sourceEventId` is null for a track picked from Find Tracks: no source ride exists in that
+ * flow, and null is the honest answer rather than a fabricated id.
+ */
+export async function updateEventCopiedFrom(
+  eventId: string,
+  sourceEventId: string | null,
+  routeId: number,
+): Promise<void> {
+  try {
+    await execute(
+      `UPDATE events
+          SET copied_from_event_id = $2,
+              copied_from_route_id = $3,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [eventId, sourceEventId, routeId],
+    );
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err, eventId }, "events lineage columns missing — run sql/025-track-copy-lineage.sql");
       return;
     }
     throw err;

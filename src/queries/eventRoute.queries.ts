@@ -54,10 +54,51 @@ export interface EventRoute {
   elevationM: number | null;
 }
 
+/**
+ * Defensive read-side normalizer for the two-shapes problem described at the top of this file.
+ *
+ * `routes.track_points` genuinely holds both shapes: tuples [lat, lng] from insertDrawnRouteRow
+ * below, objects {lat, lng, ele} from routeLibrary's insertRoute. This projection casts to
+ * tuples, so an object-shaped route reaching GET /events/:eventId/route would hand the client
+ * objects where its EventRoute type expects tuples — and the map would render nothing, with no
+ * error anywhere to say why.
+ *
+ * It has never fired: nothing calls POST /routes today, so every stored row is tuple-shaped.
+ * But "copy a track from another ride" now ATTACHES the original row instead of forking a fresh
+ * tuple-shaped one, which means this read path can reach rows it never used to. Normalizing on
+ * read costs one type check per point and removes the trap, rather than betting the feature on
+ * the bug staying latent.
+ *
+ * Read-only: stored data is untouched, and this is a no-op for every row that exists today.
+ */
+function toRoutePoint(point: unknown): RoutePoint | null {
+  if (Array.isArray(point)) {
+    const [lat, lng] = point as [unknown, unknown];
+    return typeof lat === "number" && typeof lng === "number" ? [lat, lng] : null;
+  }
+  if (typeof point === "object" && point !== null) {
+    const { lat, lng } = point as { lat?: unknown; lng?: unknown };
+    return typeof lat === "number" && typeof lng === "number" ? [lat, lng] : null;
+  }
+  return null;
+}
+
+function normalizePoints(points: RoutePoint[] | null): RoutePoint[] {
+  if (!points) return [];
+  const normalized: RoutePoint[] = [];
+  for (const point of points) {
+    const tuple = toRoutePoint(point);
+    // A point in neither shape is dropped rather than passed through as garbage the client
+    // would try to draw. Dropping one point thins a line; passing it on breaks the map.
+    if (tuple) normalized.push(tuple);
+  }
+  return normalized;
+}
+
 function mapStoredRoute(row: RouteRow): StoredRoute {
   return {
     id: row.id,
-    points: row.track_points ?? [],
+    points: normalizePoints(row.track_points),
     // distance_km is nullable at the column level (the table also serves file-derived routes
     // with no known distance yet), but this module always supplies one on insert.
     distanceKm: row.distance_km ?? 0,
@@ -139,6 +180,28 @@ export async function selectEventRouteGeometry(eventId: string): Promise<EventRo
     [eventId],
   );
   return row ? mapEventRoute(row) : null;
+}
+
+/**
+ * Just the id of the track attached to an event — no geometry, no owner join.
+ *
+ * This is what "copy the track from another ride" needs: the source ride's route id, so the new
+ * ride can attach that same row (copyTrackFromEvent). Selecting the full geometry to throw all
+ * of it away would move ~116 KB of JSON per copy for one BIGINT.
+ *
+ * Newest link wins, same ordering as selectEventRouteGeometry — only reachable if V1's
+ * one-route-per-event invariant is violated out from under this code.
+ */
+export async function selectEventRouteId(eventId: string): Promise<number | null> {
+  const row = await queryOne<{ route_id: number }>(
+    `SELECT er.route_id
+       FROM event_routes er
+      WHERE er.event_id = $1
+      ORDER BY er.created_at DESC
+      LIMIT 1`,
+    [eventId],
+  );
+  return row?.route_id ?? null;
 }
 
 /**

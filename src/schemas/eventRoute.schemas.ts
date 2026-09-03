@@ -31,3 +31,27 @@ export type SetEventRouteInput = z.infer<typeof setEventRouteSchema>;
 export const attachRouteSchema = z.object({
   routeId: z.number().int().positive(),
 });
+
+/**
+ * The third accepted body: "copy the track from THAT ride". The server resolves the source
+ * ride's track itself and attaches that same row.
+ *
+ * Why the source RIDE id and not the resolved route id, when the client could look it up:
+ * the attach, the copy-ledger row and the lineage stamp then all happen inside one request the
+ * client cannot half-complete, and GET /events/:eventId/route keeps its exact current response
+ * shape — it is a live PWA contract and adding a routeId to it would move it.
+ */
+export const copyRouteFromEventSchema = z.object({
+  sourceEventId: z.string().uuid(),
+});
+
+/**
+ * Query for GET /events/:eventId/route. `preview=1` asks for the track-gallery shape — the
+ * geometry plus `usedByRides`, the count of rides built on this track.
+ *
+ * Everything is optional and unknown values are ignored: the parameter is additive, and a
+ * request without it must get back exactly the body it got before this existed.
+ */
+export const eventRouteQuerySchema = z.object({
+  preview: z.string().optional(),
+});
