@@ -242,11 +242,12 @@ export async function createEvent(
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
     /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible /
-     *  has_support_vehicle via updateEventRidePlan. undefined = not set. */
+     *  has_support_vehicle / expected_participants via updateEventRidePlan. undefined = not set. */
     durationMin?: number | null;
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
+    expectedParticipants?: number | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -321,13 +322,15 @@ export async function createEvent(
     input.durationMin !== undefined ||
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
-    input.hasSupportVehicle !== undefined
+    input.hasSupportVehicle !== undefined ||
+    input.expectedParticipants !== undefined
   ) {
     await updateEventRidePlan(event.id, {
       durationMin: input.durationMin,
       restStops: input.restStops,
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
+      expectedParticipants: input.expectedParticipants,
     });
   }
 
@@ -511,13 +514,15 @@ export async function updateEventDetails(
     input.durationMin !== undefined ||
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
-    input.hasSupportVehicle !== undefined;
+    input.hasSupportVehicle !== undefined ||
+    input.expectedParticipants !== undefined;
   if (wroteRidePlan) {
     await updateEventRidePlan(eventId, {
       durationMin: input.durationMin,
       restStops: input.restStops,
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
+      expectedParticipants: input.expectedParticipants,
     });
   }
 

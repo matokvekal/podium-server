@@ -82,6 +82,11 @@ export const createEventSchema = z.object({
   // sql/024-event-support-vehicle.sql. Omitted means "not set", which the column stores as
   // false. Never nullable: unlike duration there is no third state worth keeping.
   hasSupportVehicle: z.boolean().optional(),
+
+  // How many riders the organizer expects — see sql/028-events-expected-participants.sql. `null`
+  // (or omitted) means "not stated"; a positive number sets it. NOT a capacity — the plan limit
+  // is the real ceiling and is never sent to viewers.
+  expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -116,6 +121,9 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
   hasSupportVehicle: z.boolean().optional(),
+
+  // See createEventSchema. `null` clears it; omitted leaves it untouched.
+  expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
 });
 
 export const changeEventStatusSchema = z.object({

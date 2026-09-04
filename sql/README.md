@@ -81,6 +81,7 @@ be. Do not re-run `019`.
 | `025-track-copy-lineage.sql` | `events.copied_from_event_id` / `copied_from_route_id` + the append-only `route_copies` ledger + `idx_event_routes_route`. Records which ride a track was copied from, and how many rides have been built on a track. Touches no existing row | yes — additive, new table starts empty |
 | `026-route-copies-backfill.sql` | seeds `route_copies` from the reuse already in `event_routes`. ⚠ **writes data** — run right after 025 while the table is empty, so the undo is `DELETE FROM route_copies`. Optional; without it every track starts at 0 | yes — `ON CONFLICT DO NOTHING`, insert-only |
 | `027-create-events-feature.sql` | no schema change — writes `entitlement_grants` rows for the new `create_events` feature. ⚠ **behaviour change**: with the code that ships alongside, ride creation stops being free and must be granted per account (a paid organizer plan, or a `manual` grant). Seeds the product owner; a copy-paste template grants others | yes — insert-only, `NOT EXISTS`-guarded, re-runnable |
+| `028-events-expected-participants.sql` | `events.expected_participants` (nullable INT) — the organizer's turnout estimate, shown on the event page as "12 / 40" only when set. Replaces showing the plan's participant cap to viewers. Every existing row `NULL`, unchanged | yes — additive, `IF NOT EXISTS` |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

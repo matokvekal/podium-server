@@ -170,6 +170,15 @@ export interface Event {
   isAccessible: boolean;
 
   /**
+   * How many riders the organizer EXPECTS — a number they type on the create form, or null
+   * when they left it blank. Purely informational: the event page shows "12 / 40" only when it
+   * is set. It is NOT the capacity — that ceiling is the organizer's plan limit
+   * (user_limits.participants_per_event), enforced server-side and never shown to viewers.
+   * See sql/028-events-expected-participants.sql.
+   */
+  expectedParticipants: number | null;
+
+  /**
    * The organizer states a support / sag vehicle follows the ride — see
    * sql/024-event-support-vehicle.sql. Defaults false, and false means "not stated" as much as
    * it means "no": a rider must never plan around a vehicle nobody promised.

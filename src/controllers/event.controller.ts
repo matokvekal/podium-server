@@ -87,6 +87,10 @@ function toEventSummary(event: Event | EventListItem) {
     // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
     // wants to see which rides have a vehicle behind them without opening each one.
     hasSupportVehicle: event.hasSupportVehicle ?? false,
+    // The organizer's expected head-count, or null when they left it blank. On the SUMMARY so a
+    // card can show "12 / 40" without a detail call. NOT the capacity — the plan's
+    // participants-per-event ceiling is never serialised to a viewer.
+    expectedParticipants: event.expectedParticipants ?? null,
     // Lightweight route + roster summary so a card renders Distance / Elevation / Riders
     // straight from GET /events — no per-card route or participants call, no localStorage
     // dependency. `elevationGain` is the EFFECTIVE climb (organizer's value, else the route's).

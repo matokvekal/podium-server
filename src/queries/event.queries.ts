@@ -50,6 +50,7 @@ interface EventRow {
   rest_stops: number | null;
   is_accessible: boolean;
   has_support_vehicle: boolean;
+  expected_participants: number | null;
   copied_from_event_id: string | null;
   copied_from_route_id: number | null;
   show_event_info: boolean;
@@ -145,6 +146,9 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
+    // undefined on a database without sql/028 — reads as null, i.e. "the organizer stated no
+    // expected number", exactly what a blank field means.
+    expectedParticipants: row.expected_participants ?? null,
     // undefined on a database without sql/025 — reads as null, i.e. "not copied from anywhere",
     // which is also what every ride whose track was uploaded or drawn genuinely is.
     copiedFromEventId: row.copied_from_event_id ?? null,
@@ -596,11 +600,12 @@ export interface UpdateEventInput {
    *  null = clear. */
   elevationGainM?: number | null;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
-   *  a value (null included, for duration/restStops) = set it. */
+   *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
   restStops?: number | null;
   isAccessible?: boolean;
   hasSupportVehicle?: boolean;
+  expectedParticipants?: number | null;
 }
 
 /** Partial update — COALESCE keeps the stored value for anything the caller left out. */
@@ -702,6 +707,7 @@ export async function updateEventRidePlan(
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
+    expectedParticipants?: number | null;
   },
 ): Promise<void> {
   const sets: string[] = [];
@@ -723,6 +729,10 @@ export async function updateEventRidePlan(
     values.push(input.hasSupportVehicle);
     sets.push(`has_support_vehicle = $${values.length}`);
   }
+  if (input.expectedParticipants !== undefined) {
+    values.push(input.expectedParticipants);
+    sets.push(`expected_participants = $${values.length}`);
+  }
   if (sets.length === 0) return;
 
   try {
@@ -734,7 +744,7 @@ export async function updateEventRidePlan(
     if (isMissingColumnError(err)) {
       logger.warn(
         { err },
-        "events ride-plan columns missing — run sql/022-event-ride-plan.sql and sql/024-event-support-vehicle.sql",
+        "events ride-plan columns missing — run sql/022-event-ride-plan.sql, sql/024-event-support-vehicle.sql and sql/028-events-expected-participants.sql",
       );
       return;
     }
