@@ -60,6 +60,14 @@ export type Capability = AccountCapability | EventCapability | TeamCapability;
  */
 export const FEATURES = [
   "private_events",
+  /**
+   * May create rides at all. OFF for the free plan on purpose: ride creation is opened
+   * deliberately, one account at a time, until a self-serve path exists. Granted either by a
+   * paid organizer plan (organizer_pro / club include it) or by a single manual feature grant
+   * (`entitlement_grants` with `source = 'manual'`). It gates `event:create`, and — together
+   * with `private_events` — `event:create_private`.
+   */
+  "create_events",
   /** Co-organizers on an event — event_members.role = 'operator'. */
   "co_organizers",
   /** Reserved: splits, category scoring, exports. Nothing reads it yet. */

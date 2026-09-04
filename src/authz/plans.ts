@@ -71,7 +71,7 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
       maxGroupsPerEvent: 10,
       maxTeamsPerOwner: 5,
     },
-    features: ["private_events", "advanced_results"],
+    features: ["create_events", "private_events", "advanced_results"],
   },
 
   club: {
@@ -86,7 +86,7 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
     },
     // "Multiple admins, many events, large groups and advanced management." Defined so the
     // policy already honours it; nothing sells it yet.
-    features: ["private_events", "advanced_results", "co_organizers"],
+    features: ["create_events", "private_events", "advanced_results", "co_organizers"],
   },
 };
 

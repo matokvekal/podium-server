@@ -95,6 +95,33 @@ describe("resolveEntitlements — user_limits is the only source of the numbers"
     expect(result.features.has("advanced_results")).toBe(true);
   });
 
+  it("surfaces a manual create_events feature grant on a free account", async () => {
+    // The organizer-access path: a free user (no plan grant) handed the create_events feature
+    // by hand. It must land in `features` so canAccount(event:create) passes.
+    query.mockResolvedValue([
+      {
+        id: 7,
+        user_id: 42,
+        plan_code: null,
+        feature: "create_events",
+        quantity: null,
+        consumed: 0,
+        scope_type: null,
+        scope_id: null,
+        source: "manual",
+        source_ref: "organizer-access:launch",
+        starts_at: new Date(0),
+        expires_at: null,
+      },
+    ]);
+    limitsQuery.mockResolvedValue(FREE_ROW);
+
+    const result = await resolveEntitlements(42);
+
+    expect(result.plan.code).toBe("free");
+    expect(result.features.has("create_events")).toBe(true);
+  });
+
   it("propagates UserLimitsNotFoundError instead of substituting a default", async () => {
     limitsQuery.mockRejectedValueOnce(new UserLimitsNotFoundError(42));
 

@@ -183,7 +183,6 @@ export function canAccount(actor: Actor, capability: AccountCapability): boolean
   if (!isSignedIn(actor)) return false; // every account capability needs an identity
 
   switch (capability) {
-    case "event:create":
     case "team:create":
     case "route:create":
     case "route:publish":
@@ -192,10 +191,21 @@ export function canAccount(actor: Actor, capability: AccountCapability): boolean
       // a capability answers "may you", a limit answers "how many more".
       return true;
 
+    case "event:create":
+      // NOT free: ride creation is opened deliberately, one account at a time, until a
+      // self-serve path exists. A paid organizer plan includes `create_events`; otherwise it
+      // is a single manual feature grant. Scale on top of that is still a limit, checked at
+      // the point of creation.
+      return actor.entitlements.features.has("create_events");
+
     case "event:create_private":
-      // The first sellable capability. Satisfied by a plan feature OR by a consumable credit
-      // from a one-time purchase — the policy does not care which, and neither does the caller.
-      return actor.entitlements.features.has("private_events");
+      // The first sellable capability, and it still presupposes being allowed to create a
+      // ride at all. `private_events` may come from a plan OR a consumable one-time credit —
+      // the policy does not care which, and neither does the caller.
+      return (
+        actor.entitlements.features.has("create_events") &&
+        actor.entitlements.features.has("private_events")
+      );
 
     default: {
       const never: never = capability;

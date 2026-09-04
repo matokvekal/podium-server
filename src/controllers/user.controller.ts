@@ -69,10 +69,18 @@ async function toAccount(user: User) {
   ]);
 
   const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } = actor.entitlements.limits;
+  const capabilities = accountCapabilitiesFor(actor, ACCOUNT_CAPABILITIES);
 
   return {
     ...toProfile(user),
-    capabilities: accountCapabilitiesFor(actor, ACCOUNT_CAPABILITIES),
+    capabilities,
+    /**
+     * Flattened for the client's "I also organize events" switch — it is exactly
+     * `capabilities.includes("event:create")`, surfaced as a boolean so a client does not have
+     * to know the capability catalogue to gate its organizer UI. The server still enforces the
+     * real check (403 on POST /events).
+     */
+    canOrganize: capabilities.includes("event:create"),
     /**
      * The authoritative per-user limits (user_entitlements folded onto the plan). Top-level and
      * teams-free so a client can mirror exactly what the server enforces on create / join /

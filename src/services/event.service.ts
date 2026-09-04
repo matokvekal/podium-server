@@ -10,7 +10,7 @@ import type {
   RegistrationStatus,
   RiderLevel,
 } from "../db/types.js";
-import { buildActor, buildEventContext, denyFeature } from "../authz/actor.js";
+import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
 import { assertWithinEventsPerWeek } from "../authz/limits.js";
 import type { Actor, EventContext } from "../authz/policy.js";
@@ -250,6 +250,13 @@ export async function createEvent(
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
+
+  // "May this account create rides at all" — opened deliberately per account (a paid organizer
+  // plan, or a manual `create_events` grant). Checked before the weekly limit: a gated account
+  // has no ceiling to be under, it simply cannot create.
+  if (!canAccount(actor, "event:create")) {
+    denyForbidden("Ride creation isn't enabled for this account yet");
+  }
 
   // Rolling 7 days rather than a calendar week — "3 this week" must not reset to zero every
   // Monday morning for someone who created 3 on Sunday.
