@@ -9,6 +9,7 @@
 import type { EffectiveLimits } from "../config/plan-limits.js";
 import { query, type Transaction, withTransaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
+import { isAppFlagOn } from "../queries/appFlags.queries.js";
 import { applyPlanLimitsTx, selectUserLimitsOrThrow } from "../queries/userLimits.queries.js";
 import type { Feature } from "./capabilities.js";
 import { FEATURES } from "./capabilities.js";
@@ -109,14 +110,22 @@ export async function resolveEntitlements(userId: number | null): Promise<Entitl
   // and what has been set for them SPECIFICALLY (user_limits). But they answer DIFFERENT
   // questions: grants decide the plan label and the feature set, user_limits decides the
   // numbers and is the only thing consulted for them.
-  const [rows, limits] = await Promise.all([
+  const [rows, limits, creationOpenToAll] = await Promise.all([
     selectLiveGrants(userId),
     selectUserLimitsOrThrow(userId),
+    // A single global switch an operator flips in psql — sql/029-app-flags.sql. When on, ride
+    // creation is open to everyone exactly as it was before sql/027 gated it.
+    isAppFlagOn("event_creation_open_to_all"),
   ]);
 
   const activePlans: PlanDefinition[] = [];
   const features = new Set<Feature>();
   const grants: GrantSummary[] = [];
+
+  // The global "open to all" switch grants create_events to every signed-in account, on top of
+  // whatever their plan and grants already give them. Turning it off later removes only this
+  // blanket access — a per-account create_events grant is untouched.
+  if (creationOpenToAll) features.add("create_events");
 
   for (const row of rows) {
     grants.push({

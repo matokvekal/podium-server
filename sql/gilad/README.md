@@ -11,11 +11,33 @@ Two separate systems, do not confuse them:
 
 | Question | Table | Changed by |
 |---|---|---|
-| **May this account create rides at all?** | `entitlement_grants` (feature `create_events`) | a grant row, or a paid plan |
+| **May this account create rides at all?** | `entitlement_grants` (feature `create_events`) | a grant row, or a paid plan, or the global switch (§1a) |
 | **How many rides / riders / groups / teams?** | `user_limits` (4 `NOT NULL` columns) | a direct `UPDATE` |
 
 `user_limits` is the ONLY thing the request path reads for the numbers. A plan grant does
 **not** move those numbers unless it went through the app — see [§5](#5-plans).
+
+---
+
+## 1a. Open ride creation to EVERYONE (or close it again)  ⭐ the global switch
+
+One flag in `app_flags` (sql/029). Flip it, no deploy, no restart — it takes effect within
+~30s (a read cache), on every account including ones that sign up while it is open.
+
+```sql
+-- OPEN: every signed-in account can create rides, and the "I also organize events" switch
+-- shows for everyone — exactly how it worked before the per-account gate.
+UPDATE app_flags SET value = 'true',  updated_at = NOW() WHERE key = 'event_creation_open_to_all';
+
+-- CLOSE: back to per-account. Only the blanket access goes — every individual create_events
+-- grant from §1 keeps working. Accounts that got in ONLY via the open window lose creation.
+UPDATE app_flags SET value = 'false', updated_at = NOW() WHERE key = 'event_creation_open_to_all';
+
+-- check it
+SELECT key, value, updated_at FROM app_flags WHERE key = 'event_creation_open_to_all';
+```
+
+Use §1 below to grant individuals (the ones who ask you) while the switch is closed.
 
 ---
 

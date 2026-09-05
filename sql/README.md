@@ -82,6 +82,7 @@ be. Do not re-run `019`.
 | `026-route-copies-backfill.sql` | seeds `route_copies` from the reuse already in `event_routes`. ⚠ **writes data** — run right after 025 while the table is empty, so the undo is `DELETE FROM route_copies`. Optional; without it every track starts at 0 | yes — `ON CONFLICT DO NOTHING`, insert-only |
 | `027-create-events-feature.sql` | no schema change — writes `entitlement_grants` rows for the new `create_events` feature. ⚠ **behaviour change**: with the code that ships alongside, ride creation stops being free and must be granted per account (a paid organizer plan, or a `manual` grant). Seeds the product owner; a copy-paste template grants others | yes — insert-only, `NOT EXISTS`-guarded, re-runnable |
 | `028-events-expected-participants.sql` | `events.expected_participants` (nullable INT) — the organizer's turnout estimate, shown on the event page as "12 / 40" only when set. Replaces showing the plan's participant cap to viewers. Every existing row `NULL`, unchanged | yes — additive, `IF NOT EXISTS` |
+| `029-app-flags.sql` | `app_flags` key/value table for operator-flipped global switches. Seeds `event_creation_open_to_all` (`'false'`) — flip to `'true'` to open ride creation to every account, no deploy. Read by `src/authz/entitlements.ts` (30s cache) | yes — new table, `DO NOTHING` seed |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

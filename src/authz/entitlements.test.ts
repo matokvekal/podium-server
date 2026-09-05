@@ -31,6 +31,7 @@ const { grantEntitlement, resolveEntitlements, syncUserLimitsFromGrantsTx } = aw
   "./entitlements.js"
 );
 const { UserLimitsNotFoundError } = await import("../queries/userLimits.queries.js");
+const { clearAppFlagCache } = await import("../queries/appFlags.queries.js");
 
 const FREE_ROW = {
   maxEventsPerWeek: 3,
@@ -45,6 +46,7 @@ beforeEach(() => {
   txQueryOne.mockReset().mockResolvedValue({ id: 1 });
   limitsQuery.mockReset().mockResolvedValue(FREE_ROW);
   applyPlanLimits.mockReset().mockResolvedValue(undefined);
+  clearAppFlagCache();
 });
 
 describe("resolveEntitlements — user_limits is the only source of the numbers", () => {
@@ -120,6 +122,29 @@ describe("resolveEntitlements — user_limits is the only source of the numbers"
 
     expect(result.plan.code).toBe("free");
     expect(result.features.has("create_events")).toBe(true);
+  });
+
+  it("the event_creation_open_to_all flag grants create_events to everyone", async () => {
+    // No grants at all — a plain free account. The only thing on is the global switch.
+    query.mockImplementation(async (sql: string) =>
+      sql.includes("app_flags") ? [{ value: "true" }] : [],
+    );
+    limitsQuery.mockResolvedValue(FREE_ROW);
+
+    const result = await resolveEntitlements(42);
+
+    expect(result.plan.code).toBe("free");
+    expect(result.features.has("create_events")).toBe(true);
+  });
+
+  it("does NOT grant create_events when the flag is off / unset", async () => {
+    query.mockImplementation(async (sql: string) =>
+      sql.includes("app_flags") ? [] : [],
+    );
+
+    const result = await resolveEntitlements(42);
+
+    expect(result.features.has("create_events")).toBe(false);
   });
 
   it("propagates UserLimitsNotFoundError instead of substituting a default", async () => {
