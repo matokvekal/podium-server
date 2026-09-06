@@ -111,7 +111,10 @@ function toEventSummary(event: Event | EventListItem) {
  * ride" — which is exactly what an unapproved rider must not have. Name, type and status
  * stay visible for everyone, so a pending rider still sees which ride they are waiting on.
  */
-function toEventDetail(
+/** Exported as a test seam — controllers/event.controller.test.ts pins the owner-only
+ *  redaction of the account ceilings, which is a privacy rule and not an implementation
+ *  detail. Nothing outside this module and that test should call it. */
+export function toEventDetail(
   event: Event,
   viewerId: number | null,
   myParticipant: EventParticipant | null = null,
@@ -131,6 +134,10 @@ function toEventDetail(
   canSeeRouteGeometry = true,
 ) {
   const canSeeInfo = canSeeInfoOverride ?? true;
+  // Decided once: it answers `isOwner` AND gates the account ceilings below, and those two must
+  // never disagree — a viewer told `isOwner: false` who still receives a cap is the leak this
+  // guards against.
+  const viewerIsOwner = event.ownerId === viewerId;
   const summary = toEventSummary(event);
   return {
     ...summary,
@@ -157,7 +164,7 @@ function toEventDetail(
     finishedAt: event.finishedAt,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
-    isOwner: event.ownerId === viewerId,
+    isOwner: viewerIsOwner,
     requiresApproval: event.requiresApproval,
     isPaused: event.isPaused,
     effectiveStatus: computeEffectiveStatus(event),
@@ -217,18 +224,26 @@ function toEventDetail(
         }
       : null,
     /**
-     * Start-list occupancy and ride-group counts, both against the EVENT OWNER's entitlement
-     * (user_entitlements folded onto their plan). `participantCount` = approved + still-pending
-     * riders — the same rule the join path enforces. Additive; a client that ignores these is
-     * unaffected. Defaults are the free tier (50 riders, 2 groups) when capacity was not
-     * resolved for this call.
+     * Start-list occupancy, against the EVENT OWNER's entitlement. `participantCount` =
+     * approved + still-pending riders — the same rule the join path enforces — and it is the
+     * ONE number every viewer gets. Additive; a client that ignores these is unaffected.
+     *
+     * ⚠ THE CEILINGS ARE OWNER-ONLY. `maxParticipants` / `maxGroups` are the organizer's
+     * account cap (user_limits.participants_per_event, default 50). The organizer sees
+     * "6 / 50" on their own ride; every other viewer sees "7" and no denominator — how much
+     * room an organizer's plan gives them is nobody else's business. So these are null unless
+     * the viewer IS the owner, and this is a redaction, not a default: do not "fix" a null on
+     * the client by substituting a fallback ceiling (see EventDetailPage's eventFull).
+     *
+     * `isFull` stays visible to everyone deliberately — a rider has to know they cannot join,
+     * and a boolean says that without naming the cap.
      */
     participantCount: capacity?.participantCount ?? 0,
-    maxParticipants: capacity?.maxParticipants ?? null,
+    maxParticipants: viewerIsOwner ? (capacity?.maxParticipants ?? null) : null,
     isFull:
       capacity !== null ? capacity.participantCount >= capacity.maxParticipants : false,
     groupCount: capacity?.groupCount ?? 0,
-    maxGroups: capacity?.maxGroups ?? null,
+    maxGroups: viewerIsOwner ? (capacity?.maxGroups ?? null) : null,
   };
 }
 

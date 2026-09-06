@@ -199,11 +199,38 @@ export interface PublicRouteFilters {
  *
  * The elevation tests deliberately do NOT match rows with a NULL elevation_m: "at least
  * 500 m of climb" must not return a route whose climb is unknown.
+ *
+ * DISCOVERABILITY IS DERIVED, NOT TRUSTED. `is_public` is a SNAPSHOT: it is written once, when
+ * the row is inserted, from `event.visibility === "public"` (eventRoute.service.ts's
+ * setEventRouteFromPoints). Nothing re-synced it afterwards, so an organizer who took a public
+ * ride private left its track sitting in this list — readable in full, anonymously, through
+ * GET /routes/:routeId. The second clause below is what closes that: a track backed by a ride
+ * is listed only while some PUBLIC ride still backs it, so PUBLIC -> PRIVATE removes it from
+ * discovery on the next request with no write, no backfill and no cache to wait for.
+ *
+ * The NOT EXISTS arm is NOT redundant. A route uploaded straight to the library (POST /routes)
+ * has no event_routes row at all, and its owner's `is_public` is the only thing that can speak
+ * for it. Drop that arm and every such upload silently vanishes from Find Tracks. Production
+ * holds none of them today, so no live data would catch the mistake — routeLibrary.queries.test.ts
+ * does.
+ *
+ * `is_public` still leads: it remains the owner's own intent, and PATCH /routes/:routeId
+ * { isPublic: false } stays an unconditional way to unlist a track.
  */
 export async function selectPublicRoutes(
   filters: PublicRouteFilters,
 ): Promise<{ routes: RouteWithOwner[]; total: number }> {
   const where = `r.is_public = TRUE
+        AND (
+          NOT EXISTS (SELECT 1 FROM event_routes er WHERE er.route_id = r.id)
+          OR EXISTS (
+            SELECT 1
+              FROM event_routes er
+              JOIN events e ON e.id = er.event_id
+             WHERE er.route_id = r.id
+               AND e.visibility = 'public'
+               AND e.status NOT IN ('cancelled', 'draft'))
+        )
         AND ($1::text IS NULL OR r.place_name ILIKE '%' || $1 || '%' OR r.name ILIKE '%' || $1 || '%')
         AND ($2::double precision IS NULL OR r.distance_km >= $2)
         AND ($3::double precision IS NULL OR r.distance_km <= $3)

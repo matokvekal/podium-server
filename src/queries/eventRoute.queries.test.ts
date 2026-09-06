@@ -24,7 +24,9 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { selectEventRouteGeometry, selectEventRouteId } = await import("./eventRoute.queries.js");
+const { publishEventRouteIfOwned, selectEventRouteGeometry, selectEventRouteId } = await import(
+  "./eventRoute.queries.js"
+);
 
 beforeEach(() => {
   query.mockReset();
@@ -117,5 +119,38 @@ describe("selectEventRouteId", () => {
   it("returns null for a ride with no track", async () => {
     queryOne.mockResolvedValue(null);
     expect(await selectEventRouteId("e1")).toBeNull();
+  });
+});
+
+describe("publishEventRouteIfOwned", () => {
+  it("publishes only a track the ride's owner also owns", async () => {
+    execute.mockResolvedValue(1);
+
+    const published = await publishEventRouteIfOwned("e1", 7);
+
+    expect(published).toBe(1);
+    const [sql, values] = execute.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/UPDATE routes r/);
+    expect(sql).toMatch(/SET is_public = TRUE/);
+    expect(sql).toMatch(/er\.event_id = \$1/);
+    // THE GUARD THAT MATTERS. Copying a track attaches the ORIGINAL row, so a ride very often
+    // points at someone else's route. Without this, taking your own ride public would publish a
+    // stranger's track into Find Tracks on their behalf.
+    expect(sql).toMatch(/r\.owner_id = \$2/);
+    expect(values).toEqual(["e1", 7]);
+  });
+
+  it("is a no-op when the track is already public", async () => {
+    // `AND r.is_public = FALSE` keeps the common PATCH from writing a row and bumping updated_at.
+    execute.mockResolvedValue(0);
+
+    expect(await publishEventRouteIfOwned("e1", 7)).toBe(0);
+    expect(execute.mock.calls[0][0]).toMatch(/r\.is_public = FALSE/);
+  });
+
+  it("never publishes a borrowed track — no row matches, nothing is written", async () => {
+    execute.mockResolvedValue(0);
+
+    expect(await publishEventRouteIfOwned("e1", 999)).toBe(0);
   });
 });
