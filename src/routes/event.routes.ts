@@ -33,6 +33,7 @@ import {
   getLiveController,
   joinEventController,
   listEventsController,
+  listPublicEventAreasController,
   listPublicEventsController,
   pauseEventController,
   postLocationBatchController,
@@ -115,6 +116,11 @@ eventRouter.get("/", requireAuth, listEventsController);
 // Registered before the single-segment "/:eventId" so a request for it is never swallowed
 // by the param route.
 eventRouter.get("/public", listPublicEventsController);
+
+// GET /api/v1/events/public/areas
+// The distinct areas on public rides — populates the "Browse tracks" Area filter. Two
+// segments, so "/:eventId" never matches it; kept next to "/public" for discoverability.
+eventRouter.get("/public/areas", listPublicEventAreasController);
 
 // GET /api/v1/events/:eventId
 // Optional auth, not required: a public event is viewable by a stranger, same as its card on

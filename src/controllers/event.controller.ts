@@ -42,6 +42,7 @@ import {
   joinEvent,
   listMyEvents,
   listPublicEvents,
+  listPublicEventAreas,
   pauseEvent,
   saveLocationBatch,
   toEventConfig,
@@ -421,6 +422,21 @@ export async function listPublicEventsController(req: Request, res: Response, ne
       limit: filters.limit,
       offset: filters.offset,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/v1/events/public/areas
+export async function listPublicEventAreasController(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    traceLog("event.controller.listPublicEventAreasController", {});
+    const areas = await listPublicEventAreas();
+    res.status(200).json({ data: { areas } });
   } catch (err) {
     next(err);
   }

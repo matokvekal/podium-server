@@ -16,9 +16,8 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { selectEventsForUser, selectPublicEvents, updateEventRidePlan } = await import(
-  "./event.queries.js"
-);
+const { selectEventsForUser, selectPublicEvents, selectPublicEventAreas, updateEventRidePlan } =
+  await import("./event.queries.js");
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -160,6 +159,147 @@ describe("selectPublicEvents", () => {
     const { events } = await selectPublicEvents({ sort: "soonest", limit: 20, offset: 0 });
 
     expect(events[0].hasSupportVehicle).toBe(false);
+  });
+});
+
+describe("selectPublicEvents — Browse tracks filters and sort", () => {
+  it("binds multi-select activity type / level as arrays matched with = ANY", async () => {
+    query.mockResolvedValueOnce([eventRow()]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      activityType: ["road", "gravel"],
+      level: ["elite"],
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/e\.activity_type = ANY\(\$3::text\[\]\)/);
+    expect(sql).toMatch(/e\.level = ANY\(\$4::text\[\]\)/);
+    expect(params[2]).toEqual(["road", "gravel"]);
+    expect(params[3]).toEqual(["elite"]);
+  });
+
+  it("filters on area, the attached route's distance and the effective climb", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+
+    await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      areas: ["Galilee", "Negev"],
+      minDistanceKm: 40,
+      maxDistanceKm: 120,
+      minClimbM: 500,
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/TRIM\(e\.area\) = ANY\(\$6::text\[\]\)/);
+    expect(sql).toMatch(/route_summary\.distance_km >= \$7/);
+    expect(sql).toMatch(/route_summary\.distance_km <= \$8/);
+    expect(sql).toMatch(/COALESCE\(e\.elevation_gain_m, route_summary\.elevation_m\) >= \$9/);
+    expect(params[5]).toEqual(["Galilee", "Negev"]);
+    expect(params[6]).toBe(40);
+    expect(params[7]).toBe(120);
+    expect(params[8]).toBe(500);
+    expect(params[9]).toBeNull();
+  });
+
+  it("turns duration buckets into an OR-group over duration_min", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+
+    await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      durationBuckets: ["1to2", "gt5"],
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/\$11::text\[\] IS NULL OR \(e\.duration_min IS NOT NULL/);
+    expect(sql).toMatch(/'gt5' {2}= ANY\(\$11::text\[\]\) AND e\.duration_min >= 300/);
+    expect(params[10]).toEqual(["1to2", "gt5"]);
+  });
+
+  it("matches a ride code or id through q", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+
+    await selectPublicEvents({ sort: "newest", limit: 24, offset: 0, q: "06092026A" });
+
+    const [sql] = query.mock.calls[0] as [string];
+    expect(sql).toMatch(/e\.code ILIKE \$1/);
+    expect(sql).toMatch(/e\.id::text = \$1/);
+    expect(sql).toMatch(/e\.area ILIKE '%' \|\| \$1 \|\| '%'/);
+  });
+
+  it("whitelists every new sort with NULLS LAST and a stable tie-break on e.id", async () => {
+    const sorts = [
+      "oldest",
+      "distance_asc",
+      "distance_desc",
+      "elevation_asc",
+      "elevation_desc",
+      "duration_asc",
+      "duration_desc",
+      "name_asc",
+    ] as const;
+
+    for (const sort of sorts) {
+      query.mockResolvedValueOnce([]);
+      queryOne.mockResolvedValueOnce({ count: "0" });
+      await selectPublicEvents({ sort, limit: 24, offset: 0 });
+      const [sql] = query.mock.calls.at(-1) as [string];
+      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$12 OFFSET \$13/);
+      if (sort !== "name_asc" && sort !== "oldest") {
+        expect(sql).toMatch(/NULLS LAST, e\.created_at DESC, e\.id/);
+      }
+    }
+  });
+
+  it("counts through the same lateral joins the distance/climb filters read", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "5" });
+
+    const { total } = await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      minDistanceKm: 10,
+    });
+
+    const [countSql] = queryOne.mock.calls[0] as [string];
+    expect(countSql).toMatch(/COUNT\(\*\)::text/);
+    expect(countSql).toMatch(/LEFT JOIN LATERAL/);
+    expect(total).toBe(5);
+  });
+
+  it("still accepts a single-value activityType list (the Find Rides pill)", async () => {
+    query.mockResolvedValueOnce([eventRow()]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    await selectPublicEvents({ sort: "soonest", limit: 20, offset: 0, activityType: ["road"] });
+
+    const [, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(params[2]).toEqual(["road"]);
+  });
+});
+
+describe("selectPublicEventAreas", () => {
+  it("returns the distinct trimmed areas over the public predicate", async () => {
+    query.mockResolvedValueOnce([{ area: "Galilee" }, { area: "Negev" }]);
+
+    const areas = await selectPublicEventAreas();
+
+    expect(areas).toEqual(["Galilee", "Negev"]);
+    const [sql] = query.mock.calls[0] as [string];
+    expect(sql).toMatch(/SELECT DISTINCT TRIM\(area\) AS area/);
+    expect(sql).toMatch(/visibility = 'public'/);
+    expect(sql).toMatch(/status NOT IN \('cancelled', 'draft'\)/);
   });
 });
 

@@ -39,6 +39,7 @@ import {
   type PublicEventFilters,
   insertEventMember,
   selectPublicEvents,
+  selectPublicEventAreas,
   selectUpcomingEventsForFollowed,
   type UpdateEventInput,
   updateEvent,
@@ -393,6 +394,11 @@ export function listPublicEvents(
 ): Promise<{ events: EventListItem[]; total: number }> {
   const sort = filters.sort ?? (filters.bucket === "finished" ? "latest" : "soonest");
   return selectPublicEvents({ ...filters, sort });
+}
+
+/** The distinct areas that appear on public rides — feeds the "Browse tracks" Area filter. */
+export function listPublicEventAreas(): Promise<string[]> {
+  return selectPublicEventAreas();
 }
 
 /**

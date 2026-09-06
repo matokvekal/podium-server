@@ -155,23 +155,97 @@ export const listEventsQuerySchema = z.object({
     .default("mine"),
 });
 
+/** The ride-duration filter offers ranges, not a free number — see the client's DURATION_BUCKETS
+ *  and selectPublicEvents' OR-group. Whole hours, matched against events.duration_min. */
+export const DURATION_BUCKET_KEYS = ["lt1", "1to2", "2to3", "3to5", "gt5"] as const;
+export type DurationBucketKey = (typeof DURATION_BUCKET_KEYS)[number];
+
 /**
- * The public "Find Rides" browser. Every one of these used to run in the client's memory over
- * whatever the first 20 rows happened to be — so a "Finished" filter could render empty while
- * finished rides sat at row 21. Doing it here is the only way the answer can be right.
+ * A comma-separated list of enum values → a de-duplicated array, dropping anything not in the
+ * vocabulary rather than 400ing (a stale filter chip in a saved URL must not break the list).
+ * `undefined` when the param is absent or nothing valid survived, so the query treats it as
+ * "no filter". A bare single value (what "Find Rides" sends) still parses to a one-element list.
+ */
+function csvEnum<const T extends readonly string[]>(allowed: T) {
+  const set = new Set<string>(allowed);
+  return z
+    .string()
+    .max(200)
+    .optional()
+    .transform((raw): T[number][] | undefined => {
+      if (!raw) return undefined;
+      const picked = raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part): part is T[number] => set.has(part));
+      return picked.length > 0 ? [...new Set(picked)] : undefined;
+    });
+}
+
+/** Like csvEnum but for a free-text list (areas) — trims, drops blanks, de-dupes, caps length. */
+function csvStrings(maxLen: number) {
+  return z
+    .string()
+    .max(maxLen)
+    .optional()
+    .transform((raw): string[] | undefined => {
+      if (!raw) return undefined;
+      const picked = raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => part.slice(0, 200));
+      return picked.length > 0 ? [...new Set(picked)] : undefined;
+    });
+}
+
+/**
+ * The public "Find Rides" browser and the event-create "Browse tracks" picker. Every one of
+ * these used to run in the client's memory over whatever the first 20 rows happened to be — so
+ * a "Finished" filter could render empty while finished rides sat at row 21. Doing it here is
+ * the only way the answer can be right, and the only way the "Browse tracks" picker scales past
+ * a few hundred rides.
  *
  * `bucket` is the Live / Upcoming / Finished pill, expressed as the question a rider is
  * actually asking rather than as a raw status: "upcoming" spans three statuses, and "finished"
  * has to include a ride whose end time has passed but whose status nobody flipped.
+ *
+ * `activityType` / `level` accept a comma list for the picker's multi-select, but a single
+ * value (the Find Rides pill) is just a one-element list. The distance / climb / duration
+ * filters are the picker's — Find Rides never sends them.
  */
 export const publicEventsQuerySchema = z.object({
   q: z.string().max(200).optional(),
   type: z.enum(EVENT_TYPES).optional(),
   bucket: z.enum(["live", "upcoming", "finished"]).optional(),
-  activityType: z.enum(ACTIVITY_TYPES).optional(),
-  level: z.enum(RIDER_LEVELS).optional(),
-  /** Default depends on the bucket — see listPublicEvents. */
-  sort: z.enum(["soonest", "latest", "newest"]).optional(),
+  activityType: csvEnum(ACTIVITY_TYPES),
+  level: csvEnum(RIDER_LEVELS),
+  /** Exact match against one or more values from GET /events/public/areas. */
+  areas: csvStrings(400),
+  /** The attached route's distance, km. */
+  minDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
+  maxDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
+  /** EFFECTIVE climb: the organizer's elevation_gain_m, else the attached route's, metres. */
+  minClimbM: z.coerce.number().nonnegative().max(100000).optional(),
+  maxClimbM: z.coerce.number().nonnegative().max(100000).optional(),
+  durationBuckets: csvEnum(DURATION_BUCKET_KEYS),
+  /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration
+   *  orders sink a NULL metric to the bottom and tie-break on created_at DESC, id. */
+  sort: z
+    .enum([
+      "soonest",
+      "latest",
+      "newest",
+      "oldest",
+      "distance_asc",
+      "distance_desc",
+      "elevation_asc",
+      "elevation_desc",
+      "duration_asc",
+      "duration_desc",
+      "name_asc",
+    ])
+    .optional(),
   limit: z.coerce.number().int().positive().max(100).optional().default(20),
   offset: z.coerce.number().int().nonnegative().optional().default(0),
 });

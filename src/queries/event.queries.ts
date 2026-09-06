@@ -341,13 +341,37 @@ export async function insertEventMember(
   );
 }
 
+export type PublicEventSort =
+  | "soonest"
+  | "latest"
+  | "newest"
+  | "oldest"
+  | "distance_asc"
+  | "distance_desc"
+  | "elevation_asc"
+  | "elevation_desc"
+  | "duration_asc"
+  | "duration_desc"
+  | "name_asc";
+
 export interface PublicEventFilters {
   q?: string;
   type?: EventType;
   bucket?: "live" | "upcoming" | "finished";
-  activityType?: ActivityType;
-  level?: RiderLevel;
-  sort: "soonest" | "latest" | "newest";
+  /** Multi-select: the "Browse tracks" picker sends a list, "Find Rides" sends one value. */
+  activityType?: ActivityType[];
+  level?: RiderLevel[];
+  /** Exact match against events.area, from GET /events/public/areas. */
+  areas?: string[];
+  /** The attached route's distance (km). */
+  minDistanceKm?: number;
+  maxDistanceKm?: number;
+  /** EFFECTIVE climb (organizer's elevation_gain_m, else the route's), metres. */
+  minClimbM?: number;
+  maxClimbM?: number;
+  /** Any of "lt1" | "1to2" | "2to3" | "3to5" | "gt5" — ranges over events.duration_min. */
+  durationBuckets?: string[];
+  sort: PublicEventSort;
   limit: number;
   offset: number;
 }
@@ -368,21 +392,47 @@ function isMissingColumnError(err: unknown): err is { code: string; message?: st
 export async function selectPublicEvents(
   filters: PublicEventFilters,
 ): Promise<{ events: EventListItem[]; total: number }> {
-  const where = `visibility = 'public'
-        AND status NOT IN ('cancelled', 'draft')
-        AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%' OR location ILIKE '%' || $1 || '%')
-        AND ($2::text IS NULL OR type = $2)
-        AND ($3::text IS NULL OR activity_type = $3)
-        AND ($4::text IS NULL OR level = $4)
+  // Everything is qualified (e.* or route_summary.*) and every filter param is always bound —
+  // NULL when the caller left it out, and `$n IS NULL OR <test>` short-circuits it — so this is
+  // one constant statement Postgres can cache a plan for, not SQL assembled per request.
+  //
+  // $1  q            $2  type          $3  activityType[]   $4  level[]     $5  bucket
+  // $6  areas[]      $7  minDistanceKm  $8  maxDistanceKm    $9  minClimbM   $10 maxClimbM
+  // $11 durationBuckets[]               $12 limit            $13 offset
+  const where = `e.visibility = 'public'
+        AND e.status NOT IN ('cancelled', 'draft')
+        AND ($1::text IS NULL
+             OR e.name ILIKE '%' || $1 || '%'
+             OR e.location ILIKE '%' || $1 || '%'
+             OR e.area ILIKE '%' || $1 || '%'
+             OR e.code ILIKE $1
+             OR e.id::text = $1)
+        AND ($2::text IS NULL OR e.type = $2)
+        AND ($3::text[] IS NULL OR e.activity_type = ANY($3::text[]))
+        AND ($4::text[] IS NULL OR e.level = ANY($4::text[]))
         AND (
           $5::text IS NULL
-          OR ($5 = 'live' AND status = 'live')
+          OR ($5 = 'live' AND e.status = 'live')
           OR ($5 = 'upcoming'
-              AND status IN ('published', 'registration_open', 'ready')
-              AND (ends_at IS NULL OR ends_at >= NOW()))
+              AND e.status IN ('published', 'registration_open', 'ready')
+              AND (e.ends_at IS NULL OR e.ends_at >= NOW()))
           OR ($5 = 'finished'
-              AND (status = 'finished' OR (ends_at IS NOT NULL AND ends_at < NOW())))
-        )`;
+              AND (e.status = 'finished' OR (e.ends_at IS NOT NULL AND e.ends_at < NOW())))
+        )
+        AND ($6::text[] IS NULL OR TRIM(e.area) = ANY($6::text[]))
+        AND ($7::float8 IS NULL OR route_summary.distance_km >= $7)
+        AND ($8::float8 IS NULL OR route_summary.distance_km <= $8)
+        AND ($9::float8 IS NULL
+             OR COALESCE(e.elevation_gain_m, route_summary.elevation_m) >= $9)
+        AND ($10::float8 IS NULL
+             OR COALESCE(e.elevation_gain_m, route_summary.elevation_m) <= $10)
+        AND ($11::text[] IS NULL OR (e.duration_min IS NOT NULL AND (
+             ('lt1'  = ANY($11::text[]) AND e.duration_min < 60)
+          OR ('1to2' = ANY($11::text[]) AND e.duration_min >= 60  AND e.duration_min < 120)
+          OR ('2to3' = ANY($11::text[]) AND e.duration_min >= 120 AND e.duration_min < 180)
+          OR ('3to5' = ANY($11::text[]) AND e.duration_min >= 180 AND e.duration_min < 300)
+          OR ('gt5'  = ANY($11::text[]) AND e.duration_min >= 300)
+        )))`;
 
   const params = [
     filters.q ?? null,
@@ -390,13 +440,31 @@ export async function selectPublicEvents(
     filters.activityType ?? null,
     filters.level ?? null,
     filters.bucket ?? null,
+    filters.areas ?? null,
+    filters.minDistanceKm ?? null,
+    filters.maxDistanceKm ?? null,
+    filters.minClimbM ?? null,
+    filters.maxClimbM ?? null,
+    filters.durationBuckets ?? null,
   ];
 
-  // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream.
+  // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream. Each
+  // non-date order sinks a missing metric to the bottom (NULLS LAST) and tie-breaks on
+  // created_at DESC, id so a track cannot shuffle between pages while the rider scrolls.
   const orderBy = {
-    soonest: "starts_at ASC NULLS LAST",
-    latest: "starts_at DESC NULLS LAST",
-    newest: "created_at DESC",
+    soonest: "e.starts_at ASC NULLS LAST, e.id",
+    latest: "e.starts_at DESC NULLS LAST, e.id",
+    newest: "e.created_at DESC, e.id",
+    oldest: "e.created_at ASC, e.id",
+    distance_asc: "route_summary.distance_km ASC NULLS LAST, e.created_at DESC, e.id",
+    distance_desc: "route_summary.distance_km DESC NULLS LAST, e.created_at DESC, e.id",
+    elevation_asc:
+      "COALESCE(e.elevation_gain_m, route_summary.elevation_m) ASC NULLS LAST, e.created_at DESC, e.id",
+    elevation_desc:
+      "COALESCE(e.elevation_gain_m, route_summary.elevation_m) DESC NULLS LAST, e.created_at DESC, e.id",
+    duration_asc: "e.duration_min ASC NULLS LAST, e.created_at DESC, e.id",
+    duration_desc: "e.duration_min DESC NULLS LAST, e.created_at DESC, e.id",
+    name_asc: "e.name ASC, e.id",
   }[filters.sort];
 
   try {
@@ -404,18 +472,26 @@ export async function selectPublicEvents(
       `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}
          FROM events e
          ${EVENT_SUMMARY_JOINS}
-        WHERE ${where} ORDER BY ${orderBy} LIMIT $6 OFFSET $7`,
+        WHERE ${where} ORDER BY ${orderBy} LIMIT $12 OFFSET $13`,
       [...params, filters.limit, filters.offset],
     );
+    // The COUNT mirrors the SELECT's FROM: the distance / climb filters test route_summary.*,
+    // so the count query needs the same lateral joins (LEFT ... ON TRUE keeps one row per
+    // event, so COUNT(*) is still the number of matching events).
     const countRow = await queryOne<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM events WHERE ${where}`,
+      `SELECT COUNT(*)::text AS count
+         FROM events e
+         ${EVENT_SUMMARY_JOINS}
+        WHERE ${where}`,
       params,
     );
     return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
   } catch (err) {
     if (!isMissingColumnError(err)) throw err;
 
-    // Older local schemas may not have activity_type/level yet.
+    // Older local schemas may not have activity_type / level / elevation_gain_m / duration_min
+    // yet. Drop the filters that need those columns and fall the metric sorts back to newest —
+    // a dev database without the migrations has no route metrics to order by anyway.
     logger.warn({ err }, "events profile columns missing; using legacy public-events query");
 
     const legacyWhere = `visibility = 'public'
@@ -433,11 +509,22 @@ export async function selectPublicEvents(
         )`;
     const legacyParams = [filters.q ?? null, filters.type ?? null, filters.bucket ?? null];
 
+    const legacyOrderBy =
+      (
+        {
+          soonest: "starts_at ASC NULLS LAST, id",
+          latest: "starts_at DESC NULLS LAST, id",
+          newest: "created_at DESC, id",
+          oldest: "created_at ASC, id",
+          name_asc: "name ASC, id",
+        } as Record<string, string>
+      )[filters.sort] ?? "created_at DESC, id";
+
     const rows = await query<EventSummaryRow>(
       `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}
          FROM events e
          ${EVENT_SUMMARY_JOINS}
-        WHERE ${legacyWhere} ORDER BY ${orderBy} LIMIT $4 OFFSET $5`,
+        WHERE ${legacyWhere} ORDER BY ${legacyOrderBy} LIMIT $4 OFFSET $5`,
       [...legacyParams, filters.limit, filters.offset],
     );
     const countRow = await queryOne<{ count: string }>(
@@ -446,6 +533,24 @@ export async function selectPublicEvents(
     );
     return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
   }
+}
+
+/**
+ * Distinct non-blank events.area values over the same public predicate the browse list uses —
+ * the "Browse tracks" picker's Area filter is a multi-select of exactly these. Small and
+ * cache-friendly: one column, no geometry, no paging.
+ */
+export async function selectPublicEventAreas(): Promise<string[]> {
+  const rows = await query<{ area: string }>(
+    `SELECT DISTINCT TRIM(area) AS area
+       FROM events
+      WHERE visibility = 'public'
+        AND status NOT IN ('cancelled', 'draft')
+        AND area IS NOT NULL
+        AND TRIM(area) <> ''
+      ORDER BY area`,
+  );
+  return rows.map((row) => row.area);
 }
 
 export interface CreateEventInput {
