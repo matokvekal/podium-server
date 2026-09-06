@@ -235,3 +235,32 @@ export async function deleteEventRoute(eventId: string): Promise<boolean> {
 export async function deleteEventRoutesForRoute(routeId: number): Promise<void> {
   await execute("DELETE FROM event_routes WHERE route_id = $1", [routeId]);
 }
+
+/**
+ * Publishes the track attached to a ride that has just become PUBLIC, so it reaches Find Tracks
+ * straight away rather than waiting for the ride to happen — GET /routes/public still requires
+ * `is_public = TRUE` as the owner's own intent, and a track saved while the ride was private
+ * took the column default FALSE and had nothing to flip it back.
+ *
+ * OWNERSHIP IS ENFORCED HERE, IN THE STATEMENT, not by the caller: `r.owner_id = $2`. Copying a
+ * track ATTACHES the original row (eventRoute.service.ts), so a ride very often points at
+ * someone else's route — and taking your ride public must never publish a stranger's track on
+ * their behalf. A borrowed track simply matches no row and nothing happens.
+ *
+ * `r.is_public = FALSE` keeps this a no-op when there is nothing to do, so the common PATCH
+ * writes no rows and bumps no `updated_at`.
+ *
+ * Returns how many rows were published — 0 or 1 — for the caller's log line.
+ */
+export async function publishEventRouteIfOwned(eventId: string, ownerId: number): Promise<number> {
+  return execute(
+    `UPDATE routes r
+        SET is_public = TRUE, updated_at = NOW()
+       FROM event_routes er
+      WHERE er.event_id = $1
+        AND r.id = er.route_id
+        AND r.owner_id = $2
+        AND r.is_public = FALSE`,
+    [eventId, ownerId],
+  );
+}

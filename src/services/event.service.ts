@@ -18,6 +18,7 @@ import { canAccount, canEvent } from "../authz/policy.js";
 import { ApiError } from "../lib/api-error.js";
 import { haversineDistanceKm } from "../lib/geo.js";
 import { logger } from "../lib/logger.js";
+import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
 import { selectParticipantsForEvent } from "../queries/participant.queries.js";
 import { writeParticipantTracks } from "./track-writer.js";
 import {
@@ -524,6 +525,34 @@ export async function updateEventDetails(
       hasSupportVehicle: input.hasSupportVehicle,
       expectedParticipants: input.expectedParticipants,
     });
+  }
+
+  // A ride that has just BECOME public publishes its own track, so it is reusable in Find Tracks
+  // immediately — a track is as rideable the week before the ride as the week after, and there is
+  // no reason to make an organizer wait for the date to pass.
+  //
+  // A TRANSITION, NOT A STATE: `event` is the row as it was BEFORE updateEvent ran, and this only
+  // fires when visibility actually crossed into 'public'. Testing `input.visibility === "public"`
+  // alone would re-publish on every later PATCH of an already-public ride — including one whose
+  // owner had deliberately unlisted the track with PATCH /routes/:routeId { isPublic: false }.
+  //
+  // The reverse direction needs nothing here: GET /routes/public derives discoverability from the
+  // backing ride (selectPublicRoutes), so PUBLIC -> PRIVATE drops out of Find Tracks on its own,
+  // with no write to undo.
+  //
+  // Non-fatal, like recordRouteCopy: the event update has already committed, and failing the
+  // PATCH now would report a write that did happen as an error. Worst case the track stays
+  // unlisted and the organizer can flip visibility again.
+  if (input.visibility === "public" && event.visibility !== "public") {
+    try {
+      const published = await publishEventRouteIfOwned(eventId, userId);
+      logger.info(
+        { eventId, userId, published },
+        "ride went public; track published to the library",
+      );
+    } catch (err) {
+      logger.warn({ err, eventId }, "could not publish the ride's track to the library");
+    }
   }
 
   logger.info({ eventId, userId }, "event updated");
