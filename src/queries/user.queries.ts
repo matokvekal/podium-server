@@ -100,6 +100,16 @@ export async function selectIdentity(
   return row ? mapAuthIdentity(row) : null;
 }
 
+/** Every email on this user's identities (Google, email/password). Empty for an SMS-only
+ *  account. Used by the admin-analytics gate — the access token carries no email. */
+export async function selectUserEmails(userId: number): Promise<string[]> {
+  const rows = await query<{ email: string }>(
+    "SELECT email FROM auth_identities WHERE user_id = $1 AND email IS NOT NULL",
+    [userId],
+  );
+  return rows.map((r) => r.email);
+}
+
 export async function deleteIdentity(
   provider: AuthProviderType,
   providerUserId: string,

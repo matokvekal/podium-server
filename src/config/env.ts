@@ -92,6 +92,19 @@ const envSchema = z.object({
   // On by default so it's visible without any setup; set to "false" to go quiet.
   CONSOLE_TRACE: boolFlag(true),
 
+  // The ONE account allowed to read GET /api/v1/admin/analytics (the /admin2026 page). Checked
+  // server-side against every email on the caller's auth_identities — see
+  // src/adminAnalytics/adminAnalytics.auth.ts. Comma-separated to allow a second admin later.
+  ADMIN_ANALYTICS_EMAILS: z
+    .string()
+    .default("mictavim@gmail.com")
+    .transform((s) =>
+      s
+        .split(",")
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+
   // Where a rider's uploaded avatar/cover bytes live. This MUST be outside the directory a
   // deployment replaces: git checkout, npm build, pm2 restart and the GitHub Actions deploy
   // all rewrite /var/www/podium, and an upload root underneath it would be erased by a
