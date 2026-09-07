@@ -6,6 +6,7 @@ import {
   selectIdentity,
   selectUserById,
   updateIdentityLastUsed,
+  updateUserCountry,
   updateUserLastLogin,
   updateUserProfile,
   updateUserRole,
@@ -88,7 +89,7 @@ export function needsProfile(user: User): boolean {
 
 export async function updateProfile(
   userId: number,
-  input: Partial<Pick<User, "firstName" | "lastName" | "nickname" | "emergencyPhone">>,
+  input: Partial<Pick<User, "firstName" | "lastName" | "nickname" | "emergencyPhone" | "country">>,
 ): Promise<User> {
   const user = await updateUserProfile(userId, {
     firstName: input.firstName ?? undefined,
@@ -97,8 +98,13 @@ export async function updateProfile(
     emergencyPhone: input.emergencyPhone ?? undefined,
   });
   if (!user) throw new Error(`updateProfile: user ${userId} not found`);
+
+  // country has its own column and its own guarded statement (see updateUserCountry) — the
+  // profile save above never touches it. undefined = the caller left it out; a value sets it.
+  const withCountry = input.country ? await updateUserCountry(userId, input.country) : user;
+
   logger.info({ userId, fields: Object.keys(input) }, "profile updated");
-  return user;
+  return withCountry ?? user;
 }
 
 /**

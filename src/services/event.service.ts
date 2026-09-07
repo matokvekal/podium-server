@@ -44,6 +44,7 @@ import {
   selectUpcomingEventsForFollowed,
   type UpdateEventInput,
   updateEvent,
+  updateEventCountryRegion,
   updateEventElevationGain,
   updateEventRidePlan,
   updateEventPaused,
@@ -226,6 +227,10 @@ export async function createEvent(
     description?: string;
     location?: string;
     area?: string;
+    /** The ride's country (2-letter). Falls back to 'IL' when the client sends nothing. */
+    country?: string;
+    /** Coarse region key (src/lib/regions.ts), suggested from the route start on the form. */
+    region?: string;
     requiresApproval: boolean;
     /** "I'm riding too": also put the organizer on the start list, as themselves. */
     joinAsRider?: boolean;
@@ -335,6 +340,13 @@ export async function createEvent(
       expectedParticipants: input.expectedParticipants,
     });
   }
+
+  // country / region — own guarded statement (see updateEventCountryRegion). country always
+  // gets a value on create: the organizer's, else 'IL'. region only when the form sent one.
+  await updateEventCountryRegion(event.id, {
+    country: input.country ?? "IL",
+    ...(input.region !== undefined ? { region: input.region } : {}),
+  });
 
   // Owning a ride and riding it are different things — event_members says who runs it,
   // event_participants says who is on the start list. An organizer who ticked "I'm riding
@@ -533,6 +545,16 @@ export async function updateEventDetails(
     });
   }
 
+  // country / region — same separate-guarded-statement pattern. updateEventCountryRegion skips
+  // keys left undefined, so an edit that only touched the name never wipes them.
+  const wroteCountryRegion = input.country !== undefined || input.region !== undefined;
+  if (wroteCountryRegion) {
+    await updateEventCountryRegion(eventId, {
+      ...(input.country !== undefined ? { country: input.country } : {}),
+      ...(input.region !== undefined ? { region: input.region } : {}),
+    });
+  }
+
   // A ride that has just BECOME public publishes its own track, so it is reusable in Find Tracks
   // immediately — a track is as rideable the week before the ride as the week after, and there is
   // no reason to make an organizer wait for the date to pass.
@@ -568,7 +590,7 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteRidePlan) {
+  if (wroteElevation || wroteRidePlan || wroteCountryRegion) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }

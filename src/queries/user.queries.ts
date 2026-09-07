@@ -6,6 +6,7 @@
 import type { UserImageKind, UserImageSource } from "../config/user-images.js";
 import { execute, query, queryOne, withTransaction } from "../db/pool.js";
 import type { AuthIdentity, AuthProviderType, Role, User } from "../db/types.js";
+import { logger } from "../lib/logger.js";
 import { insertUserLimitsTx } from "./userLimits.queries.js";
 
 interface UserRow {
@@ -19,6 +20,7 @@ interface UserRow {
   avatar_value: string | null;
   cover_type: string | null;
   cover_value: string | null;
+  country: string | null;
   role: Role;
   is_active: boolean;
   created_at: Date;
@@ -55,6 +57,9 @@ function mapUser(row: UserRow): User {
     avatarValue: row.avatar_value ?? null,
     coverType: row.cover_type ?? null,
     coverValue: row.cover_value ?? null,
+    // Nullish-coalesced for the same reason as the image fields: a database that has not had
+    // sql/030-country.sql applied returns rows without this key.
+    country: row.country ?? null,
     role: row.role,
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -202,6 +207,30 @@ export async function updateUserProfile(
     ],
   );
   return rows[0] ? mapUser(rows[0]) : null;
+}
+
+/**
+ * Writes users.country on its own — kept separate from updateUserProfile (its own column, its
+ * own guarded statement, exactly like updateEventElevationGain) so the core profile save never
+ * depends on a column a database may not have had sql/030-country.sql applied to yet. Pass a
+ * 2-letter uppercase code; `null`/`undefined` is a no-op (this field is never cleared). Returns
+ * the refreshed user, or the unchanged one if there was nothing to write / the column is absent.
+ */
+export async function updateUserCountry(userId: number, country: string | null): Promise<User | null> {
+  if (!country) return selectUserById(userId);
+  try {
+    const rows = await query<UserRow>(
+      "UPDATE users SET country = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+      [userId, country],
+    );
+    return rows[0] ? mapUser(rows[0]) : null;
+  } catch (err) {
+    if (typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703") {
+      logger.warn({ userId, err }, "users.country missing — run sql/030-country.sql");
+      return selectUserById(userId);
+    }
+    throw err;
+  }
 }
 
 /**

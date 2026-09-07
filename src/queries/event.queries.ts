@@ -38,6 +38,8 @@ interface EventRow {
   description: string | null;
   location: string | null;
   area: string | null;
+  country: string | null;
+  region: string | null;
   finished_at: Date | null;
   activity_type: ActivityType | null;
   level: RiderLevel | null;
@@ -129,6 +131,10 @@ function mapEvent(row: EventRow): Event {
     description: row.description,
     location: row.location,
     area: row.area,
+    // undefined on a database without sql/030 — reads as null. country then falls back to the
+    // client's default and region shows as "unspecified".
+    country: row.country ?? null,
+    region: row.region ?? null,
     finishedAt: row.finished_at,
     activityType: row.activity_type,
     level: row.level,
@@ -175,6 +181,11 @@ export interface EventListItem extends Event {
   /** Approved + pending riders, still on the list (rejected / left excluded) — the same rule
    *  the join-capacity check and the event-detail payload use. */
   participantCount: number;
+  /** The attached route's id, or null when the event has no route. */
+  routeId: number | null;
+  /** How many rides have been built on the attached route (route_copies count). Only populated
+   *  by GET /events/public; null on the other list responses. */
+  downloads: number | null;
 }
 
 /**
@@ -184,7 +195,7 @@ export interface EventListItem extends Event {
  */
 const EVENT_SUMMARY_JOINS = `
   LEFT JOIN LATERAL (
-    SELECT r.distance_km, r.elevation_m
+    SELECT r.id AS route_id, r.distance_km, r.elevation_m
       FROM event_routes er
       JOIN routes r ON r.id = er.route_id
      WHERE er.event_id = e.id
@@ -200,14 +211,18 @@ const EVENT_SUMMARY_JOINS = `
   ) roster_summary ON TRUE`;
 
 const EVENT_SUMMARY_COLUMNS = `
+  route_summary.route_id AS route_id,
   route_summary.distance_km AS route_distance_km,
   route_summary.elevation_m AS route_elevation_m,
   COALESCE(roster_summary.participant_count, 0) AS participant_count`;
 
 interface EventSummaryRow extends EventRow {
+  route_id: number | null;
   route_distance_km: number | null;
   route_elevation_m: number | null;
   participant_count: number;
+  /** Only selected by selectPublicEvents (its own copy_summary lateral) — absent elsewhere. */
+  download_count?: number | null;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -217,6 +232,9 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     distanceKm: row.route_distance_km ?? null,
     elevationGain: event.elevationGainM ?? row.route_elevation_m ?? null,
     participantCount: Number(row.participant_count ?? 0),
+    routeId: row.route_id ?? null,
+    // null on every list except GET /events/public, where the copy_summary lateral supplies it.
+    downloads: row.download_count ?? null,
   };
 }
 
@@ -352,6 +370,8 @@ export type PublicEventSort =
   | "elevation_desc"
   | "duration_asc"
   | "duration_desc"
+  | "downloads_asc"
+  | "downloads_desc"
   | "name_asc";
 
 export interface PublicEventFilters {
@@ -361,8 +381,13 @@ export interface PublicEventFilters {
   /** Multi-select: the "Browse tracks" picker sends a list, "Find Rides" sends one value. */
   activityType?: ActivityType[];
   level?: RiderLevel[];
-  /** Exact match against events.area, from GET /events/public/areas. */
+  /** Exact match against events.area, from GET /events/public/areas. Superseded by `region`
+   *  for the picker; kept for the shipped `areas` param. */
   areas?: string[];
+  /** Exact match against events.country (2-letter). */
+  country?: string;
+  /** Exact match against events.region (a key from src/lib/regions.ts). */
+  region?: string;
   /** The attached route's distance (km). */
   minDistanceKm?: number;
   maxDistanceKm?: number;
@@ -371,6 +396,9 @@ export interface PublicEventFilters {
   maxClimbM?: number;
   /** Any of "lt1" | "1to2" | "2to3" | "3to5" | "gt5" — ranges over events.duration_min. */
   durationBuckets?: string[];
+  /** One row per distinct attached route — the origin ride. The "Browse tracks" picker sends
+   *  this; "Find Rides" does not. */
+  uniqueTracks?: boolean;
   sort: PublicEventSort;
   limit: number;
   offset: number;
@@ -378,6 +406,11 @@ export interface PublicEventFilters {
 
 function isMissingColumnError(err: unknown): err is { code: string; message?: string } {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703";
+}
+
+/** Postgres 42P01 — undefined_table. `route_copies` (sql/025) may be absent on a dev DB. */
+function isMissingRelationError(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42P01";
 }
 
 /**
@@ -392,13 +425,15 @@ function isMissingColumnError(err: unknown): err is { code: string; message?: st
 export async function selectPublicEvents(
   filters: PublicEventFilters,
 ): Promise<{ events: EventListItem[]; total: number }> {
-  // Everything is qualified (e.* or route_summary.*) and every filter param is always bound —
-  // NULL when the caller left it out, and `$n IS NULL OR <test>` short-circuits it — so this is
-  // one constant statement Postgres can cache a plan for, not SQL assembled per request.
+  // Everything is qualified (e.*, route_summary.*, copy_summary.*) and every filter param is
+  // always bound — NULL when the caller left it out, and `$n IS NULL OR <test>` short-circuits
+  // it — so this is one constant statement Postgres can cache a plan for, not SQL assembled per
+  // request.
   //
   // $1  q            $2  type          $3  activityType[]   $4  level[]     $5  bucket
   // $6  areas[]      $7  minDistanceKm  $8  maxDistanceKm    $9  minClimbM   $10 maxClimbM
-  // $11 durationBuckets[]               $12 limit            $13 offset
+  // $11 durationBuckets[]  $12 country  $13 region           $14 uniqueTracks
+  // $15 limit        $16 offset
   const where = `e.visibility = 'public'
         AND e.status NOT IN ('cancelled', 'draft')
         AND ($1::text IS NULL
@@ -432,7 +467,25 @@ export async function selectPublicEvents(
           OR ('2to3' = ANY($11::text[]) AND e.duration_min >= 120 AND e.duration_min < 180)
           OR ('3to5' = ANY($11::text[]) AND e.duration_min >= 180 AND e.duration_min < 300)
           OR ('gt5'  = ANY($11::text[]) AND e.duration_min >= 300)
-        )))`;
+        )))
+        AND ($12::text IS NULL OR e.country = $12)
+        AND ($13::text IS NULL OR e.region = $13)
+        AND ($14::boolean IS NOT TRUE OR route_summary.route_id IS NOT NULL)
+        AND ($14::boolean IS NOT TRUE OR NOT EXISTS (
+          SELECT 1 FROM event_routes er2 JOIN events e2 ON e2.id = er2.event_id
+           WHERE er2.route_id = route_summary.route_id
+             AND e2.visibility = 'public'
+             AND e2.status NOT IN ('cancelled', 'draft')
+             AND (
+               CASE WHEN e2.copied_from_route_id IS NULL
+                     AND e2.copied_from_event_id IS NULL THEN 0 ELSE 1 END,
+               e2.created_at, e2.id
+             ) < (
+               CASE WHEN e.copied_from_route_id IS NULL
+                     AND e.copied_from_event_id IS NULL THEN 0 ELSE 1 END,
+               e.created_at, e.id
+             )
+        ))`;
 
   const params = [
     filters.q ?? null,
@@ -446,7 +499,21 @@ export async function selectPublicEvents(
     filters.minClimbM ?? null,
     filters.maxClimbM ?? null,
     filters.durationBuckets ?? null,
+    filters.country ?? null,
+    filters.region ?? null,
+    filters.uniqueTracks ?? null,
   ];
+
+  // The reuse ("downloads") count for each row's attached route — its own lateral, kept out of
+  // the shared EVENT_SUMMARY_JOINS so a dev DB without sql/025's route_copies table cannot
+  // break the other list queries (they have no try/catch). A 42P01 here falls to the legacy
+  // path below.
+  const copySummaryJoin = `
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS download_count
+        FROM route_copies rc
+       WHERE rc.route_id = route_summary.route_id
+    ) copy_summary ON TRUE`;
 
   // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream. Each
   // non-date order sinks a missing metric to the bottom (NULLS LAST) and tie-breaks on
@@ -464,20 +531,24 @@ export async function selectPublicEvents(
       "COALESCE(e.elevation_gain_m, route_summary.elevation_m) DESC NULLS LAST, e.created_at DESC, e.id",
     duration_asc: "e.duration_min ASC NULLS LAST, e.created_at DESC, e.id",
     duration_desc: "e.duration_min DESC NULLS LAST, e.created_at DESC, e.id",
+    downloads_asc: "copy_summary.download_count ASC NULLS LAST, e.created_at DESC, e.id",
+    downloads_desc: "copy_summary.download_count DESC NULLS LAST, e.created_at DESC, e.id",
     name_asc: "e.name ASC, e.id",
   }[filters.sort];
 
   try {
     const rows = await query<EventSummaryRow>(
-      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}
+      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}, copy_summary.download_count
          FROM events e
          ${EVENT_SUMMARY_JOINS}
-        WHERE ${where} ORDER BY ${orderBy} LIMIT $12 OFFSET $13`,
+         ${copySummaryJoin}
+        WHERE ${where} ORDER BY ${orderBy} LIMIT $15 OFFSET $16`,
       [...params, filters.limit, filters.offset],
     );
-    // The COUNT mirrors the SELECT's FROM: the distance / climb filters test route_summary.*,
-    // so the count query needs the same lateral joins (LEFT ... ON TRUE keeps one row per
-    // event, so COUNT(*) is still the number of matching events).
+    // The COUNT mirrors the SELECT's FROM: the distance / climb / dedup filters test
+    // route_summary.*, so the count query needs the same lateral joins (LEFT ... ON TRUE keeps
+    // one row per event, so COUNT(*) is still the number of matching events). It does NOT need
+    // copy_summary — nothing in the WHERE reads the download count.
     const countRow = await queryOne<{ count: string }>(
       `SELECT COUNT(*)::text AS count
          FROM events e
@@ -487,11 +558,12 @@ export async function selectPublicEvents(
     );
     return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
   } catch (err) {
-    if (!isMissingColumnError(err)) throw err;
+    if (!isMissingColumnError(err) && !isMissingRelationError(err)) throw err;
 
-    // Older local schemas may not have activity_type / level / elevation_gain_m / duration_min
-    // yet. Drop the filters that need those columns and fall the metric sorts back to newest —
-    // a dev database without the migrations has no route metrics to order by anyway.
+    // Older local schemas may lack activity_type / level / elevation_gain_m / duration_min /
+    // country / region, or the route_copies table (sql/025). Drop every filter that needs one
+    // and fall the metric / downloads sorts back to newest — a dev database without the
+    // migrations has no route metrics or reuse counts to order by anyway.
     logger.warn({ err }, "events profile columns missing; using legacy public-events query");
 
     const legacyWhere = `visibility = 'public'
@@ -700,6 +772,10 @@ export interface UpdateEventInput {
   activityType?: ActivityType;
   level?: RiderLevel;
   organizerGroup?: string;
+  /** Handled by updateEventCountryRegion, NOT the updateEvent SQL below. undefined = leave
+   *  alone; a value sets it; region null clears it. */
+  country?: string;
+  region?: string | null;
   /** Handled by updateEventElevationGain, NOT the updateEvent SQL below — it is listed here
    *  only so the service can pass the parsed body straight through. undefined = leave alone,
    *  null = clear. */
@@ -788,6 +864,41 @@ export async function updateEventElevationGain(
         { err },
         "events.elevation_gain_m missing — run sql/021-events-elevation-gain.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.country / events.region on their own — same pattern as updateEventElevationGain
+ * (own columns, own guarded statement), so create/edit never depends on sql/030-country.sql
+ * having run. Each key: `undefined` leaves it; a string sets it; `null` clears `region` only
+ * (country is never cleared — it always resolves to a real code). Builds the SET list from the
+ * keys the caller passed so a partial edit never wipes the other.
+ */
+export async function updateEventCountryRegion(
+  eventId: string,
+  input: { country?: string; region?: string | null },
+): Promise<void> {
+  const sets: string[] = [];
+  const values: unknown[] = [eventId];
+
+  if (input.country !== undefined) {
+    values.push(input.country);
+    sets.push(`country = $${values.length}`);
+  }
+  if (input.region !== undefined) {
+    values.push(input.region);
+    sets.push(`region = $${values.length}`);
+  }
+  if (sets.length === 0) return;
+
+  try {
+    await execute(`UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`, values);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err, eventId }, "events.country/region missing — run sql/030-country.sql");
       return;
     }
     throw err;

@@ -48,6 +48,10 @@ export function toProfile(user: User) {
     lastName: user.lastName,
     nickname: user.nickname,
     emergencyPhone: user.emergencyPhone,
+    // ISO 3166-1 alpha-2, or null when the rider's client has not synced one yet. Present on
+    // the payload even as null: the client feature-detects country support by the key being
+    // here (mirrors serverSupportsVisualIdentity). See sql/030-country.sql.
+    country: user.country,
     ...userImageFieldsOf(user),
     requiresProfile: needsProfile(user),
   };

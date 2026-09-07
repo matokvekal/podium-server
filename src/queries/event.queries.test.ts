@@ -246,6 +246,8 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       "elevation_desc",
       "duration_asc",
       "duration_desc",
+      "downloads_asc",
+      "downloads_desc",
       "name_asc",
     ] as const;
 
@@ -254,11 +256,89 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       queryOne.mockResolvedValueOnce({ count: "0" });
       await selectPublicEvents({ sort, limit: 24, offset: 0 });
       const [sql] = query.mock.calls.at(-1) as [string];
-      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$12 OFFSET \$13/);
+      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$15 OFFSET \$16/);
       if (sort !== "name_asc" && sort !== "oldest") {
         expect(sql).toMatch(/NULLS LAST, e\.created_at DESC, e\.id/);
       }
     }
+  });
+
+  it("downloads_* order by the copy_summary lateral's count", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+    await selectPublicEvents({ sort: "downloads_desc", limit: 24, offset: 0 });
+    const [sql] = query.mock.calls.at(-1) as [string];
+    expect(sql).toMatch(/FROM route_copies rc\s+WHERE rc\.route_id = route_summary\.route_id/);
+    expect(sql).toMatch(/copy_summary\.download_count DESC NULLS LAST/);
+  });
+
+  it("filters on country and region", async () => {
+    query.mockResolvedValueOnce([eventRow({ country: "IL", region: "north" })]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    const { events } = await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      country: "IL",
+      region: "north",
+    });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/\$12::text IS NULL OR e\.country = \$12/);
+    expect(sql).toMatch(/\$13::text IS NULL OR e\.region = \$13/);
+    expect(params[11]).toBe("IL");
+    expect(params[12]).toBe("north");
+    expect(events[0].country).toBe("IL");
+    expect(events[0].region).toBe("north");
+  });
+
+  it("uniqueTracks keeps one origin ride per route", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+
+    await selectPublicEvents({ sort: "newest", limit: 24, offset: 0, uniqueTracks: true });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/\$14::boolean IS NOT TRUE OR route_summary\.route_id IS NOT NULL/);
+    expect(sql).toMatch(/\$14::boolean IS NOT TRUE OR NOT EXISTS/);
+    expect(sql).toMatch(/copied_from_route_id IS NULL\s+AND e2\.copied_from_event_id IS NULL/);
+    expect(params[13]).toBe(true);
+  });
+
+  it("without uniqueTracks the dedup clauses are inert (param null)", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+    await selectPublicEvents({ sort: "newest", limit: 24, offset: 0 });
+    const [, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(params[13]).toBeNull();
+  });
+
+  it("carries downloads through the mapper when the lateral reports one", async () => {
+    query.mockResolvedValueOnce([eventRow({ download_count: 7, route_id: 42 })]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    const { events } = await selectPublicEvents({ sort: "newest", limit: 24, offset: 0 });
+
+    expect(events[0].downloads).toBe(7);
+    expect(events[0].routeId).toBe(42);
+  });
+
+  it("falls to the legacy query when route_copies is missing (42P01)", async () => {
+    query.mockRejectedValueOnce({ code: "42P01" });
+    query.mockResolvedValueOnce([eventRow()]);
+    queryOne.mockResolvedValueOnce({ count: "1" });
+
+    const { events } = await selectPublicEvents({
+      sort: "downloads_desc",
+      limit: 24,
+      offset: 0,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].downloads).toBeNull();
+    const [legacySql] = query.mock.calls[1] as [string];
+    expect(legacySql).not.toMatch(/route_copies/);
   });
 
   it("counts through the same lateral joins the distance/climb filters read", async () => {

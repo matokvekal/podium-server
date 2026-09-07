@@ -85,6 +85,10 @@ export interface User {
    *  cover — unset simply means none. */
   coverType: string | null;
   coverValue: string | null;
+  /** The rider's country, ISO 3166-1 alpha-2 (uppercase), or null when their client has not
+   *  synced one yet. Set automatically from the browser locale on first login and changeable
+   *  on the account screen — see sql/030-country.sql. Defaults the "Browse tracks" filter. */
+  country: string | null;
   role: Role;
   isActive: boolean;
   createdAt: Date;
@@ -137,6 +141,14 @@ export interface Event {
   description: string | null;
   location: string | null;
   area: string | null;
+  /** The ride's country, ISO 3166-1 alpha-2 (uppercase). Stamped at creation from the
+   *  organiser's users.country (else 'IL'). The "Browse tracks" picker filters on it.
+   *  See sql/030-country.sql. */
+  country: string | null;
+  /** A coarse region key from src/lib/regions.ts (Israel only for now), or null when the
+   *  organiser has not set one. Auto-suggested from the route start on the create form,
+   *  then editable. The picker's area filter is this, not the free-text `area`. */
+  region: string | null;
   finishedAt: Date | null;
 
   // Collected by the create form since long before the server could store any of them.

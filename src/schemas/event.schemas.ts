@@ -7,6 +7,14 @@ import {
   EVENT_VISIBILITIES,
   RIDER_LEVELS,
 } from "../db/types.js";
+import { REGION_KEYS } from "../lib/regions.js";
+
+/** ISO 3166-1 alpha-2, uppercased on the way in — the same shape used everywhere else. */
+const countryCode = z
+  .string()
+  .length(2)
+  .regex(/^[A-Za-z]{2}$/, "country must be two letters")
+  .transform((value) => value.toUpperCase());
 
 export const eventCodeParamSchema = z.object({
   code: z.string().min(1).max(32),
@@ -39,6 +47,10 @@ export const createEventSchema = z.object({
   description: z.string().max(4000).optional(),
   location: z.string().max(255).optional(),
   area: z.string().max(255).optional(),
+  // The ride's country (defaults to 'IL' server-side when absent) and its coarse region key
+  // (src/lib/regions.ts). Both stored via updateEventCountryRegion — see sql/030-country.sql.
+  country: countryCode.optional(),
+  region: z.enum(REGION_KEYS).optional(),
   requiresApproval: z.boolean().optional().default(false),
 
   // "I'm riding too" on the create form. The organizer is on event_members as owner either
@@ -100,6 +112,9 @@ export const updateEventSchema = z.object({
   description: z.string().max(4000).optional(),
   location: z.string().max(255).optional(),
   area: z.string().max(255).optional(),
+  country: countryCode.optional(),
+  // null clears the region; omitted leaves it.
+  region: z.enum(REGION_KEYS).nullable().optional(),
   showEventInfo: z.boolean().optional(),
   showParticipants: z.boolean().optional(),
   showRoute: z.boolean().optional(),
@@ -220,8 +235,19 @@ export const publicEventsQuerySchema = z.object({
   bucket: z.enum(["live", "upcoming", "finished"]).optional(),
   activityType: csvEnum(ACTIVITY_TYPES),
   level: csvEnum(RIDER_LEVELS),
-  /** Exact match against one or more values from GET /events/public/areas. */
+  /** Exact match against one or more values from GET /events/public/areas. Superseded by
+   *  `region` for the picker; still accepted. */
   areas: csvStrings(400),
+  /** Exact match against events.country (2-letter). */
+  country: countryCode.optional(),
+  /** Exact match against events.region (src/lib/regions.ts). */
+  region: z.enum(REGION_KEYS).optional(),
+  /** One row per distinct attached route (the origin ride) — the picker sends "1". Not
+   *  z.coerce.boolean(): that maps the string "false" to true. */
+  uniqueTracks: z
+    .string()
+    .optional()
+    .transform((value) => value === "1" || value === "true"),
   /** The attached route's distance, km. */
   minDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
   maxDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
@@ -229,8 +255,8 @@ export const publicEventsQuerySchema = z.object({
   minClimbM: z.coerce.number().nonnegative().max(100000).optional(),
   maxClimbM: z.coerce.number().nonnegative().max(100000).optional(),
   durationBuckets: csvEnum(DURATION_BUCKET_KEYS),
-  /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration
-   *  orders sink a NULL metric to the bottom and tie-break on created_at DESC, id. */
+  /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration/
+   *  downloads orders sink a NULL metric to the bottom and tie-break on created_at DESC, id. */
   sort: z
     .enum([
       "soonest",
@@ -243,6 +269,8 @@ export const publicEventsQuerySchema = z.object({
       "elevation_desc",
       "duration_asc",
       "duration_desc",
+      "downloads_asc",
+      "downloads_desc",
       "name_asc",
     ])
     .optional(),

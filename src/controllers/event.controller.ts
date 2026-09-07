@@ -71,6 +71,11 @@ function toEventSummary(event: Event | EventListItem) {
     // prefills it, the "Find Rides" list can sort by it, and a card can show it — the
     // client already sends it on create/PATCH and reads it back here.
     area: event.area,
+    // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
+    // "Browse tracks" picker filters on both; a card shows the region label. `region` null
+    // means the organiser has not set one.
+    country: event.country ?? null,
+    region: event.region ?? null,
     ownerId: event.ownerId,
     // On the SUMMARY, not just the detail: these are exactly what a rider filters and scans
     // the "Find Rides" list by, and a list must not need a detail call per card to show them.
@@ -99,6 +104,10 @@ function toEventSummary(event: Event | EventListItem) {
     distanceKm: summary.distanceKm ?? null,
     elevationGain: summary.elevationGain ?? null,
     participantCount: summary.participantCount ?? null,
+    // How many rides have been built on the attached route — only GET /events/public fills
+    // this in (its copy_summary lateral); null everywhere else, and the card falls back to
+    // its per-card ?preview=1 fetch.
+    downloads: summary.downloads ?? null,
   };
 }
 
