@@ -220,6 +220,30 @@ For most "let this person run rides" cases you do **not** need a plan — just t
 
 ---
 
+## 6. Fix the country on historical rides (Israel vs Sweden)
+
+`sql/030-country.sql` sets every existing ride to `country = 'IL'`. Almost all historical
+rides are in Israel; a few are in Sweden. Correct only the exceptions:
+
+```bash
+# READ-ONLY — classifies every ride by its route start point, non-IL rows first,
+# and prints a ready UPDATE for the Sweden ones (section 4). Nothing is written.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/gilad/audit-event-country.sql
+```
+
+Eyeball section 1 (any `OTHER — review` / `UNKNOWN` needs a human), then run the statement
+section 4 printed, e.g.:
+
+```sql
+UPDATE events SET country = 'SE', updated_at = NOW()
+ WHERE id IN ('…','…','…');
+```
+
+`events.region` stays NULL for old rides — it is Israel-only and organisers set it on the
+next edit. No backfill needed.
+
+---
+
 ## Reference — the tables
 
 **`entitlement_grants`** (`sql/014-authorization.sql`) — one row per "user has X from this
