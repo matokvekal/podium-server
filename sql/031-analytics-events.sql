@@ -25,8 +25,9 @@
 -- SHAPE
 --   id               BIGINT identity       — internal row id, same as route_copies / entitlement_grants
 --   event_type       VARCHAR(40) NOT NULL  — USER_REGISTERED | RIDE_CREATED | RIDE_JOINED |
---                                            RIDE_LEFT | ROUTE_CREATED | ROUTE_COPIED |
---                                            ROUTE_DOWNLOADED  (src/audit/audit.constants.ts)
+--                                            RIDE_LEFT | ROUTE_CREATED | ROUTE_COPIED
+--                                            (src/audit/audit.constants.ts). ROUTE_CREATED
+--                                            carries details.source = the routes.source value.
 --   event_time       TIMESTAMPTZ NOT NULL  — when the action happened (= when the row was written)
 --   user_id          BIGINT   NULL         — users.id
 --   ride_id          UUID     NULL         — events.id

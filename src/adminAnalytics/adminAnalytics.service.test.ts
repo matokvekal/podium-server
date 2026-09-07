@@ -8,6 +8,7 @@ const q = {
   countHistoricalJoins: vi.fn(),
   countActiveCountries: vi.fn(),
   ridesByVisibility: vi.fn(),
+  routeStats: vi.fn(),
   dailyActivity: vi.fn(),
   countriesBreakdown: vi.fn(),
 };
@@ -24,6 +25,7 @@ beforeEach(() => {
   q.countHistoricalJoins.mockResolvedValue(4102);
   q.countActiveCountries.mockResolvedValue(3);
   q.ridesByVisibility.mockResolvedValue({ public: 300, registered: 120, private: 66 });
+  q.routeStats.mockResolvedValue({ created: 210, fromGpx: 140, copies: 512, distinctCopiers: 73 });
   q.dailyActivity.mockResolvedValue([
     { date: "2026-09-07", newUsers: 8, newRides: 5, newParticipants: 24 },
     { date: "2026-09-06", newUsers: 4, newRides: 3, newParticipants: 15 },
@@ -48,6 +50,13 @@ describe("getAdminAnalytics", () => {
       countries: 3,
     });
     expect(r.rides).toEqual({ public: 300, registered: 120, private: 66 });
+    expect(r.routes).toEqual({
+      created: 210,
+      fromGpx: 140,
+      otherMethods: 70, // created - fromGpx, derived in the service
+      copies: 512,
+      distinctCopiers: 73,
+    });
     expect(r.countries[0]).toEqual({ countryCode: "IL", users: 1100, rides: 430 });
     expect(typeof r.generatedAt).toBe("string");
   });
@@ -74,6 +83,7 @@ describe("getAdminAnalytics", () => {
       fn.mockResolvedValue(0);
     }
     q.ridesByVisibility.mockResolvedValue({});
+    q.routeStats.mockResolvedValue({ created: 0, fromGpx: 0, copies: 0, distinctCopiers: 0 });
     q.dailyActivity.mockResolvedValue([]);
     q.countriesBreakdown.mockResolvedValue([]);
 
@@ -88,6 +98,13 @@ describe("getAdminAnalytics", () => {
       countries: 0,
     });
     expect(r.rides).toEqual({ public: 0, registered: 0, private: 0 });
+    expect(r.routes).toEqual({
+      created: 0,
+      fromGpx: 0,
+      otherMethods: 0,
+      copies: 0,
+      distinctCopiers: 0,
+    });
     expect(r.daily).toEqual([]);
     expect(r.countries).toEqual([]);
   });

@@ -18,24 +18,23 @@ export const AUDIT_EVENT_TYPES = [
    */
   "RIDE_LEFT",
   /**
-   * A genuinely new route was stored — a GPX/hand-drawn line attached to a ride
-   * (eventRoute.service.ts::setEventRouteFromPoints) or POST /routes
-   * (routeLibrary.service.ts::createRoute). NOT attaching an existing route to another ride
-   * (that is ROUTE_COPIED).
+   * A genuinely new route row was stored. `details.source` carries the real
+   * `routes.source` value (db/types.ts ROUTE_SOURCES = gpx | tcx | geojson | json | drawn |
+   * copied):
+   *   - routeLibrary.service.ts::createRoute (POST /routes)          -> whatever the client sent
+   *   - eventRoute.service.ts::setEventRouteFromPoints (the create   -> always 'drawn': that
+   *     form's GPX/CSV import + hand-drawn line share one endpoint       endpoint's body has no
+   *     that has no source field, so routes.source is 'drawn' there)     source field
+   * NOT attaching an existing route to another ride — that is ROUTE_COPIED.
    */
   "ROUTE_CREATED",
   /**
-   * An existing route was reused on another ride — "copy the track from that ride" or picking
-   * one from the library (eventRoute.service.ts::recordRouteCopy, the same path that writes a
-   * route_copies row). Copying your own track does not count, exactly as route_copies does not.
+   * An existing route was reused/copied by another ride or user — "copy the track from that
+   * ride" or picking one out of the library. eventRoute.service.ts::recordRouteCopy, the same
+   * branch that writes a route_copies row (sql/025). Copying your OWN track does not count,
+   * exactly as route_copies does not. This is the download/copy/reuse metric.
    */
   "ROUTE_COPIED",
-  /**
-   * A route file was downloaded. RESERVED — there is no route-file / GPX-export endpoint on the
-   * server today (the "Downloads" number in the UI is the route_copies count, i.e. ROUTE_COPIED).
-   * Wire this when a real export endpoint is added.
-   */
-  "ROUTE_DOWNLOADED",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

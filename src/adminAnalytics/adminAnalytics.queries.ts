@@ -11,13 +11,18 @@ import { query } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
 import type { CountryRow, DailyRow } from "./adminAnalytics.types.js";
 
+function errCode(err: unknown): unknown {
+  return typeof err === "object" && err !== null && "code" in err
+    ? (err as { code?: unknown }).code
+    : undefined;
+}
+/** column missing (pre-sql/030 country columns). */
 function isMissingColumn(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "42703"
-  );
+  return errCode(err) === "42703";
+}
+/** table missing (pre-sql/025 route_copies). */
+function isMissingTable(err: unknown): boolean {
+  return errCode(err) === "42P01";
 }
 
 async function scalar(sql: string, params: unknown[] = []): Promise<number> {
@@ -64,6 +69,46 @@ export async function countActiveCountries(): Promise<number> {
     }
     throw err;
   }
+}
+
+/**
+ * Route creation + reuse, all time.
+ *   created / fromGpx  — the `routes` table (routes.source, db/types.ts ROUTE_SOURCES).
+ *   copies / copiers   — the append-only `route_copies` ledger (sql/025). 0 if not applied.
+ */
+export async function routeStats(): Promise<{
+  created: number;
+  fromGpx: number;
+  copies: number;
+  distinctCopiers: number;
+}> {
+  const routeRows = await query<{ created: number | string; from_gpx: number | string }>(
+    `SELECT COUNT(*)::int AS created,
+            COUNT(*) FILTER (WHERE source = 'gpx')::int AS from_gpx
+       FROM routes`,
+  );
+  const created = Number(routeRows[0]?.created ?? 0);
+  const fromGpx = Number(routeRows[0]?.from_gpx ?? 0);
+
+  let copies = 0;
+  let distinctCopiers = 0;
+  try {
+    const copyRows = await query<{ copies: number | string; copiers: number | string }>(
+      `SELECT COUNT(*)::int AS copies,
+              COUNT(DISTINCT copied_by_user_id)::int AS copiers
+         FROM route_copies`,
+    );
+    copies = Number(copyRows[0]?.copies ?? 0);
+    distinctCopiers = Number(copyRows[0]?.copiers ?? 0);
+  } catch (err) {
+    if (isMissingTable(err)) {
+      logger.warn({}, "admin-analytics: route_copies missing — run sql/025-track-copy-lineage.sql");
+    } else {
+      throw err;
+    }
+  }
+
+  return { created, fromGpx, copies, distinctCopiers };
 }
 
 export async function ridesByVisibility(): Promise<Record<string, number>> {

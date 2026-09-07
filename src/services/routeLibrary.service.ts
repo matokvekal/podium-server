@@ -81,13 +81,14 @@ export async function createRoute(
     { routeId: route.id, ownerId, pointCount: points.length, source: input.source },
     "route created",
   );
-  // Analytics — a new library route (POST /routes). Non-fatal (audit.service.ts). No rideId:
-  // a library route is not attached to a ride at this point.
+  // Analytics — a new library route (POST /routes). `input.source` is the real routes.source
+  // value the client sent (ROUTE_SOURCES: gpx | tcx | geojson | json | drawn | copied).
+  // Non-fatal. No rideId — a library route is not attached to a ride at this point.
   void trackAuditEvent({
     type: "ROUTE_CREATED",
     userId: ownerId,
     routeId: route.id,
-    details: { via: "library", source: input.source },
+    details: { source: input.source },
   });
   return route;
 }

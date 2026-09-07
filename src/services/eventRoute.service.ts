@@ -74,13 +74,15 @@ export async function setEventRouteFromPoints(
   );
   await attachRouteToEvent(eventId, stored.id);
   logger.info({ eventId, userId, routeId: stored.id }, "event route set");
-  // Analytics — a genuinely new route (a hand-drawn / imported line), not a reuse. Non-fatal.
+  // Analytics — a genuinely new route, not a reuse. This endpoint (POST /events/:id/route) has
+  // no source field, so insertDrawnRouteRow always stores routes.source = 'drawn' — that is the
+  // real stored value, reported as-is. Non-fatal.
   void trackAuditEvent({
     type: "ROUTE_CREATED",
     userId,
     routeId: stored.id,
     rideId: eventId,
-    details: { via: "event-route" },
+    details: { source: "drawn" },
   });
   return { points: stored.points, distanceKm: stored.distanceKm, elevationM: stored.elevationM };
 }

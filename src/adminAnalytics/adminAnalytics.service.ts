@@ -7,10 +7,11 @@ import {
   countHistoricalJoins,
   countRideCreators,
   countRides,
-  countUsers,
   countriesBreakdown,
+  countUsers,
   dailyActivity,
   ridesByVisibility,
+  routeStats,
 } from "./adminAnalytics.queries.js";
 import type { AnalyticsRange, AnalyticsResponse } from "./adminAnalytics.types.js";
 
@@ -23,6 +24,7 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
     historicalJoins,
     countries,
     visibility,
+    routes,
     daily,
     countryRows,
   ] = await Promise.all([
@@ -33,6 +35,7 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
     countHistoricalJoins(),
     countActiveCountries(),
     ridesByVisibility(),
+    routeStats(),
     dailyActivity(range),
     countriesBreakdown(),
   ]);
@@ -45,6 +48,13 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
       public: visibility.public ?? 0,
       registered: visibility.registered ?? 0,
       private: visibility.private ?? 0,
+    },
+    routes: {
+      created: routes.created,
+      fromGpx: routes.fromGpx,
+      otherMethods: routes.created - routes.fromGpx,
+      copies: routes.copies,
+      distinctCopiers: routes.distinctCopiers,
     },
     daily,
     countries: countryRows,

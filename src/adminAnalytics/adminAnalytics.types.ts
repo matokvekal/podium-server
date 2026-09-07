@@ -47,6 +47,24 @@ export interface AnalyticsResponse {
     private: number;
   };
 
+  /**
+   * Routes (all time), straight from the `routes` and `route_copies` business tables so the
+   * numbers cover the full history, not just the analytics window.
+   *   created        every routes row
+   *   fromGpx        routes.source = 'gpx'
+   *   otherMethods   created - fromGpx  (drawn / csv-as-drawn / tcx / geojson / …)
+   *   copies         every route_copies row — the reuse/copy metric (sql/025)
+   *   distinctCopiers COUNT(DISTINCT copied_by_user_id)
+   * `copies` / `distinctCopiers` are 0 if sql/025 has not been applied.
+   */
+  routes: {
+    created: number;
+    fromGpx: number;
+    otherMethods: number;
+    copies: number;
+    distinctCopiers: number;
+  };
+
   /** One row per day with any activity, in the range, NEWEST FIRST. */
   daily: DailyRow[];
 
