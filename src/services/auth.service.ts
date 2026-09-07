@@ -1,3 +1,4 @@
+import { trackAuditEvent } from "../audit/audit.service.js";
 import { env } from "../config/env.js";
 import type { AuthProviderType, Role, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
@@ -125,6 +126,9 @@ async function resolveUser(
     return user;
   }
   logger.info({ userId: user.id, provider, isNewUser: true }, "user authenticated");
+  // Analytics — a genuinely new user. Non-fatal (audit.service.ts); a failure here never
+  // affects the sign-in that just succeeded.
+  void trackAuditEvent({ type: "USER_REGISTERED", userId: user.id, details: { provider } });
   return user;
 }
 

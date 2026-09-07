@@ -21,6 +21,10 @@ const selectEventById = vi.fn();
 const updateEvent = vi.fn();
 const publishEventRouteIfOwned = vi.fn();
 
+// Analytics is fire-and-forget and self-contained (src/audit/audit.service.test.ts covers it);
+// stub it so this suite never reaches the DB pool.
+vi.mock("../audit/audit.service.js", () => ({ trackAuditEvent: vi.fn() }));
+
 vi.mock("../queries/event.queries.js", async () => {
   const actual = await vi.importActual<typeof import("../queries/event.queries.js")>(
     "../queries/event.queries.js",

@@ -24,6 +24,7 @@
 // request. Their validation deliberately still differs — see the note on
 // setEventRouteFromPoints.
 
+import { trackAuditEvent } from "../audit/audit.service.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -73,6 +74,14 @@ export async function setEventRouteFromPoints(
   );
   await attachRouteToEvent(eventId, stored.id);
   logger.info({ eventId, userId, routeId: stored.id }, "event route set");
+  // Analytics — a genuinely new route (a hand-drawn / imported line), not a reuse. Non-fatal.
+  void trackAuditEvent({
+    type: "ROUTE_CREATED",
+    userId,
+    routeId: stored.id,
+    rideId: eventId,
+    details: { via: "event-route" },
+  });
   return { points: stored.points, distanceKm: stored.distanceKm, elevationM: stored.elevationM };
 }
 
@@ -110,6 +119,15 @@ async function recordRouteCopy(
         sourceEventId,
       });
       logger.info({ routeId, userId, newEventId, sourceEventId, counted }, "track copy recorded");
+      // Analytics — a real reuse of someone else's track (self-copies are skipped above, same
+      // as route_copies). trackAuditEvent swallows its own errors, so this is safe here.
+      void trackAuditEvent({
+        type: "ROUTE_COPIED",
+        userId,
+        routeId,
+        rideId: newEventId,
+        details: { sourceEventId: sourceEventId ?? null, fromLibrary: sourceEventId === null },
+      });
     }
   } catch (err) {
     logger.warn(

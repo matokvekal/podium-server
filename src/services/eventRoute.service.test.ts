@@ -27,6 +27,9 @@ const selectRouteCopyCount = vi.fn();
 const getEventForViewer = vi.fn();
 const getRouteForViewer = vi.fn();
 
+// Analytics is fire-and-forget and self-contained; its own behaviour is covered in
+// src/audit/audit.service.test.ts. Stub it here so these tests never touch the DB pool.
+vi.mock("../audit/audit.service.js", () => ({ trackAuditEvent: vi.fn() }));
 vi.mock("../queries/event.queries.js", () => ({
   selectEventById: (...a: unknown[]) => selectEventById(...a),
   updateEventCopiedFrom: (...a: unknown[]) => updateEventCopiedFrom(...a),

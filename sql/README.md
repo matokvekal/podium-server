@@ -84,6 +84,7 @@ be. Do not re-run `019`.
 | `028-events-expected-participants.sql` | `events.expected_participants` (nullable INT) — the organizer's turnout estimate, shown on the event page as "12 / 40" only when set. Replaces showing the plan's participant cap to viewers. Every existing row `NULL`, unchanged | yes — additive, `IF NOT EXISTS` |
 | `029-app-flags.sql` | `app_flags` key/value table for operator-flipped global switches. Seeds `event_creation_open_to_all` (`'false'`) — flip to `'true'` to open ride creation to every account, no deploy. Read by `src/authz/entitlements.ts` (30s cache) | yes — new table, `DO NOTHING` seed |
 | `030-country.sql` | `users.country` + `events.country` (`CHAR(2)`, nullable). Backfills every existing ride to `'IL'` (Israel-only today); `users.country` left `NULL` for the client to fill from locale. Partial index on public `events(country)`. Powers the "Browse tracks" country filter | yes — additive, `IF NOT EXISTS`; the one `UPDATE` only touches `country IS NULL` |
+| `031-analytics-events.sql` | `analytics_events` — append-only server-side log of business actions (created/joined/route created/copied…) + indexes + the `analytics_daily_summary` VIEW. Written non-fatally by `src/audit/audit.service.ts`; never read on the request path. No client change | yes — new table + view, nothing existing touched |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

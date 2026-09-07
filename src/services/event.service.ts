@@ -10,6 +10,7 @@ import type {
   RegistrationStatus,
   RiderLevel,
 } from "../db/types.js";
+import { trackAuditEvent } from "../audit/audit.service.js";
 import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
 import { assertWithinEventsPerWeek } from "../authz/limits.js";
@@ -135,14 +136,27 @@ export async function joinEvent(
       { eventId: event.id, userId, participantId: result.participant.id },
       "user joined event",
     );
+    recordJoinAnalytics(event, userId);
     return { event, participant: result.participant };
   }
 
   // Ownerless legacy event — no entitlement to resolve, fall back to the plain idempotent join.
   const participant = await upsertParticipant({ eventId: event.id, userId, bib, initialStatus });
   logger.info({ eventId: event.id, userId, participantId: participant.id }, "user joined event");
+  recordJoinAnalytics(event, userId);
 
   return { event, participant };
+}
+
+/** Analytics for a successful join — non-fatal (audit.service.ts), one small INSERT. */
+function recordJoinAnalytics(event: Event, userId: number): void {
+  void trackAuditEvent({
+    type: "RIDE_JOINED",
+    userId,
+    rideId: event.id,
+    countryCode: event.country,
+    rideVisibility: event.visibility,
+  });
 }
 
 export async function findParticipantForUser(
@@ -362,6 +376,17 @@ export async function createEvent(
   }
 
   logger.info({ eventId: event.id, ownerId, joinAsRider: !!input.joinAsRider }, "event created");
+  // Analytics — one row per created ride. `event.country` is not populated on the row returned
+  // by insertEvent (it is written just above by updateEventCountryRegion), so read the value we
+  // actually stored. Non-fatal (audit.service.ts). No routeId: a track is attached by a
+  // separate request and records its own ROUTE_CREATED.
+  void trackAuditEvent({
+    type: "RIDE_CREATED",
+    userId: ownerId,
+    rideId: event.id,
+    countryCode: input.country ?? "IL",
+    rideVisibility: event.visibility,
+  });
   return event;
 }
 
