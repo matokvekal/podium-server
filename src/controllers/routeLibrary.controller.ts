@@ -22,10 +22,54 @@ import {
 } from "../services/routeLibrary.service.js";
 
 /**
+ * The stored preview line is held in the same two shapes as track_points — [lat, lng] tuples
+ * and {lat, lng, ele} objects (see the box atop eventRoute.queries.ts). The card contract is
+ * tuples, so the elevation is split off into a parallel array rather than handed over inline,
+ * which would have made the thumbnail undrawable for the client.
+ *
+ * Built in one pass so a dropped point leaves both arrays, at the same index.
+ */
+function splitPreview(points: unknown): {
+  previewPoints: [number, number][] | null;
+  previewElevations: (number | null)[] | null;
+} {
+  if (!Array.isArray(points)) return { previewPoints: null, previewElevations: null };
+
+  const line: [number, number][] = [];
+  const elevations: (number | null)[] = [];
+  let hasElevation = false;
+
+  for (const point of points) {
+    if (Array.isArray(point)) {
+      const [lat, lng] = point as [unknown, unknown];
+      if (typeof lat !== "number" || typeof lng !== "number") continue;
+      line.push([lat, lng]);
+      elevations.push(null);
+      continue;
+    }
+    if (typeof point !== "object" || point === null) continue;
+
+    const { lat, lng, ele } = point as { lat?: unknown; lng?: unknown; ele?: unknown };
+    if (typeof lat !== "number" || typeof lng !== "number") continue;
+    line.push([lat, lng]);
+
+    const usable = typeof ele === "number" && Number.isFinite(ele);
+    if (usable) hasElevation = true;
+    elevations.push(usable ? (ele as number) : null);
+  }
+
+  return {
+    previewPoints: line.length > 0 ? line : null,
+    previewElevations: hasElevation ? elevations : null,
+  };
+}
+
+/**
  * A browse card: everything except the full line. `previewPoints` is what draws the
  * thumbnail — see plan/08-routes-and-maps.md's "many map previews on one screen".
  */
 export function toRouteSummary(route: RouteWithOwner) {
+  const preview = splitPreview(route.previewPoints);
   return {
     id: route.id,
     ownerId: route.ownerId,
@@ -38,7 +82,9 @@ export function toRouteSummary(route: RouteWithOwner) {
     distanceKm: route.distanceKm,
     elevationM: route.elevationM,
     pointCount: route.pointCount,
-    previewPoints: route.previewPoints,
+    previewPoints: preview.previewPoints,
+    // Additive: absent for every route stored without elevation, so an older card is unchanged.
+    ...(preview.previewElevations ? { previewElevations: preview.previewElevations } : {}),
     markers: route.markers,
     startLat: route.startLat,
     startLon: route.startLon,

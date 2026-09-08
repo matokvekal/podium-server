@@ -25,6 +25,7 @@
 // └──────────────────────────────────────────────────────────────────────────────────────────┘
 
 import { execute, queryOne, withTransaction } from "../db/pool.js";
+import { simplifyByStride } from "../lib/geo.js";
 import {
   mapRouteWithOwner,
   ROUTE_OWNER_COLUMN,
@@ -35,6 +36,12 @@ import {
 } from "./routeLibrary.queries.js";
 
 export type RoutePoint = [number, number];
+
+/** Points kept in the card-sized preview line. Deliberately the same number as the route
+ *  library's PREVIEW_POINT_TARGET (services/routeLibrary.service.ts) so both writers produce
+ *  comparable previews — not imported from there, because a queries module importing a service
+ *  inverts the layering and that service already imports its own queries. */
+const PREVIEW_POINT_TARGET = 300;
 
 /** What `routes.track_points` actually holds — see the box above. Deliberately loose: the
  *  normalizer is what turns it into something the API can hand out. */
@@ -166,8 +173,14 @@ function mapEventRoute(row: RouteRow): EventRoute {
  * Inserts a new library row for a client-drawn/copied route, so it can then be attached to an
  * event. `source = 'drawn'` is the closest fit among the column's documented values
  * (gpx|tcx|geojson|json|drawn|copied) for a client-picked route with no real file behind it.
- * name, route_type, markers, preview_points, place_name, start/end lat/lon and bbox_* are all
- * left null; is_public defaults to FALSE.
+ * name, route_type, markers, place_name, start/end lat/lon and bbox_* are all left null;
+ * is_public defaults to FALSE.
+ *
+ * preview_points IS written, which it never used to be. The Find Tracks card reads it to draw a
+ * card-sized line and the elevation profile beneath it, and until now every route created this
+ * way stored NULL there — so those cards had nothing to draw. Same thinning the route library
+ * uses (simplifyByStride, PREVIEW_POINT_TARGET), applied to the same shape stored above so the
+ * preview carries elevation whenever the full line does.
  *
  * Named ...Row, and separate from routeLibrary's insertRoute, because it owns the tuple
  * geometry shape — see the track_points warning at the top of this file. A route that came
@@ -187,12 +200,22 @@ export async function insertDrawnRouteRow(
     elevations && elevations.length === points.length
       ? points.map(([lat, lng], i) => ({ lat, lng, ele: elevations[i] }))
       : points;
+  const preview = simplifyByStride(stored, PREVIEW_POINT_TARGET);
   const row = await queryOne<RouteRow>(
     `INSERT INTO routes
-        (owner_id, source, distance_km, elevation_m, track_points, point_count, is_public)
-      VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5, $6)
+        (owner_id, source, distance_km, elevation_m, track_points, preview_points,
+         point_count, is_public)
+      VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5::jsonb, $6, $7)
       RETURNING id, track_points, distance_km, elevation_m`,
-    [ownerId, distanceKm, elevationM, JSON.stringify(stored), points.length, isPublic],
+    [
+      ownerId,
+      distanceKm,
+      elevationM,
+      JSON.stringify(stored),
+      JSON.stringify(preview),
+      points.length,
+      isPublic,
+    ],
   );
   if (!row) throw new Error("insertDrawnRouteRow returned no row");
   return mapStoredRoute(row);
