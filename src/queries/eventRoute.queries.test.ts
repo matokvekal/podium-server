@@ -24,9 +24,12 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { publishEventRouteIfOwned, selectEventRouteGeometry, selectEventRouteId } = await import(
-  "./eventRoute.queries.js"
-);
+const {
+  insertDrawnRouteRow,
+  publishEventRouteIfOwned,
+  selectEventRouteGeometry,
+  selectEventRouteId,
+} = await import("./eventRoute.queries.js");
 
 beforeEach(() => {
   query.mockReset();
@@ -101,6 +104,203 @@ describe("selectEventRouteGeometry point shapes", () => {
   it("still returns null when the event has no route at all", async () => {
     queryOne.mockResolvedValue(null);
     expect(await selectEventRouteGeometry("e1")).toBeNull();
+  });
+});
+
+describe("the per-point elevation series", () => {
+  it("comes back parallel to the points when the geometry carries it", async () => {
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        { lat: 32.1, lng: 34.8, ele: 12 },
+        { lat: 32.2, lng: 34.9, ele: 48 },
+        { lat: 32.3, lng: 35.0, ele: 31 },
+      ],
+      distance_km: 40,
+      elevation_m: 300,
+    });
+
+    const route = await selectEventRouteGeometry("e1");
+
+    expect(route?.points).toHaveLength(3);
+    expect(route?.elevations).toEqual([12, 48, 31]);
+  });
+
+  it("is absent entirely for a tuple route, so the old response body is unchanged", async () => {
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        [32.1, 34.8],
+        [32.2, 34.9],
+      ],
+      distance_km: 40,
+      elevation_m: 300,
+    });
+
+    const route = await selectEventRouteGeometry("e1");
+
+    expect(route).not.toHaveProperty("elevations");
+  });
+
+  it("is absent when object geometry carries no elevation at all", async () => {
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        { lat: 32.1, lng: 34.8 },
+        { lat: 32.2, lng: 34.9 },
+      ],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    expect(await selectEventRouteGeometry("e1")).not.toHaveProperty("elevations");
+  });
+
+  it("nulls the gaps when only some points carry elevation", async () => {
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        { lat: 32.1, lng: 34.8, ele: 12 },
+        { lat: 32.2, lng: 34.9 },
+        { lat: 32.3, lng: 35.0, ele: 31 },
+      ],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    expect((await selectEventRouteGeometry("e1"))?.elevations).toEqual([12, null, 31]);
+  });
+
+  it("rejects an unusable elevation value rather than storing NaN on the route", async () => {
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        { lat: 32.1, lng: 34.8, ele: "high" },
+        { lat: 32.2, lng: 34.9, ele: 48 },
+      ],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    expect((await selectEventRouteGeometry("e1"))?.elevations).toEqual([null, 48]);
+  });
+
+  it("drops a malformed point from BOTH arrays, so the two stay aligned", async () => {
+    // The whole point of building them in one pass: if the bad point were dropped from the
+    // line but not the series, every elevation after it would belong to the wrong place.
+    queryOne.mockResolvedValue({
+      id: 1,
+      track_points: [
+        { lat: 32.1, lng: 34.8, ele: 12 },
+        { lat: "nope", lng: 34.9, ele: 999 },
+        { lat: 32.3, lng: 35.0, ele: 31 },
+      ],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    const route = await selectEventRouteGeometry("e1");
+
+    expect(route?.points).toEqual([
+      [32.1, 34.8],
+      [32.3, 35.0],
+    ]);
+    expect(route?.elevations).toEqual([12, 31]);
+    expect(route?.elevations).toHaveLength(route?.points.length ?? 0);
+  });
+});
+
+describe("insertDrawnRouteRow geometry shape", () => {
+  /** The JSONB written to track_points, as the caller passed it. */
+  function storedGeometry(): unknown {
+    return JSON.parse(queryOne.mock.calls[0][1][3] as string);
+  }
+
+  it("writes plain tuples when there is no elevation — an unchanged upload stores the same row", async () => {
+    queryOne.mockResolvedValue({
+      id: 7,
+      track_points: [
+        [32.1, 34.8],
+        [32.2, 34.9],
+      ],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    await insertDrawnRouteRow(
+      1,
+      {
+        points: [
+          [32.1, 34.8],
+          [32.2, 34.9],
+        ],
+        elevations: null,
+      },
+      40,
+      null,
+      false,
+    );
+
+    expect(storedGeometry()).toEqual([
+      [32.1, 34.8],
+      [32.2, 34.9],
+    ]);
+  });
+
+  it("writes objects when an elevation series came with the upload", async () => {
+    queryOne.mockResolvedValue({
+      id: 7,
+      track_points: [{ lat: 32.1, lng: 34.8, ele: 12 }],
+      distance_km: 40,
+      elevation_m: 300,
+    });
+
+    await insertDrawnRouteRow(
+      1,
+      {
+        points: [
+          [32.1, 34.8],
+          [32.2, 34.9],
+        ],
+        elevations: [12, null],
+      },
+      40,
+      300,
+      false,
+    );
+
+    expect(storedGeometry()).toEqual([
+      { lat: 32.1, lng: 34.8, ele: 12 },
+      { lat: 32.2, lng: 34.9, ele: null },
+    ]);
+  });
+
+  it("falls back to tuples if the series does not line up with the points", async () => {
+    queryOne.mockResolvedValue({
+      id: 7,
+      track_points: [[32.1, 34.8]],
+      distance_km: 40,
+      elevation_m: null,
+    });
+
+    await insertDrawnRouteRow(
+      1,
+      {
+        points: [
+          [32.1, 34.8],
+          [32.2, 34.9],
+        ],
+        elevations: [12],
+      },
+      40,
+      null,
+      false,
+    );
+
+    expect(storedGeometry()).toEqual([
+      [32.1, 34.8],
+      [32.2, 34.9],
+    ]);
   });
 });
 

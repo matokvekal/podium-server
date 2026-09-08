@@ -14,10 +14,14 @@
 // │   this file            -> RoutePoint  = [lat, lng]      (tuples)                         │
 // │   routeLibrary.queries -> TrackPoint  = { lat, lng, … } (objects)                        │
 // │                                                                                          │
-// │ That is pre-existing and is a real latent bug: a route written through the library and   │
-// │ read back through GET /events/:eventId/route comes out as objects where the client's     │
-// │ EventRoute type expects tuples (and vice versa). It is NOT fixed here because either     │
-// │ mapper changing alters a live API response body. See the refactor notes / PROBLEMS.md.  │
+// │ Both shapes are now written ON PURPOSE by this file: a route whose upload carried a     │
+// │ per-point elevation series is stored as objects, so the series has somewhere to live     │
+// │ without widening the tuple (which is a live PWA contract). A route without elevation is  │
+// │ still stored as tuples, byte for byte as before.                                         │
+// │                                                                                          │
+// │ The READ side is what keeps that safe: normalizeGeometry below projects either shape     │
+// │ back to tuples plus a parallel elevation array, so GET /events/:eventId/route hands the   │
+// │ client exactly the `points` it always did. Never read this column without it.            │
 // └──────────────────────────────────────────────────────────────────────────────────────────┘
 
 import { execute, queryOne, withTransaction } from "../db/pool.js";
@@ -32,9 +36,13 @@ import {
 
 export type RoutePoint = [number, number];
 
+/** What `routes.track_points` actually holds — see the box above. Deliberately loose: the
+ *  normalizer is what turns it into something the API can hand out. */
+type StoredPoint = unknown;
+
 interface RouteRow {
   id: number;
-  track_points: RoutePoint[] | null;
+  track_points: StoredPoint[] | null;
   distance_km: number | null;
   elevation_m: number | null;
 }
@@ -45,6 +53,7 @@ export interface StoredRoute {
   points: RoutePoint[];
   distanceKm: number;
   elevationM: number | null;
+  elevations: (number | null)[] | null;
 }
 
 /** What the client's EventRoute type expects — the exact contract this module hands back. */
@@ -52,6 +61,16 @@ export interface EventRoute {
   points: RoutePoint[];
   distanceKm: number;
   elevationM: number | null;
+  /** Present only when the stored geometry carried elevation. Omitted entirely otherwise, so
+   *  the response body for every pre-existing route is unchanged. */
+  elevations?: (number | null)[] | null;
+}
+
+/** The geometry handed to insertDrawnRouteRow: the line, and the elevation series when the
+ *  upload had one. Kept as one value so the two can never be passed out of step. */
+export interface RouteGeometry {
+  points: RoutePoint[];
+  elevations: (number | null)[] | null;
 }
 
 /**
@@ -83,22 +102,50 @@ function toRoutePoint(point: unknown): RoutePoint | null {
   return null;
 }
 
-function normalizePoints(points: RoutePoint[] | null): RoutePoint[] {
-  if (!points) return [];
+/** The elevation stored on a point, if it has one. Tuple-shaped points never do. */
+function toElevation(point: unknown): number | null {
+  if (typeof point !== "object" || point === null || Array.isArray(point)) return null;
+  const { ele } = point as { ele?: unknown };
+  return typeof ele === "number" && Number.isFinite(ele) ? ele : null;
+}
+
+/**
+ * Projects the stored column into the two arrays the API hands out.
+ *
+ * Both are built in ONE pass, and that is the point: a malformed point is dropped, and it has
+ * to disappear from the elevation series at the same index or every later elevation would be
+ * attributed to the wrong place on the route. `elevations` comes back null unless at least one
+ * point actually carried a value, so a route stored as plain tuples reports "no elevation"
+ * rather than an array of nulls.
+ */
+function normalizeGeometry(points: StoredPoint[] | null): RouteGeometry {
+  if (!points) return { points: [], elevations: null };
+
   const normalized: RoutePoint[] = [];
+  const elevations: (number | null)[] = [];
+  let hasElevation = false;
+
   for (const point of points) {
     const tuple = toRoutePoint(point);
     // A point in neither shape is dropped rather than passed through as garbage the client
     // would try to draw. Dropping one point thins a line; passing it on breaks the map.
-    if (tuple) normalized.push(tuple);
+    if (!tuple) continue;
+    normalized.push(tuple);
+
+    const ele = toElevation(point);
+    if (ele !== null) hasElevation = true;
+    elevations.push(ele);
   }
-  return normalized;
+
+  return { points: normalized, elevations: hasElevation ? elevations : null };
 }
 
 function mapStoredRoute(row: RouteRow): StoredRoute {
+  const geometry = normalizeGeometry(row.track_points);
   return {
     id: row.id,
-    points: normalizePoints(row.track_points),
+    points: geometry.points,
+    elevations: geometry.elevations,
     // distance_km is nullable at the column level (the table also serves file-derived routes
     // with no known distance yet), but this module always supplies one on insert.
     distanceKm: row.distance_km ?? 0,
@@ -107,10 +154,12 @@ function mapStoredRoute(row: RouteRow): StoredRoute {
 }
 
 /** Strips `id` off a StoredRoute — the public API contract is exactly { points, distanceKm,
- * elevationM }, matching the client's EventRoute type, nothing extra. */
+ * elevationM }, matching the client's EventRoute type, plus `elevations` when, and only when,
+ * the stored geometry actually carried it. A route without elevation gets the identical body
+ * it got before the profile existed. */
 function mapEventRoute(row: RouteRow): EventRoute {
-  const { id: _id, ...eventRoute } = mapStoredRoute(row);
-  return eventRoute;
+  const { id: _id, elevations, ...eventRoute } = mapStoredRoute(row);
+  return elevations ? { ...eventRoute, elevations } : eventRoute;
 }
 
 /**
@@ -120,22 +169,30 @@ function mapEventRoute(row: RouteRow): EventRoute {
  * name, route_type, markers, preview_points, place_name, start/end lat/lon and bbox_* are all
  * left null; is_public defaults to FALSE.
  *
- * Named ...Row, and separate from routeLibrary's insertRoute, because it writes the tuple
- * geometry shape — see the track_points warning at the top of this file.
+ * Named ...Row, and separate from routeLibrary's insertRoute, because it owns the tuple
+ * geometry shape — see the track_points warning at the top of this file. A route that came
+ * with a per-point elevation series is stored as {lat, lng, ele} objects instead, which is the
+ * other shape that box describes and which normalizeGeometry reads back.
  */
 export async function insertDrawnRouteRow(
   ownerId: number,
-  points: RoutePoint[],
+  geometry: RouteGeometry,
   distanceKm: number,
   elevationM: number | null,
   isPublic: boolean,
 ): Promise<StoredRoute> {
+  const { points, elevations } = geometry;
+  // Tuples unless there is elevation to carry: an unchanged upload writes a byte-identical row.
+  const stored: StoredPoint[] =
+    elevations && elevations.length === points.length
+      ? points.map(([lat, lng], i) => ({ lat, lng, ele: elevations[i] }))
+      : points;
   const row = await queryOne<RouteRow>(
     `INSERT INTO routes
         (owner_id, source, distance_km, elevation_m, track_points, point_count, is_public)
       VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5, $6)
       RETURNING id, track_points, distance_km, elevation_m`,
-    [ownerId, distanceKm, elevationM, JSON.stringify(points), points.length, isPublic],
+    [ownerId, distanceKm, elevationM, JSON.stringify(stored), points.length, isPublic],
   );
   if (!row) throw new Error("insertDrawnRouteRow returned no row");
   return mapStoredRoute(row);

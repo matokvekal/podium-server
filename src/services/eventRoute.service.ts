@@ -67,7 +67,8 @@ export async function setEventRouteFromPoints(
   // is what publishes its track — "registered" and "private" rides keep theirs unlisted.
   const stored = await insertDrawnRouteRow(
     userId,
-    input.points,
+    // The schema already guarantees a present series lines up with the points one-for-one.
+    { points: input.points, elevations: input.elevations ?? null },
     input.distanceKm,
     input.elevationM ?? null,
     event.visibility === "public",
@@ -84,7 +85,12 @@ export async function setEventRouteFromPoints(
     rideId: eventId,
     details: { source: "drawn" },
   });
-  return { points: stored.points, distanceKm: stored.distanceKm, elevationM: stored.elevationM };
+  return {
+    points: stored.points,
+    distanceKm: stored.distanceKm,
+    elevationM: stored.elevationM,
+    ...(stored.elevations ? { elevations: stored.elevations } : {}),
+  };
 }
 
 /**

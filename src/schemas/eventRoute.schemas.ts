@@ -15,12 +15,31 @@ const routePointSchema = z.tuple([z.number().min(-90).max(90), z.number().min(-1
  *
  * 5000 points is generous for a drawn/copied route while still capping the payload against
  * abuse.
+ *
+ * `elevations` is ADDITIVE and optional: it carries the per-point elevation series that draws
+ * the elevation profile under the map, parallel to `points` rather than as a third slot in the
+ * tuple, because that tuple is a live PWA contract. A client that never sends it behaves
+ * exactly as before, and a route stored without it simply has no profile.
  */
-export const setEventRouteSchema = z.object({
-  points: z.array(routePointSchema).min(1).max(5000),
-  distanceKm: z.number().positive(),
-  elevationM: z.number().nullable().optional(),
-});
+export const setEventRouteSchema = z
+  .object({
+    points: z.array(routePointSchema).min(1).max(5000),
+    distanceKm: z.number().positive(),
+    elevationM: z.number().nullable().optional(),
+    /** Metres, one entry per point, null where that point had no readable value. */
+    elevations: z.array(z.number().nullable()).max(5000).optional(),
+  })
+  .superRefine((value, ctx) => {
+    // A series that does not line up with the points describes a different route. Storing it
+    // would draw a profile that silently disagrees with the line above it.
+    if (value.elevations && value.elevations.length !== value.points.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["elevations"],
+        message: "elevations must have exactly one entry per point",
+      });
+    }
+  });
 
 export type SetEventRouteInput = z.infer<typeof setEventRouteSchema>;
 
