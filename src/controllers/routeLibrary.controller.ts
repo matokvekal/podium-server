@@ -22,18 +22,18 @@ import {
 } from "../services/routeLibrary.service.js";
 
 /**
- * The stored preview line is held in the same two shapes as track_points — [lat, lng] tuples
- * and {lat, lng, ele} objects (see the box atop eventRoute.queries.ts). The card contract is
- * tuples, so the elevation is split off into a parallel array rather than handed over inline,
- * which would have made the thumbnail undrawable for the client.
+ * Stored geometry — both preview_points and track_points — is held in two shapes: [lat, lng]
+ * tuples and {lat, lng, ele} objects (see the box atop eventRoute.queries.ts). The client
+ * contract is tuples, so the elevation is split off into a parallel array rather than handed
+ * over inline, which would have made the line undrawable for the client.
  *
  * Built in one pass so a dropped point leaves both arrays, at the same index.
  */
-function splitPreview(points: unknown): {
-  previewPoints: [number, number][] | null;
-  previewElevations: (number | null)[] | null;
+function splitStoredGeometry(points: unknown): {
+  line: [number, number][] | null;
+  elevations: (number | null)[] | null;
 } {
-  if (!Array.isArray(points)) return { previewPoints: null, previewElevations: null };
+  if (!Array.isArray(points)) return { line: null, elevations: null };
 
   const line: [number, number][] = [];
   const elevations: (number | null)[] = [];
@@ -59,8 +59,8 @@ function splitPreview(points: unknown): {
   }
 
   return {
-    previewPoints: line.length > 0 ? line : null,
-    previewElevations: hasElevation ? elevations : null,
+    line: line.length > 0 ? line : null,
+    elevations: hasElevation ? elevations : null,
   };
 }
 
@@ -69,7 +69,7 @@ function splitPreview(points: unknown): {
  * thumbnail — see plan/08-routes-and-maps.md's "many map previews on one screen".
  */
 export function toRouteSummary(route: RouteWithOwner) {
-  const preview = splitPreview(route.previewPoints);
+  const preview = splitStoredGeometry(route.previewPoints);
   return {
     id: route.id,
     ownerId: route.ownerId,
@@ -82,9 +82,9 @@ export function toRouteSummary(route: RouteWithOwner) {
     distanceKm: route.distanceKm,
     elevationM: route.elevationM,
     pointCount: route.pointCount,
-    previewPoints: preview.previewPoints,
+    previewPoints: preview.line,
     // Additive: absent for every route stored without elevation, so an older card is unchanged.
-    ...(preview.previewElevations ? { previewElevations: preview.previewElevations } : {}),
+    ...(preview.elevations ? { previewElevations: preview.elevations } : {}),
     markers: route.markers,
     startLat: route.startLat,
     startLon: route.startLon,
@@ -104,9 +104,24 @@ export function toRouteSummary(route: RouteWithOwner) {
   };
 }
 
-/** The summary plus the real geometry. Only ever returned by GET /routes/:routeId. */
-function toRouteDetail(route: RouteWithOwner) {
-  return { ...toRouteSummary(route), trackPoints: route.trackPoints };
+/**
+ * The summary plus the real geometry. Only ever returned by GET /routes/:routeId.
+ *
+ * trackPoints goes through the same normalizer as the preview line above, for the same reason:
+ * since routes started storing {lat, lng, ele} objects, handing this column over raw meant a
+ * route WITH elevation reached the client in a shape its tuple contract does not understand —
+ * no elevation profile, and no start point for the region guess. A route stored as tuples
+ * projects to itself, so this changes nothing for anything already in the library.
+ */
+export function toRouteDetail(route: RouteWithOwner) {
+  const geometry = splitStoredGeometry(route.trackPoints);
+  return {
+    ...toRouteSummary(route),
+    trackPoints: geometry.line,
+    // Additive, exactly like previewElevations: omitted for a route with no elevation, so the
+    // response body for every pre-existing route is byte-identical to what it was.
+    ...(geometry.elevations ? { elevations: geometry.elevations } : {}),
+  };
 }
 
 // POST /api/v1/routes
