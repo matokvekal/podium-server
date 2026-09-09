@@ -7,7 +7,7 @@
 // Everything derived (distance, climb, bbox, preview) is computed ONCE here, at creation,
 // and never on read. See plan/08-routes-and-maps.md.
 
-import { trackAuditEvent } from "../audit/audit.service.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import type { Route, RouteMarker, RouteSource, RouteType, TrackPoint } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { computeBbox, simplifyByStride, sumClimbMeters, sumDistanceKm } from "../lib/geo.js";

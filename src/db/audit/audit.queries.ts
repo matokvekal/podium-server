@@ -2,7 +2,7 @@
 // errors propagate — audit.service.ts is the layer that swallows them so the caller is never
 // affected. See sql/031-analytics-events.sql.
 
-import { execute } from "../db/pool.js";
+import { execute } from "../pool.js";
 import type { AuditEvent } from "./audit.types.js";
 
 export async function insertAnalyticsEvent(event: AuditEvent): Promise<void> {

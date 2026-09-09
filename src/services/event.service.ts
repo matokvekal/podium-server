@@ -10,7 +10,7 @@ import type {
   RegistrationStatus,
   RiderLevel,
 } from "../db/types.js";
-import { trackAuditEvent } from "../audit/audit.service.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
 import { assertWithinEventsPerWeek } from "../authz/limits.js";

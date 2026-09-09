@@ -1,4 +1,4 @@
-import { trackAuditEvent } from "../audit/audit.service.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { env } from "../config/env.js";
 import type { AuthProviderType, Role, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";

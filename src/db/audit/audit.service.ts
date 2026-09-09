@@ -14,7 +14,7 @@
 // This mirrors the pattern already used for a table that may predate its migration —
 // selectLiveGrants (authz/entitlements.ts) and getAppFlag (queries/appFlags.queries.ts).
 
-import { logger } from "../lib/logger.js";
+import { logger } from "../../lib/logger.js";
 import { insertAnalyticsEvent } from "./audit.queries.js";
 import type { AuditEvent } from "./audit.types.js";
 

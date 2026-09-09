@@ -24,7 +24,7 @@
 // request. Their validation deliberately still differs — see the note on
 // setEventRouteFromPoints.
 
-import { trackAuditEvent } from "../audit/audit.service.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
 import {

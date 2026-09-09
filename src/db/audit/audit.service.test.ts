@@ -7,10 +7,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const execute = vi.fn();
 const loggerWarn = vi.fn();
 
-vi.mock("../db/pool.js", () => ({
+vi.mock("../pool.js", () => ({
   execute: (...args: unknown[]) => execute(...args),
 }));
-vi.mock("../lib/logger.js", () => ({
+vi.mock("../../lib/logger.js", () => ({
   logger: { warn: (...args: unknown[]) => loggerWarn(...args), info: vi.fn(), debug: vi.fn() },
 }));
 
