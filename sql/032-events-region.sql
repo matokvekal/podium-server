@@ -1,0 +1,64 @@
+-- 032-events-region.sql — the `region` column sql/030 was supposed to add and never did.
+--
+-- WHY THIS EXISTS
+--   src/queries/event.queries.ts filters public rides on `e.region = $13` and selects it into
+--   every summary, and updateEventCountryRegion writes it. No migration ever created the
+--   column. On production that makes selectPublicEvents throw 42703 (undefined_column) on
+--   EVERY call, which the catch at the bottom of that function swallows — falling back to the
+--   legacy query that keeps only q / type / bucket and DROPS every other filter.
+--
+--   Observed live on 2026-09-09 before this ran:
+--     type=RACE            -> 0 rides   (legacy query supports type, so this worked)
+--     country=ZZ           -> 3 rides   (should be 0)
+--     activityType=road    -> 3 rides   (unfiltered)
+--     minDistanceKm=9999   -> 3 rides   (unfiltered)
+--
+--   So the Find Rides country filter, the Find Tracks country/area filters, and the distance /
+--   climb / duration / surface filters have all been silently inert in production. This one
+--   column is the only missing object the main query references; everything else it needs
+--   (activity_type, level, elevation_gain_m, duration_min, country, route_copies) is present.
+--
+--   Second effect: updateEventCountryRegion writes country and region in ONE statement. With
+--   region missing, that statement threw and was swallowed, so NEITHER value landed — which is
+--   why some recently created rides have country IS NULL. See the note at the bottom.
+--
+-- SHAPE
+--   region  VARCHAR(32)  nullable, no default
+--
+--   Nullable with no default is correct and deliberate: NULL means "the organiser has not set
+--   an area", which is the honest state for every existing ride. Values are the keys in
+--   src/lib/regions.ts (golan, north, sharon, center, jerusalem, shfela, jordan_valley,
+--   dead_sea, negev, arava, eilat) — longest is `jordan_valley` at 13 chars, so 32 is roomy.
+--
+--   NO CHECK constraint on purpose. The allowed set is enforced by zod (z.enum(REGION_KEYS) in
+--   src/schemas/event.schemas.ts); pinning it in the database too would mean a migration every
+--   time the region list changes.
+--
+-- BACKFILL
+--   None. Nothing is written to existing rows — there is no coordinate-free way to know a
+--   ride's region, and NULL already reads correctly everywhere.
+--
+-- HOW TO RUN
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/032-events-region.sql
+--
+-- SAFE ON LIVE DATA and safe to run more than once. ADD COLUMN IF NOT EXISTS with no default is
+-- metadata-only in PostgreSQL 11+ — no table rewrite, no lock held for any meaningful time.
+
+ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS region VARCHAR(32);
+
+-- Verify afterwards:
+--   SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
+--     FROM information_schema.columns
+--    WHERE table_name = 'events' AND column_name = 'region';
+--
+-- Then confirm the fallback is gone — this must return 0, not the whole list:
+--   GET /api/v1/events/public?bucket=upcoming&country=ZZ
+--
+-- NOT DONE HERE, deliberately:
+--   * No index on events(region). sql/030 added a partial index for country because the picker
+--     always filters on it; region is NULL for every existing row today, so an index would sit
+--     unused. Add one when real region data exists and the filter is measurably slow.
+--   * Rides already stored with country IS NULL are NOT repaired — they were created while the
+--     combined country/region write was failing. They stay invisible to any country-scoped
+--     search until corrected. See sql/gilad/README.md; the operator decides, separately.
