@@ -30,6 +30,7 @@ test-examples
 .DS_Store
 *.pem
 *.log
+/logs
 # debug
 npm-debug.log*
 yarn-debug.log*
