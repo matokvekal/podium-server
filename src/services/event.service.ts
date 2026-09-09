@@ -238,7 +238,8 @@ export async function createEvent(
     endsAt?: Date;
     displayMode: DisplayMode;
     visibility: EventVisibility;
-    description?: string;
+    /** null and "" both arrive as null from the schema — a ride created with no description. */
+    description?: string | null;
     location?: string;
     area?: string;
     /** The ride's country (2-letter). Falls back to 'IL' when the client sends nothing. */

@@ -16,8 +16,13 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { selectEventsForUser, selectPublicEvents, selectPublicEventAreas, updateEventRidePlan } =
-  await import("./event.queries.js");
+const {
+  selectEventsForUser,
+  selectPublicEvents,
+  selectPublicEventAreas,
+  updateEvent,
+  updateEventRidePlan,
+} = await import("./event.queries.js");
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -428,5 +433,58 @@ describe("updateEventRidePlan", () => {
   it("swallows a missing-column error on a database without sql/022", async () => {
     execute.mockRejectedValueOnce({ code: "42703" });
     await expect(updateEventRidePlan("e1", { durationMin: 60 })).resolves.toBeUndefined();
+  });
+});
+
+// A description used to be impossible to REMOVE. Every column in updateEvent is written with
+// COALESCE($n, column), which reads null as "the caller left this out" — correct for a name,
+// wrong for the one field an organizer can legitimately want to empty. Clearing the textarea
+// restored the old text on the next load.
+//
+// description is now written with a CASE keyed on a separate "was this key present" parameter,
+// so the two cases below are genuinely different statements' worth of behaviour, not one.
+describe("updateEvent description", () => {
+  beforeEach(() => {
+    query.mockReset();
+    query.mockResolvedValue([eventRow()]);
+  });
+
+  /** The trailing boolean is the "description was provided" flag the CASE reads. */
+  const flagOf = (params: unknown[]) => params[params.length - 1];
+  const descriptionOf = (params: unknown[]) => params[8];
+
+  it("does not write the column at all when description is omitted", async () => {
+    await updateEvent("11111111-1111-1111-1111-111111111111", { name: "New name" });
+
+    const [, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(flagOf(params)).toBe(false);
+  });
+
+  it("clears the column when description is explicitly null", async () => {
+    await updateEvent("11111111-1111-1111-1111-111111111111", { description: null });
+
+    const [, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(flagOf(params)).toBe(true);
+    expect(descriptionOf(params)).toBeNull();
+  });
+
+  it("sets the column when description is a real string", async () => {
+    await updateEvent("11111111-1111-1111-1111-111111111111", {
+      description: "06:00 from the square",
+    });
+
+    const [, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(flagOf(params)).toBe(true);
+    expect(descriptionOf(params)).toBe("06:00 from the square");
+  });
+
+  it("writes description with a CASE, not a COALESCE — the other columns keep COALESCE", async () => {
+    await updateEvent("11111111-1111-1111-1111-111111111111", { name: "New name" });
+
+    const [sql] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("description = CASE WHEN");
+    expect(sql).not.toContain("description = COALESCE");
+    // The guard that this fix stayed surgical: name is still written the old way.
+    expect(sql).toContain("name = COALESCE");
   });
 });

@@ -73,11 +73,11 @@ describe("description whitespace", () => {
     expect(result.data?.description).toBe(plan);
   });
 
-  it("collapses a whitespace-only description to empty, which the event page treats as absent", () => {
+  it("collapses a whitespace-only description to null — one stored state for 'no description'", () => {
     const result = createEventSchema.safeParse({ ...base, description: "        " });
 
     expect(result.success).toBe(true);
-    expect(result.data?.description).toBe("");
+    expect(result.data?.description).toBeNull();
   });
 });
 
@@ -89,10 +89,11 @@ describe("description content", () => {
     expect(result.data?.description).toBeUndefined();
   });
 
-  it("still accepts an empty string, unchanged from before", () => {
+  it("still accepts an empty string, and stores it as no description", () => {
     const result = createEventSchema.safeParse({ ...base, description: "" });
 
     expect(result.success).toBe(true);
+    expect(result.data?.description).toBeNull();
   });
 
   it("accepts Hebrew, Arabic, emoji, quotes, apostrophes and parentheses", () => {
@@ -115,6 +116,45 @@ describe("description content", () => {
 
   it("rejects a non-string description rather than coercing it", () => {
     expect(createEventSchema.safeParse({ ...base, description: 42 }).success).toBe(false);
-    expect(createEventSchema.safeParse({ ...base, description: null }).success).toBe(false);
+    expect(createEventSchema.safeParse({ ...base, description: true }).success).toBe(false);
+    expect(createEventSchema.safeParse({ ...base, description: { text: "hi" } }).success).toBe(
+      false,
+    );
+  });
+});
+
+// The three states a PATCH body can express. This is the distinction that makes a description
+// removable: before it existed, "" and null were both rejected or ignored, an emptied field was
+// indistinguishable from an untouched one, and the old text came back on the next load.
+describe("clearing a description", () => {
+  it("accepts an explicit null as 'remove this description'", () => {
+    const result = updateEventSchema.safeParse({ description: null });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.description).toBeNull();
+  });
+
+  it("treats an emptied textarea the same as an explicit null", () => {
+    const result = updateEventSchema.safeParse({ description: "   " });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.description).toBeNull();
+  });
+
+  it("leaves description undefined when the key is absent, so the stored text is kept", () => {
+    const result = updateEventSchema.safeParse({ name: "New name" });
+
+    expect(result.success).toBe(true);
+    // undefined, NOT null — updateEvent's CASE reads exactly this difference to decide between
+    // "leave it alone" and "clear it".
+    expect(result.data?.description).toBeUndefined();
+    expect("description" in (result.data ?? {})).toBe(false);
+  });
+
+  it("keeps a real description a real description", () => {
+    const result = updateEventSchema.safeParse({ description: "  06:00 from the square  " });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.description).toBe("06:00 from the square");
   });
 });

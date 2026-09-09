@@ -20,15 +20,31 @@ import { REGION_KEYS } from "../lib/regions.js";
 export const DESCRIPTION_MAX_CHARS = 4000;
 
 /**
- * Trimmed BEFORE the length check, so trailing whitespace can never be what pushes a
- * description over the cap. This also collapses a whitespace-only description to "", which the
- * event page treats as absent — the same thing it already showed for one.
+ * Trimmed BEFORE the length check, so trailing whitespace can never be what pushes a description
+ * over the cap.
+ *
+ * Three input states, deliberately distinct — this is what lets a description be REMOVED rather
+ * than only replaced:
+ *
+ *   omitted      leave the stored description exactly as it is
+ *   null or ""   clear it
+ *   a string     set it
+ *
+ * "" normalizes to null so a cleared description is ONE state in the database rather than two
+ * that render identically. Nullable for the same reason: without it a client had no way to say
+ * "remove this" — an emptied field was indistinguishable from an untouched one, and the stored
+ * text came back on the next load.
  *
  * Deliberately nothing more: no character blacklist, no HTML stripping. Descriptions are stored
  * as plain text, rendered as escaped React text children, and written with parameterized SQL,
  * so punctuation, quotes, emoji, Hebrew and Arabic are all just text and must stay valid.
  */
-const description = z.string().trim().max(DESCRIPTION_MAX_CHARS);
+const description = z
+  .string()
+  .trim()
+  .max(DESCRIPTION_MAX_CHARS)
+  .nullable()
+  .transform((value) => (value === "" ? null : value));
 
 /** ISO 3166-1 alpha-2, uppercased on the way in — the same shape used everywhere else. */
 const countryCode = z

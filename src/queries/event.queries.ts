@@ -759,7 +759,9 @@ export interface UpdateEventInput {
   endsAt?: Date | null;
   displayMode?: DisplayMode;
   visibility?: EventVisibility;
-  description?: string;
+  /** undefined = leave alone; null = clear it; a string = set it. See the CASE in updateEvent —
+   *  COALESCE cannot express "clear", which is why this one column is not written like the rest. */
+  description?: string | null;
   location?: string;
   area?: string;
   showEventInfo?: boolean;
@@ -789,7 +791,13 @@ export interface UpdateEventInput {
   expectedParticipants?: number | null;
 }
 
-/** Partial update — COALESCE keeps the stored value for anything the caller left out. */
+/**
+ * Partial update — COALESCE keeps the stored value for anything the caller left out.
+ *
+ * `description` is the one exception and is written with a CASE instead: it is the only column
+ * here a caller can legitimately want to set back to nothing, and COALESCE cannot tell "clear
+ * this" from "I did not mention it".
+ */
 export async function updateEvent(eventId: string, input: UpdateEventInput): Promise<Event | null> {
   const rows = await query<EventRow>(
     `UPDATE events
@@ -800,7 +808,11 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             ends_at = COALESCE($6, ends_at),
             display_mode = COALESCE($7, display_mode),
             visibility = COALESCE($8, visibility),
-            description = COALESCE($9, description),
+            -- NOT COALESCE, unlike every other column here. COALESCE reads null as "the
+            -- caller left this out", which makes clearing a description impossible: the old
+            -- text is restored and comes back on the next load. $22 carries whether the key was
+            -- present at all, so an explicit null means clear and an absent key means keep.
+            description = CASE WHEN $22::boolean THEN $9 ELSE description END,
             location = COALESCE($10, location),
             area = COALESCE($11, area),
             show_event_info = COALESCE($12, show_event_info),
@@ -838,6 +850,7 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
       input.activityType ?? null,
       input.level ?? null,
       input.organizerGroup ?? null,
+      input.description !== undefined,
     ],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
