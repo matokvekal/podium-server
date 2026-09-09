@@ -9,6 +9,27 @@ import {
 } from "../db/types.js";
 import { REGION_KEYS } from "../lib/regions.js";
 
+/**
+ * events.description is TEXT with no length constraint in the database, so this cap exists only
+ * here. 4000 is the value this schema has always used and is kept deliberately: lowering it
+ * would make every stored description longer than the new limit unsaveable the next time its
+ * organizer opened Edit, which is a silent break on real rides rather than a new rule.
+ *
+ * MIRRORED in elnino-client/src/lib/event-limits.ts — keep the two in step.
+ */
+export const DESCRIPTION_MAX_CHARS = 4000;
+
+/**
+ * Trimmed BEFORE the length check, so trailing whitespace can never be what pushes a
+ * description over the cap. This also collapses a whitespace-only description to "", which the
+ * event page treats as absent — the same thing it already showed for one.
+ *
+ * Deliberately nothing more: no character blacklist, no HTML stripping. Descriptions are stored
+ * as plain text, rendered as escaped React text children, and written with parameterized SQL,
+ * so punctuation, quotes, emoji, Hebrew and Arabic are all just text and must stay valid.
+ */
+const description = z.string().trim().max(DESCRIPTION_MAX_CHARS);
+
 /** ISO 3166-1 alpha-2, uppercased on the way in — the same shape used everywhere else. */
 const countryCode = z
   .string()
@@ -44,7 +65,7 @@ export const createEventSchema = z.object({
   endsAt: z.coerce.date().optional(),
   displayMode: z.enum(DISPLAY_MODES).optional().default("standard"),
   visibility: z.enum(EVENT_VISIBILITIES).optional().default("private"),
-  description: z.string().max(4000).optional(),
+  description: description.optional(),
   location: z.string().max(255).optional(),
   area: z.string().max(255).optional(),
   // The ride's country (defaults to 'IL' server-side when absent) and its coarse region key
@@ -109,7 +130,7 @@ export const updateEventSchema = z.object({
   endsAt: z.coerce.date().optional(),
   displayMode: z.enum(DISPLAY_MODES).optional(),
   visibility: z.enum(EVENT_VISIBILITIES).optional(),
-  description: z.string().max(4000).optional(),
+  description: description.optional(),
   location: z.string().max(255).optional(),
   area: z.string().max(255).optional(),
   country: countryCode.optional(),
