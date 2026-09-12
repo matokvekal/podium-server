@@ -17,6 +17,7 @@ export interface UserLimitsRow {
   participants_per_event: number;
   groups_per_event: number;
   teams_owned: number;
+  concurrent_live_events: number;
   note: string | null;
 }
 
@@ -49,11 +50,12 @@ export function mapUserLimitsRow(row: UserLimitsRow): EffectiveLimits {
     maxParticipantsPerEvent: row.participants_per_event,
     maxGroupsPerEvent: row.groups_per_event,
     maxTeamsPerOwner: row.teams_owned,
+    maxConcurrentLiveEvents: row.concurrent_live_events,
   };
 }
 
 const SELECT_COLUMNS = `user_id, events_per_week, participants_per_event, groups_per_event,
-                        teams_owned, note`;
+                        teams_owned, concurrent_live_events, note`;
 
 /** This user's row, or null when they have none. Prefer selectUserLimitsOrThrow. */
 export async function selectUserLimits(userId: number): Promise<UserLimitsRow | null> {
@@ -91,8 +93,9 @@ export async function insertUserLimitsTx(
 ): Promise<void> {
   await tx.query(
     `INSERT INTO user_limits
-        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned, note)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned,
+         concurrent_live_events, note)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (user_id) DO NOTHING`,
     [
       userId,
@@ -100,6 +103,7 @@ export async function insertUserLimitsTx(
       limits.maxParticipantsPerEvent,
       limits.maxGroupsPerEvent,
       limits.maxTeamsPerOwner,
+      limits.maxConcurrentLiveEvents,
       note,
     ],
   );
@@ -121,13 +125,15 @@ export async function applyPlanLimitsTx(
 ): Promise<void> {
   await tx.query(
     `INSERT INTO user_limits
-        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned, note)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned,
+         concurrent_live_events, note)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (user_id) DO UPDATE
          SET events_per_week        = EXCLUDED.events_per_week,
              participants_per_event = EXCLUDED.participants_per_event,
              groups_per_event       = EXCLUDED.groups_per_event,
              teams_owned            = EXCLUDED.teams_owned,
+             concurrent_live_events = EXCLUDED.concurrent_live_events,
              note                   = EXCLUDED.note,
              updated_at             = NOW()`,
     [
@@ -136,6 +142,7 @@ export async function applyPlanLimitsTx(
       limits.maxParticipantsPerEvent,
       limits.maxGroupsPerEvent,
       limits.maxTeamsPerOwner,
+      limits.maxConcurrentLiveEvents,
       note,
     ],
   );
@@ -156,13 +163,15 @@ export async function upsertUserLimits(
 ): Promise<void> {
   await query(
     `INSERT INTO user_limits
-        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned, note)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (user_id, events_per_week, participants_per_event, groups_per_event, teams_owned,
+         concurrent_live_events, note)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (user_id) DO UPDATE
          SET events_per_week        = EXCLUDED.events_per_week,
              participants_per_event = EXCLUDED.participants_per_event,
              groups_per_event       = EXCLUDED.groups_per_event,
              teams_owned            = EXCLUDED.teams_owned,
+             concurrent_live_events = EXCLUDED.concurrent_live_events,
              note                   = EXCLUDED.note,
              updated_at             = NOW()`,
     [
@@ -171,6 +180,7 @@ export async function upsertUserLimits(
       limits.maxParticipantsPerEvent,
       limits.maxGroupsPerEvent,
       limits.maxTeamsPerOwner,
+      limits.maxConcurrentLiveEvents,
       note,
     ],
   );

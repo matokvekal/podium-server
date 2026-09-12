@@ -13,7 +13,7 @@ import type {
 import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
-import { assertWithinEventsPerWeek } from "../authz/limits.js";
+import { assertWithinConcurrentLiveEvents, assertWithinEventsPerWeek } from "../authz/limits.js";
 import type { Actor, EventContext } from "../authz/policy.js";
 import { canAccount, canEvent } from "../authz/policy.js";
 import { ApiError } from "../lib/api-error.js";
@@ -33,9 +33,9 @@ import {
   countEventsCreatedSince,
   type EventListItem,
   selectEventsForUser,
+  countLiveEventsForOwner,
   selectLastLocation,
   selectLastLocationsForEvent,
-  selectLiveEventForOwner,
   selectParticipantByEventAndUser,
   selectParticipantForUser,
   type PublicEventFilters,
@@ -652,10 +652,8 @@ export async function changeEventStatus(
   }
 
   if (nextStatus === "live") {
-    const existingLive = await selectLiveEventForOwner(userId);
-    if (existingLive && existingLive.id !== eventId) {
-      throw new ApiError(409, "You already have another event live — stop it first");
-    }
+    const actor = await buildActor(userId);
+    assertWithinConcurrentLiveEvents(actor, await countLiveEventsForOwner(userId, eventId));
   }
 
   const finishedAt = nextStatus === "finished" ? new Date() : event.finishedAt;

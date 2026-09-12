@@ -280,13 +280,20 @@ export async function selectEventById(id: string): Promise<Event | null> {
   return row ? mapEvent(row) : null;
 }
 
-/** For the one-live-event-per-owner check in changeEventStatus. */
-export async function selectLiveEventForOwner(ownerId: number): Promise<Event | null> {
-  const row = await queryOne<EventRow>(
-    "SELECT * FROM events WHERE owner_id = $1 AND status = 'live' LIMIT 1",
-    [ownerId],
+/**
+ * How many OTHER events this owner already has live, for the concurrent-live-events check in
+ * changeEventStatus. `excludeEventId` is the event being moved to live itself — re-publishing
+ * (stopped -> live again) must not count an event against its own limit.
+ */
+export async function countLiveEventsForOwner(
+  ownerId: number,
+  excludeEventId: string,
+): Promise<number> {
+  const row = await queryOne<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM events WHERE owner_id = $1 AND status = 'live' AND id != $2",
+    [ownerId, excludeEventId],
   );
-  return row ? mapEvent(row) : null;
+  return Number(row?.count ?? 0);
 }
 
 /**

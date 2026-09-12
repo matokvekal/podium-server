@@ -49,6 +49,8 @@ export interface EffectiveLimits {
   maxGroupsPerEvent: number;
   /** Teams one person may own. */
   maxTeamsPerOwner: number;
+  /** Events one owner may have `status = 'live'` at the same time. */
+  maxConcurrentLiveEvents: number;
 }
 
 /**
@@ -64,5 +66,6 @@ export function getDefaultUserLimits(): EffectiveLimits {
     maxParticipantsPerEvent: env.DEFAULT_PARTICIPANTS_PER_EVENT,
     maxGroupsPerEvent: env.DEFAULT_GROUPS_PER_EVENT,
     maxTeamsPerOwner: env.DEFAULT_TEAMS_OWNED,
+    maxConcurrentLiveEvents: env.DEFAULT_CONCURRENT_LIVE_EVENTS,
   };
 }

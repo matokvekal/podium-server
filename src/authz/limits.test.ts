@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type EffectiveLimits, getDefaultUserLimits } from "../config/plan-limits.js";
 import { ApiError } from "../lib/api-error.js";
 import {
+  assertWithinConcurrentLiveEvents,
   assertWithinEventsPerWeek,
   assertWithinGroupLimit,
   assertWithinParticipantLimit,
@@ -80,6 +81,27 @@ describe("assertWithinGroupLimit — default limit 2", () => {
 describe("assertWithinTeamLimit — default limit 2", () => {
   it("rejects a third team", () => {
     expect409(() => assertWithinTeamLimit(DEFAULT_ACTOR, 2));
+  });
+});
+
+describe("assertWithinConcurrentLiveEvents — default limit 1", () => {
+  // `current` is the owner's OTHER already-live events (changeEventStatus counts with
+  // `id != eventId`), so 0 is "no other event live" and is what every existing account has
+  // always been held to — this is the bug fix: the old code refused a 2nd live event outright,
+  // regardless of MAX_CONCURRENT_LIVE_EVENTS_FREE, because it checked "any" rather than "how
+  // many vs. this owner's own limit".
+  it("allows going live with no other event already live", () => {
+    expect(() => assertWithinConcurrentLiveEvents(DEFAULT_ACTOR, 0)).not.toThrow();
+  });
+
+  it("refuses a 2nd live event at the default limit of 1", () => {
+    expect409(() => assertWithinConcurrentLiveEvents(DEFAULT_ACTOR, 1));
+  });
+
+  it("a raised limit admits a real 2nd concurrent live event", () => {
+    const raised = actorWithLimits({ maxConcurrentLiveEvents: 2 });
+    expect(() => assertWithinConcurrentLiveEvents(raised, 1)).not.toThrow();
+    expect409(() => assertWithinConcurrentLiveEvents(raised, 2));
   });
 });
 

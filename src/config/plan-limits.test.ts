@@ -26,6 +26,7 @@ describe("getDefaultUserLimits", () => {
       maxParticipantsPerEvent: 50,
       maxGroupsPerEvent: 2,
       maxTeamsPerOwner: 2,
+      maxConcurrentLiveEvents: 1,
     });
   });
 
@@ -36,12 +37,14 @@ describe("getDefaultUserLimits", () => {
         DEFAULT_PARTICIPANTS_PER_EVENT: "120",
         DEFAULT_GROUPS_PER_EVENT: "4",
         DEFAULT_TEAMS_OWNED: "9",
+        DEFAULT_CONCURRENT_LIVE_EVENTS: "3",
       }),
     ).toEqual({
       maxEventsPerWeek: 7,
       maxParticipantsPerEvent: 120,
       maxGroupsPerEvent: 4,
       maxTeamsPerOwner: 9,
+      maxConcurrentLiveEvents: 3,
     });
   });
 

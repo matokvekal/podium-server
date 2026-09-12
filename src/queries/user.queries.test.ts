@@ -71,7 +71,7 @@ describe("insertUserWithIdentity", () => {
     const call = txQuery.mock.calls.find(([sql]) =>
       (sql as string).includes("INSERT INTO user_limits"),
     );
-    expect(call?.[1]).toEqual([42, 3, 50, 2, 2, "created with user"]);
+    expect(call?.[1]).toEqual([42, 3, 50, 2, 2, 1, "created with user"]);
   });
 
   it("uses the id of the user it just inserted", async () => {

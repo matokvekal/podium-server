@@ -38,6 +38,7 @@ const ROW = {
   participants_per_event: 50,
   groups_per_event: 2,
   teams_owned: 2,
+  concurrent_live_events: 1,
   note: null,
 };
 
@@ -52,6 +53,7 @@ describe("selectUserLimitsOrThrow", () => {
       maxParticipantsPerEvent: 50,
       maxGroupsPerEvent: 2,
       maxTeamsPerOwner: 2,
+      maxConcurrentLiveEvents: 1,
     });
   });
 
@@ -106,9 +108,9 @@ describe("insertUserLimitsTx", () => {
     await insertUserLimitsTx(tx, 42);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].params.slice(0, 5)).toEqual([42, 3, 50, 2, 2]);
+    expect(calls[0].params.slice(0, 6)).toEqual([42, 3, 50, 2, 2, 1]);
     // No NULLs: a row always carries actual numbers.
-    expect(calls[0].params.slice(1, 5).some((v) => v === null)).toBe(false);
+    expect(calls[0].params.slice(1, 6).some((v) => v === null)).toBe(false);
   });
 
   it("never stamps an existing row back down to the defaults", async () => {
@@ -124,11 +126,17 @@ describe("insertUserLimitsTx", () => {
     await insertUserLimitsTx(
       tx,
       42,
-      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
+      {
+        maxEventsPerWeek: 30,
+        maxParticipantsPerEvent: 500,
+        maxGroupsPerEvent: 10,
+        maxTeamsPerOwner: 5,
+        maxConcurrentLiveEvents: 2,
+      },
       "plan:organizer_pro",
     );
 
-    expect(calls[0].params).toEqual([42, 30, 500, 10, 5, "plan:organizer_pro"]);
+    expect(calls[0].params).toEqual([42, 30, 500, 10, 5, 2, "plan:organizer_pro"]);
   });
 });
 
@@ -138,11 +146,17 @@ describe("applyPlanLimitsTx", () => {
     await applyPlanLimitsTx(
       tx,
       42,
-      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
+      {
+        maxEventsPerWeek: 30,
+        maxParticipantsPerEvent: 500,
+        maxGroupsPerEvent: 10,
+        maxTeamsPerOwner: 5,
+        maxConcurrentLiveEvents: 2,
+      },
       "plan:organizer_pro",
     );
 
     expect(calls[0].sql).toContain("DO UPDATE");
-    expect(calls[0].params.slice(0, 5)).toEqual([42, 30, 500, 10, 5]);
+    expect(calls[0].params.slice(0, 6)).toEqual([42, 30, 500, 10, 5, 2]);
   });
 });

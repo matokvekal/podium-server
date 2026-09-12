@@ -38,6 +38,7 @@ const FREE_ROW = {
   maxParticipantsPerEvent: 50,
   maxGroupsPerEvent: 2,
   maxTeamsPerOwner: 2,
+  maxConcurrentLiveEvents: 1,
 };
 
 beforeEach(() => {
@@ -171,7 +172,13 @@ describe("syncUserLimitsFromGrantsTx — the bridge that keeps plans meaningful"
     expect(applyPlanLimits).toHaveBeenCalledWith(
       expect.anything(),
       42,
-      { maxEventsPerWeek: 30, maxParticipantsPerEvent: 500, maxGroupsPerEvent: 10, maxTeamsPerOwner: 5 },
+      {
+        maxEventsPerWeek: 30,
+        maxParticipantsPerEvent: 500,
+        maxGroupsPerEvent: 10,
+        maxTeamsPerOwner: 5,
+        maxConcurrentLiveEvents: 2,
+      },
       "plan:organizer_pro",
     );
   });
@@ -192,7 +199,13 @@ describe("syncUserLimitsFromGrantsTx — the bridge that keeps plans meaningful"
     expect(applyPlanLimits).toHaveBeenCalledWith(
       expect.anything(),
       42,
-      { maxEventsPerWeek: 250, maxParticipantsPerEvent: 5000, maxGroupsPerEvent: 25, maxTeamsPerOwner: 50 },
+      {
+        maxEventsPerWeek: 250,
+        maxParticipantsPerEvent: 5000,
+        maxGroupsPerEvent: 25,
+        maxTeamsPerOwner: 50,
+        maxConcurrentLiveEvents: 5,
+      },
       "plan:club",
     );
   });

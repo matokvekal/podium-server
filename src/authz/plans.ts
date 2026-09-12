@@ -70,6 +70,7 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
       maxParticipantsPerEvent: 500,
       maxGroupsPerEvent: 10,
       maxTeamsPerOwner: 5,
+      maxConcurrentLiveEvents: 2,
     },
     features: ["create_events", "private_events", "advanced_results"],
   },
@@ -83,6 +84,7 @@ export const PLANS: Record<PlanCode, PlanDefinition> = {
       maxParticipantsPerEvent: 5000,
       maxGroupsPerEvent: 25,
       maxTeamsPerOwner: 50,
+      maxConcurrentLiveEvents: 5,
     },
     // "Multiple admins, many events, large groups and advanced management." Defined so the
     // policy already honours it; nothing sells it yet.
@@ -110,5 +112,6 @@ export function mergeLimits(plans: readonly PlanDefinition[]): PlanLimits {
     maxParticipantsPerEvent: Math.max(...all.map((p) => p.limits.maxParticipantsPerEvent)),
     maxGroupsPerEvent: Math.max(...all.map((p) => p.limits.maxGroupsPerEvent)),
     maxTeamsPerOwner: Math.max(...all.map((p) => p.limits.maxTeamsPerOwner)),
+    maxConcurrentLiveEvents: Math.max(...all.map((p) => p.limits.maxConcurrentLiveEvents)),
   };
 }

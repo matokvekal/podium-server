@@ -51,3 +51,21 @@ export function assertWithinTeamLimit(actor: Actor, current: number): void {
     overLimit("TEAMS", "You have reached your team limit", current, limit);
   }
 }
+
+/**
+ * `current` excludes the event being moved to live — it counts the owner's OTHER already-live
+ * events, so an owner at their limit can still re-publish the same ride (idempotent live->live
+ * is short-circuited earlier in changeEventStatus, but a stopped-then-relived event should not
+ * be refused as "one too many" against itself).
+ */
+export function assertWithinConcurrentLiveEvents(actor: Actor, current: number): void {
+  const limit = actor.entitlements.limits.maxConcurrentLiveEvents;
+  if (current >= limit) {
+    overLimit(
+      "CONCURRENT_LIVE_EVENTS",
+      "You already have another event live — stop it first",
+      current,
+      limit,
+    );
+  }
+}
