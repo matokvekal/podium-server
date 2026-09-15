@@ -21,6 +21,7 @@ interface UserRow {
   cover_type: string | null;
   cover_value: string | null;
   country: string | null;
+  weight_kg: string | number | null;
   role: Role;
   is_active: boolean;
   created_at: Date;
@@ -60,6 +61,9 @@ function mapUser(row: UserRow): User {
     // Nullish-coalesced for the same reason as the image fields: a database that has not had
     // sql/030-country.sql applied returns rows without this key.
     country: row.country ?? null,
+    // Same nullish-coalesce reasoning: a database that has not had sql/034-users-weight.sql
+    // applied returns rows without this key.
+    weightKg: row.weight_kg == null ? null : Number(row.weight_kg),
     role: row.role,
     isActive: row.is_active,
     createdAt: row.created_at,
@@ -226,7 +230,10 @@ export async function updateUserProfile(
  * 2-letter uppercase code; `null`/`undefined` is a no-op (this field is never cleared). Returns
  * the refreshed user, or the unchanged one if there was nothing to write / the column is absent.
  */
-export async function updateUserCountry(userId: number, country: string | null): Promise<User | null> {
+export async function updateUserCountry(
+  userId: number,
+  country: string | null,
+): Promise<User | null> {
   if (!country) return selectUserById(userId);
   try {
     const rows = await query<UserRow>(
@@ -237,6 +244,33 @@ export async function updateUserCountry(userId: number, country: string | null):
   } catch (err) {
     if (typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703") {
       logger.warn({ userId, err }, "users.country missing — run sql/030-country.sql");
+      return selectUserById(userId);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes users.weight_kg — same guarded-column pattern as updateUserCountry, its own column,
+ * its own statement. UNLIKE country, weight CAN be cleared: `null` writes NULL (the rider
+ * removing a mis-typed value should see calories go back to "set your weight" rather than be
+ * stuck on a wrong number), `undefined` is a no-op (the caller did not mention weight at all).
+ * Bounds (40-120) are enforced by the zod schema AND the database CHECK constraint.
+ */
+export async function updateUserWeight(
+  userId: number,
+  weightKg: number | null | undefined,
+): Promise<User | null> {
+  if (weightKg === undefined) return selectUserById(userId);
+  try {
+    const rows = await query<UserRow>(
+      "UPDATE users SET weight_kg = $2, updated_at = NOW() WHERE id = $1 RETURNING *",
+      [userId, weightKg],
+    );
+    return rows[0] ? mapUser(rows[0]) : null;
+  } catch (err) {
+    if (typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703") {
+      logger.warn({ userId, err }, "users.weight_kg missing — run sql/034-users-weight.sql");
       return selectUserById(userId);
     }
     throw err;

@@ -18,6 +18,7 @@ import { eventRouter } from "./routes/event.routes.js";
 import { routeLibraryRouter } from "./routes/routeLibrary.routes.js";
 import { teamRouter } from "./routes/team.routes.js";
 import { userRouter } from "./routes/user.routes.js";
+import { statisticsRouter } from "./statistics/statistics.routes.js";
 
 export function createApp(): Express {
   const app = express();
@@ -145,6 +146,7 @@ export function createApp(): Express {
   app.use("/api/v1/routes", routeLibraryRouter);
   app.use("/api/v1/teams", teamRouter);
   app.use("/api/v1/admin", adminAnalyticsRouter);
+  app.use("/api/v1/statistics", statisticsRouter);
 
   app.use(notFound);
   app.use(errorHandler);
