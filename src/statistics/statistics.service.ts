@@ -2,6 +2,7 @@
 // achievement view over it. See sql/035-rider-stats-cache.sql and statistics.queries.ts for the
 // shape and the "trust participation, no GPS requirement" rule this is all built on.
 
+import { avatarFieldsOf } from "../lib/user-images.js";
 import { selectUserById } from "../queries/user.queries.js";
 import {
   type AchievementProgress,
@@ -262,9 +263,10 @@ export interface LeaderboardPayload {
   top: {
     userId: number;
     displayName: string;
+    /** Resolved the same way every other avatar in the app is (upload > preset > Google photo
+     *  > none) — see avatarFieldsOf. The raw avatar_type/avatar_value columns never leave this
+     *  file; a leaderboard response only ever carries a ready-to-render URL or null. */
     avatarUrl: string | null;
-    avatarType: string | null;
-    avatarValue: string | null;
     value: number;
     rank: number;
   }[];
@@ -308,5 +310,16 @@ export async function getLeaderboard(
   }
 
   const { top, me } = await selectLeaderboard(category, year, country, callerUserId);
-  return { category, period, year, country, top, me };
+  const resolve = (row: (typeof top)[number]) => ({
+    userId: row.userId,
+    displayName: row.displayName,
+    avatarUrl: avatarFieldsOf({
+      avatarUrl: row.avatarUrl,
+      avatarType: row.avatarType,
+      avatarValue: row.avatarValue,
+    }).avatarUrl,
+    value: row.value,
+    rank: row.rank,
+  });
+  return { category, period, year, country, top: top.map(resolve), me: me ? resolve(me) : null };
 }
