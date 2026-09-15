@@ -12,16 +12,29 @@ pg.types.setTypeParser(20, (value: string) => Number(value));
 // `-c timezone=UTC` pins every connection's session timezone. It is what makes NOW(),
 // and any timestamptz -> timestamp assignment, land in UTC regardless of how the host
 // machine is configured — the database stores UTC and only the browser converts.
-// export const pool = new pg.Pool({
-//   connectionString: env.DATABASE_URL,
-//   options: "-c timezone=UTC",
-// });
+
+// Production (and any other real host) requires SSL; the local Docker Postgres from
+// docker-compose/db:up does not speak SSL at all and a client that insists on it gets
+// "The server does not support SSL connections" on every single query — silently making
+// `npm run dev:all`'s whole point (develop against a local database) not work. Detected from
+// the connection string itself, not an env flag nobody would remember to set: a URL pointing
+// at localhost/127.0.0.1/::1 is unambiguously local-only, and DATABASE_URL is never anything
+// else during real local development (the docker-compose service, or a sql/README.md-style
+// on-host Postgres). Every non-local host — production's real IP included — is unaffected.
+function isLocalDatabaseUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   options: "-c timezone=UTC",
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: isLocalDatabaseUrl(env.DATABASE_URL) ? false : { rejectUnauthorized: false },
 });
 
 export type QueryParams = readonly unknown[];

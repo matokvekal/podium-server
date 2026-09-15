@@ -2,6 +2,7 @@
 // achievement view over it. See sql/035-rider-stats-cache.sql and statistics.queries.ts for the
 // shape and the "trust participation, no GPS requirement" rule this is all built on.
 
+import { logger } from "../lib/logger.js";
 import { avatarFieldsOf } from "../lib/user-images.js";
 import { selectUserById } from "../queries/user.queries.js";
 import {
@@ -234,7 +235,14 @@ async function recomputeScope(
  */
 export async function refreshStatsForFinishedEvent(eventId: string): Promise<void> {
   const year = new Date().getUTCFullYear();
-  const userIds = await selectFinishedEventParticipantUserIds(eventId).catch(() => []);
+  const userIds = await selectFinishedEventParticipantUserIds(eventId).catch((err: unknown) => {
+    // Logged, never thrown — see the per-user catch below for why. Caught here too: this
+    // lookup itself can fail (e.g. rider_stats_cache/034/035 not migrated yet on this
+    // database), and a silent [] would look identical to "an event with no riders" instead of
+    // the real cause.
+    logger.warn({ eventId, err }, "refreshStatsForFinishedEvent: could not list finishers");
+    return [];
+  });
   await Promise.all(
     userIds.map(async (userId) => {
       try {
@@ -246,10 +254,14 @@ export async function refreshStatsForFinishedEvent(eventId: string): Promise<voi
           recomputeScope(userId, LIFETIME_YEAR, country, facts, weightKg),
           recomputeScope(userId, year, country, facts, weightKg),
         ]);
-      } catch {
+      } catch (err) {
         // Never let a stats refresh take the finish transition down — a stale cache row
         // self-heals on this rider's next /statistics/me read (the 24h fallback), so a failure
-        // here costs at most "the milestone card is a bit late", never a broken finish.
+        // here costs at most "the milestone card is a bit late", never a broken finish. Logged
+        // rather than silent, though: this is the ONLY signal an operator gets that Statistics
+        // migrations (sql/034/035) haven't been run yet, or that something else here is
+        // consistently broken — a silently-empty catch here would hide that forever.
+        logger.warn({ eventId, userId, err }, "refreshStatsForFinishedEvent: failed for one rider");
       }
     }),
   );
