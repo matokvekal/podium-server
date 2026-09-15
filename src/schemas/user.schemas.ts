@@ -18,4 +18,8 @@ export const updateProfileSchema = z.object({
     .regex(/^[A-Za-z]{2}$/, "country must be two letters")
     .transform((value) => value.toUpperCase())
     .optional(),
+  // Rider Statistics' calorie estimate input. Same bounds as the client's weight slider
+  // (WEIGHT_MIN_KG/WEIGHT_MAX_KG in lib/calories.ts). Unlike country this MAY be cleared:
+  // null writes NULL, omitting the field entirely leaves the stored value untouched.
+  weightKg: z.number().min(40).max(120).nullable().optional(),
 });

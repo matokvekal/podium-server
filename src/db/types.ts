@@ -89,6 +89,10 @@ export interface User {
    *  synced one yet. Set automatically from the browser locale on first login and changeable
    *  on the account screen — see sql/030-country.sql. Defaults the "Browse tracks" filter. */
   country: string | null;
+  /** The rider's body weight in kg (40-120), or null when never set. Personal input for the
+   *  Rider Statistics calorie estimate only — see sql/034-users-weight.sql. Never a guessed
+   *  default: a null here means the client shows no calorie figure rather than an invented one. */
+  weightKg: number | null;
   role: Role;
   isActive: boolean;
   createdAt: Date;

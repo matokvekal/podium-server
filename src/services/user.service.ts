@@ -10,6 +10,7 @@ import {
   updateUserLastLogin,
   updateUserProfile,
   updateUserRole,
+  updateUserWeight,
 } from "../queries/user.queries.js";
 
 /**
@@ -31,10 +32,7 @@ export async function findUserByIdentity(
   return selectUserById(identity.userId);
 }
 
-export function findIdentity(
-  provider: AuthProviderType,
-  providerUserId: string,
-) {
+export function findIdentity(provider: AuthProviderType, providerUserId: string) {
   return selectIdentity(provider, providerUserId);
 }
 
@@ -89,7 +87,11 @@ export function needsProfile(user: User): boolean {
 
 export async function updateProfile(
   userId: number,
-  input: Partial<Pick<User, "firstName" | "lastName" | "nickname" | "emergencyPhone" | "country">>,
+  input: Partial<
+    Pick<User, "firstName" | "lastName" | "nickname" | "emergencyPhone" | "country">
+  > & {
+    weightKg?: number | null;
+  },
 ): Promise<User> {
   const user = await updateUserProfile(userId, {
     firstName: input.firstName ?? undefined,
@@ -103,8 +105,13 @@ export async function updateProfile(
   // profile save above never touches it. undefined = the caller left it out; a value sets it.
   const withCountry = input.country ? await updateUserCountry(userId, input.country) : user;
 
+  // weightKg has its own column too (see updateUserWeight) — undefined is left alone, null
+  // clears it, a number sets it. Chained onto whichever user row is most current so far.
+  const withWeight =
+    input.weightKg !== undefined ? await updateUserWeight(userId, input.weightKg) : withCountry;
+
   logger.info({ userId, fields: Object.keys(input) }, "profile updated");
-  return withCountry ?? user;
+  return withWeight ?? withCountry ?? user;
 }
 
 /**

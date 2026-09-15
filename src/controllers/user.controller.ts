@@ -52,6 +52,9 @@ export function toProfile(user: User) {
     // the payload even as null: the client feature-detects country support by the key being
     // here (mirrors serverSupportsVisualIdentity). See sql/030-country.sql.
     country: user.country,
+    // Rider Statistics' calorie input, null until the rider sets one on the account screen or
+    // from a Statistics prompt. See sql/034-users-weight.sql.
+    weightKg: user.weightKg,
     ...userImageFieldsOf(user),
     requiresProfile: needsProfile(user),
   };
@@ -72,7 +75,8 @@ async function toAccount(user: User) {
     safeCountTeamsForOwner(user.id),
   ]);
 
-  const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } = actor.entitlements.limits;
+  const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } =
+    actor.entitlements.limits;
   const capabilities = accountCapabilitiesFor(actor, ACCOUNT_CAPABILITIES);
 
   return {

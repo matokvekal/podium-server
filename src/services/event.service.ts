@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
+import { consumeFeatureCredit } from "../authz/entitlements.js";
+import { assertWithinConcurrentLiveEvents, assertWithinEventsPerWeek } from "../authz/limits.js";
+import type { Actor, EventContext } from "../authz/policy.js";
+import { canAccount, canEvent } from "../authz/policy.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import type {
   ActivityType,
   DisplayMode,
@@ -10,50 +16,45 @@ import type {
   RegistrationStatus,
   RiderLevel,
 } from "../db/types.js";
-import { trackAuditEvent } from "../db/audit/audit.service.js";
-import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
-import { consumeFeatureCredit } from "../authz/entitlements.js";
-import { assertWithinConcurrentLiveEvents, assertWithinEventsPerWeek } from "../authz/limits.js";
-import type { Actor, EventContext } from "../authz/policy.js";
-import { canAccount, canEvent } from "../authz/policy.js";
 import { ApiError } from "../lib/api-error.js";
+import { datePrefix, letterSuffix } from "../lib/event-code.js";
 import { haversineDistanceKm } from "../lib/geo.js";
 import { logger } from "../lib/logger.js";
-import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
-import { selectParticipantsForEvent } from "../queries/participant.queries.js";
-import { writeParticipantTracks } from "./track-writer.js";
 import {
+  countEventsCreatedSince,
+  countLiveEventsForOwner,
+  type EventListItem,
   insertEvent,
+  insertEventMember,
   insertLocationPoints,
-  type LocationPointInput,
   insertParticipantIfRoom,
+  type LocationPointInput,
+  type PublicEventFilters,
   selectActiveEventByCode,
   selectEventById,
   selectEventCodesWithPrefix,
-  countEventsCreatedSince,
-  type EventListItem,
   selectEventsForUser,
-  countLiveEventsForOwner,
   selectLastLocation,
   selectLastLocationsForEvent,
   selectParticipantByEventAndUser,
   selectParticipantForUser,
-  type PublicEventFilters,
-  insertEventMember,
-  selectPublicEvents,
   selectPublicEventAreas,
+  selectPublicEvents,
   selectUpcomingEventsForFollowed,
   type UpdateEventInput,
   updateEvent,
   updateEventCountryRegion,
   updateEventElevationGain,
-  updateEventRidePlan,
   updateEventPaused,
+  updateEventRidePlan,
   updateEventStatus,
   upsertParticipant,
   upsertParticipantLastLocation,
 } from "../queries/event.queries.js";
-import { datePrefix, letterSuffix } from "../lib/event-code.js";
+import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
+import { selectParticipantsForEvent } from "../queries/participant.queries.js";
+import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
+import { writeParticipantTracks } from "./track-writer.js";
 
 export async function findActiveEventByCode(code: string): Promise<Event | null> {
   return selectActiveEventByCode(code);
@@ -187,9 +188,9 @@ export async function saveLocationBatch(
   const delta =
     prior?.lat != null && prior?.lng != null
       ? haversineDistanceKm(
-        { lat: prior.lat, lng: prior.lng },
-        { lat: lastPoint.lat, lng: lastPoint.lng },
-      )
+          { lat: prior.lat, lng: prior.lng },
+          { lat: lastPoint.lat, lng: lastPoint.lng },
+        )
       : 0;
   await upsertParticipantLastLocation(eventId, participantId, lastPoint, priorDistance + delta);
 
@@ -395,10 +396,7 @@ export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "f
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
 
-export async function listMyEvents(
-  userId: number,
-  filter: EventsFilter,
-): Promise<EventListItem[]> {
+export async function listMyEvents(userId: number, filter: EventsFilter): Promise<EventListItem[]> {
   // Asks a different question from "events I own or joined", so it gets its own query rather
   // than filtering that list down to nothing. Covers both people I follow and teams I am in —
   // a team's rides are meant to appear wherever a rider's rides normally do, so they do not
@@ -672,6 +670,10 @@ export async function changeEventStatus(
   // the organizer finishing their ride; see writeParticipantTracks.
   if (event.status === "live" && nextStatus === "finished") {
     await writeParticipantTracks(eventId);
+    // Rider Statistics: eagerly refresh every finisher's cache so they see new totals
+    // immediately. Isolated, read-only, and never throws — see refreshStatsForFinishedEvent's
+    // own header for why this one call is the entire integration surface with that subsystem.
+    await refreshStatsForFinishedEvent(eventId);
   }
 
   return updated;
