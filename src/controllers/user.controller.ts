@@ -10,8 +10,18 @@ import { traceLog } from "../lib/trace-log.js";
 import { userImageFieldsOf } from "../lib/user-images.js";
 import { countEventsCreatedSince } from "../queries/event.queries.js";
 import { countTeamsForOwner } from "../queries/team.queries.js";
+import { selectUserEmails } from "../queries/user.queries.js";
 import { redeemCouponSchema, updateProfileSchema } from "../schemas/user.schemas.js";
 import { findUserById, needsProfile, updateProfile } from "../services/user.service.js";
+
+// Rider Statistics isn't ready for every rider yet — hide the nav entry for everyone except
+// this account while it's being finished. Menu visibility only, nothing else: the API itself
+// stays reachable for anyone who already has a link. Delete this whole block (and the
+// canSeeStatistics field below) when the feature is ready for everyone.
+const STATISTICS_PREVIEW_EMAILS = ["mictavim@gmail.com"];
+function canSeeStatistics(emails: readonly string[]): boolean {
+  return emails.some((e) => STATISTICS_PREVIEW_EMAILS.includes(e.trim().toLowerCase()));
+}
 
 function isMissingRelationError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
@@ -70,9 +80,10 @@ export function toProfile(user: User) {
 async function toAccount(user: User) {
   const actor = await buildActor(user.id);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [eventsThisWeek, teamsOwned] = await Promise.all([
+  const [eventsThisWeek, teamsOwned, statisticsEmails] = await Promise.all([
     countEventsCreatedSince(user.id, weekAgo),
     safeCountTeamsForOwner(user.id),
+    selectUserEmails(user.id),
   ]);
 
   const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } =
@@ -89,6 +100,8 @@ async function toAccount(user: User) {
      * real check (403 on POST /events).
      */
     canOrganize: capabilities.includes("event:create"),
+    /** See the STATISTICS_PREVIEW_EMAILS comment above — menu visibility only. */
+    canSeeStatistics: canSeeStatistics(statisticsEmails),
     /**
      * The authoritative per-user limits (user_entitlements folded onto the plan). Top-level and
      * teams-free so a client can mirror exactly what the server enforces on create / join /
