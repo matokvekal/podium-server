@@ -69,6 +69,7 @@ const {
   clearEventLinkGroup,
   getSharedRideGroup,
   getLinkedRidesForViewer,
+  getEventForViewer,
   leaveEvent,
 } = await import("./event.service.js");
 
@@ -327,26 +328,48 @@ describe("getSharedRideGroup — resolving a /share link", () => {
     expect(group.members.map((m) => m.event.id)).toEqual(["long"]);
   });
 
-  it("hides a private member from a stranger rather than confirming it exists", async () => {
-    const a = { ...LONG, linkGroupId: "g1" };
-    const hidden = ride({
-      id: "secret",
+  it("⚠ LISTS a private member to a stranger — the link is the key, exactly like a ride code", async () => {
+    // This is the bug the feature shipped with. Rides are private BY DEFAULT, and every
+    // private member used to be dropped: an organizer who connected their two ordinary rides
+    // and sent the link got "No rides found for that link" for everyone but themselves.
+    const a = { ...LONG, linkGroupId: "g1", visibility: "private" as const };
+    const b = ride({
+      id: "short",
       code: "19092026B",
       linkGroupId: "g1",
       visibility: "private",
     });
-    serveRides([a, hidden]);
+    serveRides([a, b]);
     selectEventsByCodes.mockResolvedValue([a]);
-    selectEventsByLinkGroup.mockResolvedValue([a, hidden]);
+    selectEventsByLinkGroup.mockResolvedValue([a, b]);
 
     const group = await getSharedRideGroup(["19092026A"], null);
 
-    expect(group.members.map((m) => m.event.id)).toEqual(["long"]);
+    expect(group.members.map((m) => m.event.id)).toEqual(["long", "short"]);
+    // Connecting them into one link IS the organizer publishing them together, so the cards
+    // are filled in rather than being two bare names nobody could choose between.
+    expect(group.members.every((m) => m.canSeeInfo)).toBe(true);
   });
 
-  it("marks a member whose details a viewer may not see, rather than dropping it", async () => {
-    // A public ride whose organizer closed browsing info: the ride is listed, its when-and-where
-    // is not. The chooser still shows the card, and the controller nulls the four fields.
+  it("does not fill in a private ride reached by a link whose group is gone", async () => {
+    // No group left: nothing was published together any more, so the ordinary rule applies
+    // and the card is redacted by the controller. The ride is still listed — its code is in
+    // the URL, which is the same key /join/<code> has always accepted.
+    const alone = ride({ id: "short", code: "19092026B", linkGroupId: null, visibility: "private" });
+    serveRides([alone]);
+    selectEventsByCodes.mockResolvedValue([alone]);
+
+    const group = await getSharedRideGroup(["19092026B"], null);
+
+    expect(group.members.map((m) => m.event.id)).toEqual(["short"]);
+    expect(group.members[0].canSeeInfo).toBe(false);
+  });
+
+  it("fills in a member whose BROWSING info is off — a link is an invitation, not browsing", async () => {
+    // show_event_info closes a ride to people scrolling Find Rides. It is not an answer to
+    // "someone I sent this link to opened it": the organizer connected this ride into that
+    // link and handed the link out, which is the more specific act of the two. The chooser
+    // cannot ask "which one are you riding?" over cards with no time on them.
     const a = { ...LONG, linkGroupId: "g1", showEventInfo: false };
     serveRides([a]);
     selectEventsByCodes.mockResolvedValue([a]);
@@ -355,7 +378,19 @@ describe("getSharedRideGroup — resolving a /share link", () => {
     const group = await getSharedRideGroup(["19092026A"], STRANGER);
 
     expect(group.members).toHaveLength(1);
-    expect(group.members[0].canSeeInfo).toBe(false);
+    expect(group.members[0].canSeeInfo).toBe(true);
+  });
+
+  it("still refuses the ROUTE of a private member — the card is not the map", async () => {
+    // What the link opens up is the chooser's card. The geometry stays behind the ride's own
+    // rule, which the chooser fetches per card through GET /events/:id/route.
+    const a = { ...LONG, linkGroupId: "g1", visibility: "private" as const };
+    serveRides([a]);
+
+    const view = await getEventForViewer("long", STRANGER).catch((err: unknown) => err);
+
+    expect(view).toBeInstanceOf(ApiError);
+    expect((view as ApiError).status).toBe(404);
   });
 
   it("and marks canSeeInfo true for an ordinary public member", async () => {
@@ -411,20 +446,21 @@ describe("getLinkedRidesForViewer — the switch-ride chip", () => {
     await expect(getLinkedRidesForViewer(a as never, OWNER)).resolves.toEqual([]);
   });
 
-  it("leaves out a sibling the viewer cannot see, so the chip never over-counts", async () => {
+  it("⚠ KEEPS a private sibling, so the chip counts what the chooser will offer", async () => {
+    // The counterpart of the chooser's own rule. Hiding it here told a rider on this ride
+    // that it was the only one that day, while the link they arrived through offers both.
     const a = { ...LONG, linkGroupId: "g1" };
-    const hidden = ride({
+    const quiet = ride({
       id: "secret",
       code: "19092026B",
       linkGroupId: "g1",
       visibility: "private",
-      ownerId: STRANGER,
     });
-    selectEventsByLinkGroup.mockResolvedValue([a, hidden]);
+    selectEventsByLinkGroup.mockResolvedValue([a, quiet]);
 
     const linked = await getLinkedRidesForViewer(a as never, null);
 
-    expect(linked).toEqual([]);
+    expect(linked.map((r) => r.id)).toEqual(["secret"]);
   });
 });
 

@@ -916,8 +916,9 @@ export interface SharedRideGroup {
  * That one rule is also what keeps the live page's share button honest when one of two rides
  * has already ended.
  *
- * Each survivor goes through getEventForViewer, so a member this viewer may not see simply is
- * not in the list. No new authorization rule exists here.
+ * Every surviving member IS listed, including a private one — see the note in the loop. What
+ * the reader may know about each (`canSeeInfo`) is the only thing still decided per viewer,
+ * and the controller redacts the card accordingly.
  */
 export async function getSharedRideGroup(
   codes: string[],
@@ -932,18 +933,34 @@ export async function getSharedRideGroup(
   // the codes actually name, so an old group link still opens the ride it was sent about.
   const candidates = linkGroupId ? await selectEventsByLinkGroup(linkGroupId) : found;
 
+  const actor = await buildActor(viewerId);
   const members: SharedRideMember[] = [];
   for (const candidate of candidates) {
     if (candidate.status === "cancelled" || candidate.status === "finished") continue;
-    try {
-      const view = await getEventForViewer(candidate.id, viewerId);
-      members.push({ event: view.event, canSeeInfo: canViewEventInfo(view) });
-    } catch (err) {
-      // 404 from getEventForViewer means "this ride does not exist for you". The chooser
-      // leaves it out rather than telling a stranger a private ride is there.
-      if (err instanceof ApiError && err.status === 404) continue;
-      throw err;
-    }
+
+    // ⚠ VISIBILITY DOES NOT DECIDE MEMBERSHIP HERE, AND MUST NOT.
+    //   This used to run getEventForViewer and skip a member it answered 404 for, i.e. any
+    //   PRIVATE ride the reader had no relationship with. Rides are private BY DEFAULT
+    //   (event.schemas.ts), so the ordinary case — an organizer connects two of their own
+    //   rides and sends the link to people who are not on either of them yet — resolved to
+    //   nothing and the link answered "No rides found". It worked only for the organizer.
+    //
+    //   A ride's own /join/<code> link has never worked that way: the CODE is the key, and
+    //   holding it is what entitles a stranger to the ride (by-code is unauthenticated and
+    //   frozen). A /share link is the same kind of key, deliberately minted by the organizer
+    //   over 2-3 of their rides. So the group is listed in full, and what a reader may KNOW
+    //   about each ride is the only thing the policy still decides.
+    const context = await buildEventContext(candidate, viewerId);
+    members.push({
+      event: candidate,
+      // Membership of a real link group is the organizer's own act of publishing these rides
+      // together, so the card is filled in for whoever holds the link. Outside a group
+      // (`linkGroupId` null — an old link whose group was dissolved) nothing was published
+      // together any more, and the ordinary rule applies.
+      canSeeInfo:
+        (linkGroupId !== null && candidate.linkGroupId === linkGroupId) ||
+        canEvent(actor, "event:view_details", context),
+    });
   }
   if (members.length === 0) throw new ApiError(404, "No rides found for that link");
 
@@ -953,8 +970,15 @@ export async function getSharedRideGroup(
 /**
  * The sibling rides of one ride, for the "1 of 2 rides that day · Switch ride" chip.
  *
- * Returns [] for an ungrouped ride, and leaves out any sibling this viewer cannot see, so the
- * chip never counts a ride it would then refuse to show.
+ * Returns [] for an ungrouped ride. Every other sibling in the group IS returned, for the same
+ * reason getSharedRideGroup lists a private member: the organizer connected these rides into
+ * one link on purpose. Dropping a sibling this viewer has no relationship with used to hide
+ * the chip from the people it is for — a rider on the short ride was never told the long one
+ * exists, while the chooser their link opens now offers both. The chip and the chooser must
+ * count the same rides.
+ *
+ * Only what the chooser also drops is dropped: a cancelled or finished sibling, which nobody
+ * can join.
  */
 export async function getLinkedRidesForViewer(
   event: Event,
@@ -965,20 +989,10 @@ export async function getLinkedRidesForViewer(
   // Same exclusions as getSharedRideGroup, deliberately: the chip counts what the chooser will
   // actually offer. Counting a finished sibling made the chip say "1 of 2" and the chooser then
   // show one ride — a discrepancy a rider reads as a bug in the link.
-  const siblings = (await selectEventsByLinkGroup(event.linkGroupId)).filter(
+  return (await selectEventsByLinkGroup(event.linkGroupId)).filter(
     (ride) =>
       ride.id !== event.id && ride.status !== "cancelled" && ride.status !== "finished",
   );
-
-  const visible: Event[] = [];
-  for (const sibling of siblings) {
-    const [actor, context] = await Promise.all([
-      buildActor(viewerId),
-      buildEventContext(sibling, viewerId),
-    ]);
-    if (canEvent(actor, "event:view", context)) visible.push(sibling);
-  }
-  return visible;
 }
 
 /**
