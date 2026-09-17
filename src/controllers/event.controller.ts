@@ -20,11 +20,13 @@ import {
   eventCodeParamSchema,
   eventIdParamSchema,
   joinEventSchema,
+  linkGroupBodySchema,
   listEventsQuerySchema,
   liveQuerySchema,
   locationBatchSchema,
   pauseEventSchema,
   publicEventsQuerySchema,
+  shareCodesParamSchema,
   updateEventSchema,
 } from "../schemas/event.schemas.js";
 import {
@@ -32,19 +34,25 @@ import {
   canViewEventInfo,
   canViewRoute,
   changeEventStatus,
+  clearEventLinkGroup,
   computeEffectiveStatus,
   createEvent,
   type EventView,
   findActiveEventByCode,
   findParticipantForUser,
   getEventForViewer,
+  getLinkedRidesForViewer,
   getLiveRiders,
+  getSharedRideGroup,
   joinEvent,
+  leaveEvent,
   listMyEvents,
-  listPublicEvents,
   listPublicEventAreas,
+  listPublicEvents,
   pauseEvent,
+  type SharedRideMember,
   saveLocationBatch,
+  setEventLinkGroup,
   toEventConfig,
   updateEventDetails,
   type ViewerTier,
@@ -90,6 +98,11 @@ function toEventSummary(event: Event | EventListItem) {
     durationMin: event.durationMin ?? null,
     restStops: event.restStops ?? null,
     isAccessible: event.isAccessible ?? false,
+    // How technical the ground is, 1-5 (sql/038). On the SUMMARY because the whole point is
+    // that a rider scanning Find Rides can see it without opening each ride. The WORDS are the
+    // client's (mtb S1-S5, gravel G1-G5); the number is all the API commits to.
+    // null = not stated, and a card shows a dash rather than inventing a 1.
+    terrainGrade: event.terrainGrade ?? null,
     // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
     // wants to see which rides have a vehicle behind them without opening each one.
     hasSupportVehicle: event.hasSupportVehicle ?? false,
@@ -108,6 +121,25 @@ function toEventSummary(event: Event | EventListItem) {
     // this in (its copy_summary lateral); null everywhere else, and the card falls back to
     // its per-card ?preview=1 fetch.
     downloads: summary.downloads ?? null,
+    // The ATTACHED TRACK's id. On the summary because likes and favourites belong to the
+    // track, not the ride: a card has to know which routes.id to POST to, and which rides
+    // share one count. null when the ride has no route.
+    routeId: summary.routeId ?? null,
+    // The organizer's display name, resolved server-side through events.owner_id the same way
+    // a participant's is (PARTICIPANT_DISPLAY_COLUMNS). The track card shows "Created by" and
+    // used to print a placeholder because the list served ownerId and no name.
+    ownerName: summary.ownerName ?? null,
+    // Which /share link group this ride belongs to, or null when it is shared on its own
+    // (sql/037). On the SUMMARY so the organizer's "Created" list can mark the rides that
+    // share a link without a detail call per card. The group's MEMBERS are not here — that is
+    // the detail payload's linkedRides, because a list card has no use for them.
+    linkGroupId: event.linkGroupId ?? null,
+    // Likes on the attached TRACK, shared by every ride built on it (sql/036). As with
+    // downloads, only GET /events/public fills these in. `likedByMe` / `favoritedByMe` are
+    // null for a signed-out viewer — not false, which would claim they had not liked it.
+    likes: summary.likes ?? null,
+    likedByMe: summary.likedByMe ?? null,
+    favoritedByMe: summary.favoritedByMe ?? null,
   };
 }
 
@@ -141,6 +173,9 @@ export function toEventDetail(
   /** `route` (the geometry preview) is nulled when false; the headline Distance / Elevation
    *  numbers below are shown regardless, exactly as the list card does. */
   canSeeRouteGeometry = true,
+  /** The other rides sharing this ride's /share link, already filtered to the ones this
+   *  viewer may see (event.service.ts::getLinkedRidesForViewer). Empty for the normal case. */
+  linkedRides: Event[] = [],
 ) {
   const canSeeInfo = canSeeInfoOverride ?? true;
   // Decided once: it answers `isOwner` AND gates the account ceilings below, and those two must
@@ -208,6 +243,25 @@ export function toEventDetail(
      */
     copiedFromEventId: event.copiedFromEventId ?? null,
     copiedFromRouteId: event.copiedFromRouteId ?? null,
+    /**
+     * The OTHER rides sharing this ride's one /share link (sql/037) — what the ride page's
+     * "1 of 2 rides that day · Switch ride" chip is built from. Empty for a ride shared on its
+     * own, which is almost every ride.
+     *
+     * Sent as part of the ride rather than left to the client to remember, so the chip
+     * survives a refresh and appears even for someone who opened this ride's page directly
+     * instead of coming through the shared link.
+     *
+     * Already filtered to what this viewer may see, so the chip can never count a ride the
+     * chooser would then refuse to show. Just enough per sibling to render a link and a label
+     * — the chooser itself fetches the full cards.
+     */
+    linkedRides: linkedRides.map((ride) => ({
+      eventId: ride.id,
+      code: ride.code,
+      name: ride.name,
+      startsAt: ride.startsAt,
+    })),
     /** Who is running this ride. Until now the payload carried only `ownerId`, so the client
      *  displayed a fake name invented from the event id (event-visuals.ts's mockOrganizerName)
      *  — every ride in the app showed an organizer who does not exist. */
@@ -249,8 +303,7 @@ export function toEventDetail(
      */
     participantCount: capacity?.participantCount ?? 0,
     maxParticipants: viewerIsOwner ? (capacity?.maxParticipants ?? null) : null,
-    isFull:
-      capacity !== null ? capacity.participantCount >= capacity.maxParticipants : false,
+    isFull: capacity !== null ? capacity.participantCount >= capacity.maxParticipants : false,
     groupCount: capacity?.groupCount ?? 0,
     maxGroups: viewerIsOwner ? (capacity?.maxGroups ?? null) : null,
   };
@@ -289,6 +342,10 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
         : buildActor(event.ownerId),
   ]);
 
+  // Not in the Promise.all above: it is skipped entirely for an ungrouped ride (the normal
+  // case), so folding it in would add a round trip to every single event read.
+  const linkedRides = await getLinkedRidesForViewer(event, viewerId);
+
   const limits = ownerActor?.entitlements.limits ?? null;
   const capacity = limits
     ? {
@@ -310,6 +367,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
     canViewEventInfo(view),
     capacity,
     canSeeRoute,
+    linkedRides,
   );
 }
 
@@ -317,6 +375,124 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
 async function ownerDetail(event: Event, userId: number) {
   const view = await getEventForViewer(event.id, userId);
   return eventDetailWithRoute(view, userId);
+}
+
+// ---- link groups: one /share link over several rides (sql/037) ----------------------------
+
+/**
+ * One member of a shared link, as the chooser's card needs it.
+ *
+ * Built on toEventSummary so a card here shows the same Distance / Elevation / Riders a card
+ * anywhere else in the app does — then redacted for a viewer who may not see the ride's
+ * details, nulling exactly the four fields toEventDetail nulls for the same reason. A private
+ * ride therefore gives a stranger a name-and-type card: precisely what its own code already
+ * discloses through toEventConfig, and nothing more.
+ */
+function toSharedRideCard(member: SharedRideMember) {
+  const summary = toEventSummary(member.event);
+  if (member.canSeeInfo) return summary;
+  return { ...summary, startsAt: null, endsAt: null, location: null, area: null };
+}
+
+// GET /api/v1/events/share/:codes
+export async function getSharedRidesController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { codes } = shareCodesParamSchema.parse(req.params);
+    const viewerId = req.auth?.userId ?? null;
+    traceLog("event.controller.getSharedRidesController", { codes, viewerId });
+    const group = await getSharedRideGroup(codes, viewerId);
+
+    // The owner is resolved ONCE, not per card: one owner per group is a write-time invariant
+    // (event.service.ts::setEventLinkGroup), so the chooser's "<Owner> created 2 rides" line
+    // cannot differ between members. Read from the first member, which is the earliest start.
+    const ownerId = group.members[0].event.ownerId;
+    const owner = ownerId === null ? null : await selectUserById(ownerId);
+
+    res.status(200).json({
+      data: {
+        /** Null when none of the codes is in a group any more — the client then treats what it
+         *  got as plain rides rather than as a set, and a single ride redirects to /join. */
+        linkGroupId: group.linkGroupId,
+        owner: owner
+          ? {
+              id: owner.id,
+              name:
+                [owner.firstName, owner.lastName].filter(Boolean).join(" ").trim() ||
+                owner.nickname ||
+                null,
+              ...userImageFieldsOf(owner),
+            }
+          : null,
+        rides: group.members.map(toSharedRideCard),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/v1/events/share  — no codes.
+ *
+ * Registered only so this answers something a person can act on. Without it the request falls
+ * through to GET /:eventId, where eventIdParamSchema rejects "share" as a non-UUID and the
+ * caller gets a 400 about an event id they never mentioned.
+ */
+export function getSharedRidesIndexController(_req: Request, _res: Response, next: NextFunction) {
+  next(new ApiError(400, "That share link is missing its ride codes"));
+}
+
+// PUT /api/v1/events/:eventId/link-group
+export async function setLinkGroupController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { eventId } = eventIdParamSchema.parse(req.params);
+    const { eventIds } = linkGroupBodySchema.parse(req.body);
+    traceLog("event.controller.setLinkGroupController", {
+      eventId,
+      userId: req.auth!.userId,
+      eventIds,
+    });
+    const rides = await setEventLinkGroup(eventId, req.auth!.userId, eventIds);
+    // The whole group back, as summaries: the sheet redraws from this, and the share sheet
+    // needs every member's CODE to build the /share/<a>-<b> URL.
+    res.status(200).json({ data: { rides: rides.map(toEventSummary) } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/v1/events/:eventId/link-group
+export async function clearLinkGroupController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { eventId } = eventIdParamSchema.parse(req.params);
+    traceLog("event.controller.clearLinkGroupController", { eventId, userId: req.auth!.userId });
+    const rides = await clearEventLinkGroup(eventId, req.auth!.userId);
+    res.status(200).json({ data: { rides: rides.map(toEventSummary) } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/v1/events/:eventId/leave
+ *
+ * The rider takes themselves off a start list. The client has called this for a long time
+ * against nothing at all — see event.service.ts::leaveEvent for that story.
+ *
+ * Answers 200 with the ride, not 204: the client refetches the ride afterwards anyway, and
+ * handing it back saves the round trip. Leaving a ride you already left is also a 200 — the
+ * rider asked to be off the list and they are off the list.
+ */
+export async function leaveEventController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { eventId } = eventIdParamSchema.parse(req.params);
+    traceLog("event.controller.leaveEventController", { eventId, userId: req.auth!.userId });
+    await leaveEvent(eventId, req.auth!.userId);
+    const view = await getEventForViewer(eventId, req.auth!.userId);
+    res.status(200).json({ data: await eventDetailWithRoute(view, req.auth!.userId) });
+  } catch (err) {
+    next(err);
+  }
 }
 
 // GET /api/v1/events/by-code/:code
@@ -437,7 +613,15 @@ export async function listPublicEventsController(req: Request, res: Response, ne
   try {
     const filters = publicEventsQuerySchema.parse(req.query);
     traceLog("event.controller.listPublicEventsController", filters);
-    const { events, total } = await listPublicEvents(filters);
+    // Guests keep the whole list. A signed-out caller asking for favoritesOnly gets every
+    // track rather than a 401 or an empty grid — they have no favourites to filter to, and the
+    // page must still render for them. The client hides the toggle when signed out anyway.
+    const viewerId = req.auth?.userId;
+    const { events, total } = await listPublicEvents({
+      ...filters,
+      viewerId,
+      favoritesOnly: viewerId ? filters.favoritesOnly : false,
+    });
     // `total` is what lets a client page correctly instead of guessing when to stop —
     // previously it had no way to know a second page existed.
     res.status(200).json({

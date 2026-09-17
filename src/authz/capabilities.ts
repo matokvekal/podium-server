@@ -35,6 +35,13 @@ export const EVENT_CAPABILITIES = [
   "event:manage_participants",
   "event:manage_groups",
   "event:manage_route",
+  /**
+   * Connect this ride to the organizer's other rides that day so they share one /share link
+   * (sql/037). Separate from event:edit because a link group is a SHARING switch, not a ride
+   * detail: it stays changeable after the ride has gone live, which is exactly when an
+   * organizer reaches for it.
+   */
+  "event:manage_link_group",
   /** Add or remove co-organizers. The Club tier's "multiple admins". */
   "event:manage_members",
 ] as const;

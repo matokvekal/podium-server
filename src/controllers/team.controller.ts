@@ -57,7 +57,10 @@ function toMember(member: TeamMember) {
 export async function createTeamController(req: Request, res: Response, next: NextFunction) {
   try {
     const input = createTeamSchema.parse(req.body);
-    traceLog("team.controller.createTeamController", { userId: req.auth!.userId, name: input.name });
+    traceLog("team.controller.createTeamController", {
+      userId: req.auth!.userId,
+      name: input.name,
+    });
     const team = await createTeam(req.auth!.userId, input);
     res.status(201).json({ data: toTeam(team) });
   } catch (err) {
@@ -214,7 +217,10 @@ export async function linkEventTeamController(req: Request, res: Response, next:
 export async function followController(req: Request, res: Response, next: NextFunction) {
   try {
     const { userId } = followParamSchema.parse(req.params);
-    traceLog("team.controller.followController", { followerId: req.auth!.userId, followeeId: userId });
+    traceLog("team.controller.followController", {
+      followerId: req.auth!.userId,
+      followeeId: userId,
+    });
     await followUser(req.auth!.userId, userId);
     res.status(204).end();
   } catch (err) {
@@ -242,7 +248,9 @@ export async function listFollowingController(req: Request, res: Response, next:
   try {
     traceLog("team.controller.listFollowingController", { userId: req.auth!.userId });
     const following = await listFollowing(req.auth!.userId);
-    res.status(200).json({ data: { following, followers: await getFollowerCount(req.auth!.userId) } });
+    res
+      .status(200)
+      .json({ data: { following, followers: await getFollowerCount(req.auth!.userId) } });
   } catch (err) {
     next(err);
   }

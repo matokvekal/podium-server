@@ -53,7 +53,9 @@ describe("canAccount — event:create_private needs BOTH features", () => {
   });
 
   it("both together unlock it", () => {
-    expect(canAccount(actor(["create_events", "private_events"]), "event:create_private")).toBe(true);
+    expect(canAccount(actor(["create_events", "private_events"]), "event:create_private")).toBe(
+      true,
+    );
   });
 });
 

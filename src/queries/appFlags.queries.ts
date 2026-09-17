@@ -34,7 +34,9 @@ export async function getAppFlag(key: string): Promise<string | null> {
 
   let value: string | null = null;
   try {
-    const rows = await query<{ value: string }>("SELECT value FROM app_flags WHERE key = $1", [key]);
+    const rows = await query<{ value: string }>("SELECT value FROM app_flags WHERE key = $1", [
+      key,
+    ]);
     value = rows[0]?.value ?? null;
   } catch (err) {
     const code =

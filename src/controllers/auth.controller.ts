@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { enabledAuthProviders } from "../config/auth-providers.js";
 import { traceLog } from "../lib/trace-log.js";
 import {
   googleAuthSchema,
@@ -14,7 +15,6 @@ import {
   requestSmsOtp,
   verifySmsOtp,
 } from "../services/auth.service.js";
-import { enabledAuthProviders } from "../config/auth-providers.js";
 import type { SessionContext } from "../services/session.service.js";
 
 function sessionContext(req: Request): SessionContext {

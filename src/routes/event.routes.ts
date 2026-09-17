@@ -9,8 +9,26 @@
 
 import { Router } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
-import { deduplicateClientAction } from "../middleware/clientActions.js";
-import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
+import {
+  cancelEventController,
+  changeEventStatusController,
+  clearLinkGroupController,
+  createEventController,
+  getEventByCodeController,
+  getEventController,
+  getLiveController,
+  getSharedRidesController,
+  getSharedRidesIndexController,
+  joinEventController,
+  leaveEventController,
+  listEventsController,
+  listPublicEventAreasController,
+  listPublicEventsController,
+  pauseEventController,
+  postLocationBatchController,
+  setLinkGroupController,
+  updateEventController,
+} from "../controllers/event.controller.js";
 import {
   assignRidersController,
   createGroupController,
@@ -24,21 +42,8 @@ import {
   getTracksController,
 } from "../controllers/result.controller.js";
 import { linkEventTeamController } from "../controllers/team.controller.js";
-import {
-  cancelEventController,
-  changeEventStatusController,
-  createEventController,
-  getEventByCodeController,
-  getEventController,
-  getLiveController,
-  joinEventController,
-  listEventsController,
-  listPublicEventAreasController,
-  listPublicEventsController,
-  pauseEventController,
-  postLocationBatchController,
-  updateEventController,
-} from "../controllers/event.controller.js";
+import { deduplicateClientAction } from "../middleware/clientActions.js";
+import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
 import { eventRouteRouter } from "./eventRoute.routes.js";
 import { participantRouter } from "./participant.routes.js";
 
@@ -115,12 +120,39 @@ eventRouter.get("/", requireAuth, listEventsController);
 // GET /api/v1/events/public
 // Registered before the single-segment "/:eventId" so a request for it is never swallowed
 // by the param route.
-eventRouter.get("/public", listPublicEventsController);
+//
+// optionalAuth, NOT requireAuth: this list is the app's front door and must keep serving a
+// signed-out visitor exactly as it always has. The token is read only so the response can say
+// whether THIS rider has liked or hearted each track, and so `favoritesOnly` has a rider to
+// scope to. Nothing about which rides are visible depends on it.
+eventRouter.get("/public", optionalAuth, listPublicEventsController);
 
 // GET /api/v1/events/public/areas
 // The distinct areas on public rides — populates the "Browse tracks" Area filter. Two
 // segments, so "/:eventId" never matches it; kept next to "/public" for discoverability.
 eventRouter.get("/public/areas", listPublicEventAreasController);
+
+// ---- one share link over several rides (sql/037) ------------------------------------------
+
+// GET /api/v1/events/share/:codes
+// The recipient's end of a /share/<codeA>-<codeB> link: resolve the codes to the rides that
+// currently share that link, so the client can show a chooser.
+//
+// Registration position is NOT what keeps this safe from "/:eventId" — unlike "/public" above.
+// This path is TWO segments and ":eventId" matches exactly one, and path-to-regexp never lets
+// a param span a "/". It is registered here for readability, not for precedence.
+//
+// ⚠ Do not rewrite the param as ":codes+" or ":codes*". path-to-regexp v8 removed both, and
+// Express 5 throws at BOOT, so the mistake takes the whole server down rather than one route.
+//
+// optionalAuth: a shared link is the app's front door, read by strangers. The token only
+// widens what each card may say about a ride the viewer has a relationship with.
+eventRouter.get("/share/:codes", optionalAuth, getSharedRidesController);
+
+// GET /api/v1/events/share
+// A link that lost its codes. Registered so it says so, instead of falling through to
+// "/:eventId" and being rejected as a malformed event id nobody asked about.
+eventRouter.get("/share", optionalAuth, getSharedRidesIndexController);
 
 // GET /api/v1/events/:eventId
 // Optional auth, not required: a public event is viewable by a stranger, same as its card on
@@ -194,6 +226,41 @@ eventRouter.post(
   deduplicateClientAction,
   assignRidersController,
 );
+
+// PUT /api/v1/events/:eventId/link-group
+// Connect this ride to the organizer's other rides that day so they share one link. The body
+// is the COMPLETE membership, so this replaces rather than adds, and an empty list dissolves
+// the group. Owner/operator only, via the event:manage_link_group capability.
+//
+// deduplicateClientAction for consistency with every other event mutation. Note it is inert
+// today: nothing in the web client sends X-Client-Action-Id, so the middleware always falls
+// straight through. It is here so that changes when the client starts sending one, not because
+// this route is protected right now.
+eventRouter.put(
+  "/:eventId/link-group",
+  requireAuth,
+  deduplicateClientAction,
+  setLinkGroupController,
+);
+
+// DELETE /api/v1/events/:eventId/link-group
+// "Share this ride on its own." Also dissolves the group entirely when it would otherwise be
+// left with a single ride in it.
+eventRouter.delete(
+  "/:eventId/link-group",
+  requireAuth,
+  deduplicateClientAction,
+  clearLinkGroupController,
+);
+
+// POST /api/v1/events/:eventId/leave
+// The rider takes themselves off this ride's start list.
+//
+// ⚠ NEW, despite looking old. EventDetailPage.tsx has called this path for a long time and
+// its comment calls it frozen, but nothing ever registered it — that button 404'd. It exists
+// now because "switch ride" on a shared link has to move a rider off the ride they were on.
+// Self-only: it never touches another rider's row. See event.service.ts::leaveEvent.
+eventRouter.post("/:eventId/leave", requireAuth, deduplicateClientAction, leaveEventController);
 
 // PATCH /api/v1/events/:eventId/team
 // Links this ride into a team's schedule (or unlinks it with teamId: null).

@@ -92,7 +92,9 @@ describe("trackAuditEvent — non-fatal", () => {
   });
 
   it("does NOT throw when analytics_events is missing (42P01), and names the migration", async () => {
-    execute.mockRejectedValueOnce(Object.assign(new Error('relation "analytics_events" does not exist'), { code: "42P01" }));
+    execute.mockRejectedValueOnce(
+      Object.assign(new Error('relation "analytics_events" does not exist'), { code: "42P01" }),
+    );
 
     await expect(trackAuditEvent({ type: "RIDE_JOINED", userId: 1 })).resolves.toBeUndefined();
     expect(loggerWarn).toHaveBeenCalledOnce();

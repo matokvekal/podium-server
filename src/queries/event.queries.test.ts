@@ -21,6 +21,7 @@ const {
   selectPublicEvents,
   selectPublicEventAreas,
   updateEvent,
+  updateEventCountryRegion,
   updateEventRidePlan,
 } = await import("./event.queries.js");
 
@@ -253,6 +254,8 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       "duration_desc",
       "downloads_asc",
       "downloads_desc",
+      "likes_asc",
+      "likes_desc",
       "name_asc",
     ] as const;
 
@@ -261,7 +264,7 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       queryOne.mockResolvedValueOnce({ count: "0" });
       await selectPublicEvents({ sort, limit: 24, offset: 0 });
       const [sql] = query.mock.calls.at(-1) as [string];
-      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$15 OFFSET \$16/);
+      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$17 OFFSET \$18/);
       if (sort !== "name_asc" && sort !== "oldest") {
         expect(sql).toMatch(/NULLS LAST, e\.created_at DESC, e\.id/);
       }
@@ -275,6 +278,48 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
     const [sql] = query.mock.calls.at(-1) as [string];
     expect(sql).toMatch(/FROM route_copies rc\s+WHERE rc\.route_id = route_summary\.route_id/);
     expect(sql).toMatch(/copy_summary\.download_count DESC NULLS LAST/);
+  });
+
+  it("likes_* order by the like_summary lateral's count", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+    await selectPublicEvents({ sort: "likes_desc", limit: 24, offset: 0 });
+    const [sql] = query.mock.calls.at(-1) as [string];
+    expect(sql).toMatch(/FROM route_likes rl\s+WHERE rl\.route_id = route_summary\.route_id/);
+    expect(sql).toMatch(/like_summary\.like_count DESC NULLS LAST/);
+  });
+
+  it("resolves the viewer's own like / favourite state only when a viewer is bound", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+    await selectPublicEvents({ sort: "newest", limit: 24, offset: 0, viewerId: 7 });
+
+    const [sql, params] = query.mock.calls.at(-1) as [string, unknown[]];
+    // NULL for a guest rather than false — "nobody is signed in" and "signed in and has not
+    // liked this" are different answers and the card renders them differently.
+    expect(sql).toMatch(/CASE WHEN \$15::bigint IS NULL THEN NULL ELSE EXISTS/);
+    expect(sql).toMatch(/viewer_liked/);
+    expect(sql).toMatch(/viewer_favorited/);
+    expect(params[14]).toBe(7);
+  });
+
+  it("favoritesOnly narrows to the viewer's own saved tracks", async () => {
+    query.mockResolvedValueOnce([]);
+    queryOne.mockResolvedValueOnce({ count: "0" });
+    await selectPublicEvents({
+      sort: "newest",
+      limit: 24,
+      offset: 0,
+      viewerId: 7,
+      favoritesOnly: true,
+    });
+
+    const [sql, params] = query.mock.calls.at(-1) as [string, unknown[]];
+    // Scoped to the viewer, and inert without one — a guest must get the whole list, never
+    // everyone's favourites.
+    expect(sql).toMatch(/\$16::boolean IS NOT TRUE OR \(\$15::bigint IS NOT NULL AND EXISTS/);
+    expect(sql).toMatch(/FROM route_favorites rf/);
+    expect(params[15]).toBe(true);
   });
 
   it("filters on country and region", async () => {
@@ -433,6 +478,69 @@ describe("updateEventRidePlan", () => {
   it("swallows a missing-column error on a database without sql/022", async () => {
     execute.mockRejectedValueOnce({ code: "42703" });
     await expect(updateEventRidePlan("e1", { durationMin: 60 })).resolves.toBeUndefined();
+  });
+
+  // THE BUG THIS COVERS: the five columns come from sql/022, sql/024 and sql/028, and the
+  // client sends all five on every edit. A database that had 022 and 024 but not 028 made
+  // Postgres reject the ONE statement for expected_participants — and the old single
+  // try/catch then dropped duration_min, rest_stops, is_accessible and has_support_vehicle
+  // with it, silently, PATCH still answering 200. An organizer set an estimated ride time,
+  // saved, saw no error, and the ride page and every card still read "soon".
+  it("still writes the columns the database has when one of them is missing", async () => {
+    execute.mockRejectedValueOnce({
+      code: "42703",
+      message: 'column "expected_participants" of relation "events" does not exist',
+    });
+
+    await updateEventRidePlan("e1", {
+      durationMin: 120,
+      restStops: 1,
+      isAccessible: false,
+      hasSupportVehicle: true,
+      expectedParticipants: 40,
+    });
+
+    // First attempt names all five; the retry drops only the column Postgres named.
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[0][0]).toMatch(/expected_participants = \$6/);
+
+    const [retrySql, retryValues] = execute.mock.calls[1];
+    expect(retrySql).toMatch(/duration_min = \$2/);
+    expect(retrySql).toMatch(/rest_stops = \$3/);
+    expect(retrySql).toMatch(/is_accessible = \$4/);
+    expect(retrySql).toMatch(/has_support_vehicle = \$5/);
+    expect(retrySql).not.toMatch(/expected_participants/);
+    // Renumbered, not left with a hole — $6 is gone, so the four values shift up.
+    expect(retryValues).toEqual(["e1", 120, 1, false, true]);
+  });
+
+  it("gives up rather than looping when the 42703 names nothing it is writing", async () => {
+    // `column e.region does not exist` is the SELECT-list wording and names an alias, not a
+    // column of ours. There is nothing to drop, so it must not retry the same statement.
+    execute.mockRejectedValue({ code: "42703", message: "column e.region does not exist" });
+
+    await expect(updateEventRidePlan("e1", { durationMin: 60 })).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("updateEventCountryRegion", () => {
+  // Same shape, and the case actually seen in production: country (sql/030) applied, region
+  // (sql/032) not. The client sends both on every edit, so the ride's country could not be
+  // corrected at all — the write was thrown away whole.
+  it("still stamps the country when events.region is missing", async () => {
+    execute.mockRejectedValueOnce({
+      code: "42703",
+      message: 'column "region" of relation "events" does not exist',
+    });
+
+    await updateEventCountryRegion("e1", { country: "IL", region: "north" });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    const [retrySql, retryValues] = execute.mock.calls[1];
+    expect(retrySql).toMatch(/country = \$2/);
+    expect(retrySql).not.toMatch(/region/);
+    expect(retryValues).toEqual(["e1", "IL"]);
   });
 });
 

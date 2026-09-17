@@ -84,11 +84,7 @@ export async function setEventRouteController(req: Request, res: Response, next:
       return;
     }
 
-    if (
-      req.body &&
-      typeof req.body === "object" &&
-      Object.prototype.hasOwnProperty.call(req.body, "routeId")
-    ) {
+    if (req.body && typeof req.body === "object" && Object.hasOwn(req.body, "routeId")) {
       const { routeId } = attachRouteSchema.parse(req.body);
       traceLog("eventRoute.controller.setEventRouteController", {
         eventId,

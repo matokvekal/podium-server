@@ -186,6 +186,23 @@ export interface Event {
   isAccessible: boolean;
 
   /**
+   * How technical the ground is, 1-5, or null when the organizer has not stated one — see
+   * sql/038-event-terrain-grade.sql.
+   *
+   * ORTHOGONAL TO `level`. `level` is who the ride is pitched at (fitness/pace); this is what
+   * is under the tyre. "Beginners pace over S3 singletrack" is a real ride and needs both.
+   *
+   * The NUMBER is stored; the WORDS are per-discipline and live in the client
+   * (mtb 1-5 = S1-S5 Singletrail-Skala, gravel 1-5 = G1-G5 surface grades), exactly as the
+   * five `level` values are relabelled as min/km for a running event.
+   *
+   * Only mtb/gravel collect it today, but that is a product rule, not a schema one: a value is
+   * kept rather than cleared when an organizer switches discipline, so switching back restores
+   * it. Reads as null on a database without sql/038.
+   */
+  terrainGrade: number | null;
+
+  /**
    * How many riders the organizer EXPECTS — a number they type on the create form, or null
    * when they left it blank. Purely informational: the event page shows "12 / 40" only when it
    * is set. It is NOT the capacity — that ceiling is the organizer's plan limit
@@ -213,6 +230,21 @@ export interface Event {
    */
   copiedFromEventId: string | null;
   copiedFromRouteId: number | null;
+
+  /**
+   * The share-link group this ride belongs to, or null when it is shared on its own — see
+   * sql/037-event-link-groups.sql.
+   *
+   * 2-3 rides on the same day can share ONE link (/share/<codeA>-<codeB>) that opens a chooser
+   * instead of landing straight on a ride. They stay entirely separate rides; only the link is
+   * unified. A ride is in at most one group, which is why this is a column and not a table.
+   *
+   * A group of one is not a group: the service clears the last remaining member, and a read
+   * that finds a single surviving member treats it as a plain single-ride link.
+   *
+   * Reads as null on a database that has not had sql/037 applied yet.
+   */
+  linkGroupId: string | null;
 
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;

@@ -139,9 +139,7 @@ describe("resolveEntitlements — user_limits is the only source of the numbers"
   });
 
   it("does NOT grant create_events when the flag is off / unset", async () => {
-    query.mockImplementation(async (sql: string) =>
-      sql.includes("app_flags") ? [] : [],
-    );
+    query.mockImplementation(async (sql: string) => (sql.includes("app_flags") ? [] : []));
 
     const result = await resolveEntitlements(42);
 

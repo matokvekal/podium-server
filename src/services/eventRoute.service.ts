@@ -27,6 +27,7 @@
 import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
+import { selectEventById, updateEventCopiedFrom } from "../queries/event.queries.js";
 import {
   attachRouteToEvent,
   deleteEventRoute,
@@ -36,7 +37,6 @@ import {
   selectEventRouteId,
   selectEventRouteSummary,
 } from "../queries/eventRoute.queries.js";
-import { selectEventById, updateEventCopiedFrom } from "../queries/event.queries.js";
 import { insertRouteCopy, selectRouteCopyCount } from "../queries/routeCopy.queries.js";
 import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
 import type { SetEventRouteInput } from "../schemas/eventRoute.schemas.js";

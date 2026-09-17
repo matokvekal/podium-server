@@ -4,16 +4,19 @@
 // different surface — see eventRoute.routes.ts.
 
 import { Router } from "express";
-import { deduplicateClientAction } from "../middleware/clientActions.js";
-import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
 import {
+  addRouteFavoriteController,
   createRouteController,
   deleteRouteController,
   getRouteController,
+  likeRouteController,
   listMyRoutesController,
   listPublicRoutesController,
+  removeRouteFavoriteController,
   updateRouteController,
 } from "../controllers/routeLibrary.controller.js";
+import { deduplicateClientAction } from "../middleware/clientActions.js";
+import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
 
 export const routeLibraryRouter = Router();
 
@@ -32,6 +35,24 @@ routeLibraryRouter.post("/", requireAuth, deduplicateClientAction, createRouteCo
 
 // GET /api/v1/routes
 routeLibraryRouter.get("/", requireAuth, listMyRoutesController);
+
+// POST   /api/v1/routes/:routeId/like
+// POST   /api/v1/routes/:routeId/favorite
+// DELETE /api/v1/routes/:routeId/favorite
+//
+// Two-segment paths, so they must be registered before the single-segment "/:routeId" — the
+// same ordering rule "/public" follows above.
+//
+// Liking is once and permanent and there is deliberately no DELETE for it; a favourite is the
+// rider's own bookmark and toggles freely. Both require a real account: an anonymous like
+// would be uncountable and an anonymous bookmark would have nowhere to live.
+//
+// NOT wrapped in deduplicateClientAction. Both are already idempotent at the database (UNIQUE
+// on (route_id, user_id) + ON CONFLICT DO NOTHING), so a replayed request is harmless, and the
+// dedup middleware's 409 would make a retry look like a failure to the card.
+routeLibraryRouter.post("/:routeId/like", requireAuth, likeRouteController);
+routeLibraryRouter.post("/:routeId/favorite", requireAuth, addRouteFavoriteController);
+routeLibraryRouter.delete("/:routeId/favorite", requireAuth, removeRouteFavoriteController);
 
 // GET /api/v1/routes/:routeId
 // Optional auth: a published route opens for a guest; getRouteForViewer still 404s an

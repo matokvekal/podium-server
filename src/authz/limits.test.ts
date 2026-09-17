@@ -153,8 +153,6 @@ describe("the limit is whatever user_limits says, not what the config says", () 
 
   it("puts both numbers in the message so the client need not make a second call", () => {
     expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3)).toThrow(/used 3 of 3/);
-    expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3)).toThrow(
-      /PLAN_LIMIT_EVENTS_PER_WEEK/,
-    );
+    expect(() => assertWithinEventsPerWeek(DEFAULT_ACTOR, 3)).toThrow(/PLAN_LIMIT_EVENTS_PER_WEEK/);
   });
 });

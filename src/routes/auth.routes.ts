@@ -2,6 +2,7 @@
 
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
+import { requireProviderEnabled } from "../config/auth-providers.js";
 import {
   authConfigController,
   googleAuthController,
@@ -11,7 +12,6 @@ import {
   smsRequestController,
   smsVerifyController,
 } from "../controllers/auth.controller.js";
-import { requireProviderEnabled } from "../config/auth-providers.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
 export const authRouter = Router();
@@ -45,7 +45,12 @@ authRouter.post(
 );
 
 // POST /api/v1/auth/sms/verify
-authRouter.post("/sms/verify", smsVerifyLimiter, requireProviderEnabled("SMS"), smsVerifyController);
+authRouter.post(
+  "/sms/verify",
+  smsVerifyLimiter,
+  requireProviderEnabled("SMS"),
+  smsVerifyController,
+);
 
 // POST /api/v1/auth/refresh
 authRouter.post("/refresh", refreshController);

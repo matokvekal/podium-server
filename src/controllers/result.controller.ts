@@ -3,8 +3,12 @@ import type { ParticipantTrack } from "../db/types.js";
 import { traceLog } from "../lib/trace-log.js";
 import { eventIdParamSchema } from "../schemas/event.schemas.js";
 import { participantIdParamSchema } from "../schemas/participant.schemas.js";
+import {
+  getEventResults,
+  getEventTracks,
+  getParticipantTrack,
+} from "../services/result.service.js";
 import { toRouteSummary } from "./routeLibrary.controller.js";
-import { getEventResults, getEventTracks, getParticipantTrack } from "../services/result.service.js";
 
 function toTrack(track: ParticipantTrack) {
   return {

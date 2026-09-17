@@ -92,7 +92,9 @@ describe("updateRegistrationStatus — SQL / parameter contract", () => {
 
   it("manual-add rider (user_id null): matches on the row id, all three params referenced", async () => {
     queryOne.mockResolvedValueOnce({ user_id: null });
-    query.mockResolvedValueOnce([participantRow({ id: 7, user_id: null, display_name: null, name: "Walk-in" })]);
+    query.mockResolvedValueOnce([
+      participantRow({ id: 7, user_id: null, display_name: null, name: "Walk-in" }),
+    ]);
 
     await updateRegistrationStatus(7, EVENT_ID, "rejected");
 
@@ -108,7 +110,12 @@ describe("updateRegistrationStatus — SQL / parameter contract", () => {
     query.mockResolvedValueOnce([participantRow({ registration_status: "approved" })]);
 
     const result = await updateRegistrationStatus(2, EVENT_ID, "approved");
-    expect(result).toMatchObject({ id: 2, eventId: EVENT_ID, registrationStatus: "approved", name: "Rider Two" });
+    expect(result).toMatchObject({
+      id: 2,
+      eventId: EVENT_ID,
+      registrationStatus: "approved",
+      name: "Rider Two",
+    });
   });
 
   it("returns null when the participant/event pair does not exist", async () => {

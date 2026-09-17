@@ -6,7 +6,7 @@
 // than quietly handing back the free tier. Rows are created in the same transaction as the
 // user (insertUserLimitsTx) and backfilled for pre-existing users by sql/019.
 
-import { getDefaultUserLimits, type EffectiveLimits } from "../config/plan-limits.js";
+import { type EffectiveLimits, getDefaultUserLimits } from "../config/plan-limits.js";
 import { query, type Transaction } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
 

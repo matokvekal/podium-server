@@ -133,7 +133,11 @@ export async function deleteParticipantController(req: Request, res: Response, n
 }
 
 // POST /api/v1/events/:eventId/participants/:participantId/approve
-export async function approveParticipantController(req: Request, res: Response, next: NextFunction) {
+export async function approveParticipantController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   try {
     const { eventId, participantId } = participantIdParamSchema.parse(req.params);
     traceLog("participants.controller.approveParticipantController", {

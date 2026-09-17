@@ -107,12 +107,7 @@ export function jpeg(width: number, height: number): Buffer {
     sof0[11 + c * 3] = 0x11;
     sof0[12 + c * 3] = 0;
   }
-  return Buffer.concat([
-    Buffer.from([0xff, 0xd8]),
-    app0,
-    sof0,
-    Buffer.from([0xff, 0xd9]),
-  ]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app0, sof0, Buffer.from([0xff, 0xd9])]);
 }
 
 /** A lossy (VP8) WebP — the RIFF container plus a VP8 bitstream header. */

@@ -119,10 +119,12 @@ export async function updateGroup(
  */
 export async function deleteGroup(groupId: number, eventId: string): Promise<boolean> {
   await execute("UPDATE event_participants SET group_id = NULL WHERE group_id = $1", [groupId]);
-  return (await execute("DELETE FROM event_groups WHERE id = $1 AND event_id = $2", [
-    groupId,
-    eventId,
-  ])) > 0;
+  return (
+    (await execute("DELETE FROM event_groups WHERE id = $1 AND event_id = $2", [
+      groupId,
+      eventId,
+    ])) > 0
+  );
 }
 
 /**

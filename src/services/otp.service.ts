@@ -7,6 +7,8 @@ import {
   OTP_MAX_REQUESTS_PER_HOUR,
   OTP_RESEND_COOLDOWN_SECONDS,
 } from "../lib/sms/otp.constants.js";
+import { normalizePhoneE164 } from "../lib/sms/phone.js";
+import { getSmsProvider } from "../lib/sms/sms-provider.js";
 import {
   consumeChallenge,
   countChallengesSince,
@@ -16,8 +18,6 @@ import {
   insertChallenge,
   setChallengeCodeHash,
 } from "../queries/otp.queries.js";
-import { normalizePhoneE164 } from "../lib/sms/phone.js";
-import { getSmsProvider } from "../lib/sms/sms-provider.js";
 
 function hashOtp(challengeId: number, code: string): string {
   return sha256Hex(`${challengeId}:${code}`);

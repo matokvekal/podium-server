@@ -21,6 +21,7 @@ import { datePrefix, letterSuffix } from "../lib/event-code.js";
 import { haversineDistanceKm } from "../lib/geo.js";
 import { logger } from "../lib/logger.js";
 import {
+  applyEventLinkGroup,
   countEventsCreatedSince,
   countLiveEventsForOwner,
   type EventListItem,
@@ -29,10 +30,13 @@ import {
   insertLocationPoints,
   insertParticipantIfRoom,
   type LocationPointInput,
+  markParticipantLeft,
   type PublicEventFilters,
   selectActiveEventByCode,
   selectEventById,
   selectEventCodesWithPrefix,
+  selectEventsByCodes,
+  selectEventsByLinkGroup,
   selectEventsForUser,
   selectLastLocation,
   selectLastLocationsForEvent,
@@ -265,12 +269,15 @@ export async function createEvent(
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
     /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible /
-     *  has_support_vehicle / expected_participants via updateEventRidePlan. undefined = not set. */
+     *  has_support_vehicle / expected_participants / terrain_grade via updateEventRidePlan.
+     *  undefined = not set. */
     durationMin?: number | null;
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
     expectedParticipants?: number | null;
+    /** How technical the ground is, 1-5 (sql/038). Orthogonal to `level`. */
+    terrainGrade?: number | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -346,7 +353,8 @@ export async function createEvent(
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
     input.hasSupportVehicle !== undefined ||
-    input.expectedParticipants !== undefined
+    input.expectedParticipants !== undefined ||
+    input.terrainGrade !== undefined
   ) {
     await updateEventRidePlan(event.id, {
       durationMin: input.durationMin,
@@ -354,6 +362,7 @@ export async function createEvent(
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
       expectedParticipants: input.expectedParticipants,
+      terrainGrade: input.terrainGrade,
     });
   }
 
@@ -558,7 +567,8 @@ export async function updateEventDetails(
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
     input.hasSupportVehicle !== undefined ||
-    input.expectedParticipants !== undefined;
+    input.expectedParticipants !== undefined ||
+    input.terrainGrade !== undefined;
   if (wroteRidePlan) {
     await updateEventRidePlan(eventId, {
       durationMin: input.durationMin,
@@ -566,6 +576,7 @@ export async function updateEventDetails(
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
       expectedParticipants: input.expectedParticipants,
+      terrainGrade: input.terrainGrade,
     });
   }
 
@@ -697,6 +708,333 @@ export async function pauseEvent(eventId: string, userId: number, paused: boolea
   if (!updated) throw new Error(`pauseEvent: event ${eventId} not found after update`);
   logger.info({ eventId, userId, paused }, "event pause toggled");
   return updated;
+}
+
+// ---------------------------------------------------------------------------------------
+// Link groups — one /share link over 2-3 rides on the same day (sql/037)
+// ---------------------------------------------------------------------------------------
+
+/** The rides stay separate rides; only the LINK is unified. Three is the ceiling because the
+ *  chooser has to stay a glance, not a list — the organizer picks at most two others. */
+const MAX_LINK_GROUP_RIDES = 3;
+
+/**
+ * How far apart two rides in one group may start.
+ *
+ * ⚠ THIS IS A SANITY BOUND, NOT A CALENDAR CHECK, AND IT MUST NOT BE "TIGHTENED".
+ *   The feature is "my rides on the same day", and the precise same-local-day rule belongs to
+ *   the client's picker (lib/time.ts isSameLocalDay) because only the browser knows the
+ *   organizer's timezone. The server has no zone for them — `users` stores `country`, not a
+ *   zone — so comparing UTC calendar dates here would be wrong by construction: a Saturday
+ *   evening ride in UTC-5 is already Sunday in UTC, and refusing it would break a legitimate
+ *   pair the client had correctly offered.
+ *
+ *   So the server's job is only to stop a grouping that could not possibly be one day (a March
+ *   ride linked to a December one), which would make the chooser's "created 2 rides" line a
+ *   lie. Client validation is UX; the server is the final authority on the rules it can
+ *   actually know.
+ */
+const MAX_LINK_GROUP_SPAN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Every refusal here is 400, never 409 — deliberately, and against the instinct that a limit
+ * is a conflict.
+ *
+ * The client's apiMutate() treats ANY 409 as "already applied, this is success", so that an
+ * offline action replayed twice is not shown to a rider as an error. A 409 from here would
+ * therefore be swallowed: the organizer would be told their rides were connected when the
+ * server had just refused. Nothing calls apiMutate today, which is exactly why this is worth
+ * writing down now rather than discovering it later.
+ */
+function refuseLinkGroup(message: string): never {
+  throw new ApiError(400, message);
+}
+
+async function assertMayManageLinkGroup(eventId: string, userId: number): Promise<Event> {
+  const view = await getEventForViewer(eventId, userId);
+  if (!canEvent(view.actor, "event:manage_link_group", view.context)) {
+    denyForbidden("You cannot change how this ride is shared");
+  }
+  return view.event;
+}
+
+/**
+ * Replace the link group anchored on `eventId` with exactly `otherEventIds` alongside it.
+ *
+ * WHY A FULL REPLACE AND NOT "ADD ONE"
+ *   The sheet submits the membership it is showing, so this is the whole truth each time:
+ *   rides not in the list leave the group, rides in it join. That makes the endpoint
+ *   idempotent (saving twice changes nothing the second time) and race-tolerant — two
+ *   concurrent saves cannot cooperate into a group of five, because the ceiling is checked
+ *   against the SUBMITTED list, not against a count read a moment earlier.
+ *
+ * An empty `otherEventIds` dissolves the group: sharing this ride on its own is the same thing
+ * as it being in no group at all.
+ */
+export async function setEventLinkGroup(
+  eventId: string,
+  userId: number,
+  otherEventIds: string[],
+): Promise<Event[]> {
+  const anchor = await assertMayManageLinkGroup(eventId, userId);
+
+  // The anchor can be named again in the body by a client that sends the whole membership
+  // rather than "the others". Same intent either way, so accept it instead of refusing.
+  const memberIds = [...new Set([anchor.id, ...otherEventIds])];
+  if (memberIds.length > MAX_LINK_GROUP_RIDES) {
+    refuseLinkGroup(`One link can cover at most ${MAX_LINK_GROUP_RIDES} rides`);
+  }
+  if (memberIds.length === 1) return clearEventLinkGroup(eventId, userId);
+
+  const members: Event[] = [anchor];
+  for (const id of memberIds.filter((candidate) => candidate !== anchor.id)) {
+    // Every ride in the group is an owner action on THAT ride, not just on the anchor — so
+    // each one goes through the same capability check rather than being trusted because the
+    // caller happens to own the ride they opened. getEventForViewer answers 404 for a ride
+    // that is not theirs to see, which is the right answer for a guessed id.
+    members.push(await assertMayManageLinkGroup(id, userId));
+  }
+
+  // One owner per group. The chooser says "<Owner> created 2 rides" and resolves that owner
+  // once, which is only honest if it cannot differ per ride.
+  if (members.some((member) => member.ownerId !== anchor.ownerId)) {
+    refuseLinkGroup("Only rides you created can share one link");
+  }
+
+  const startTimes: number[] = [];
+  for (const member of members) {
+    if (!member.startsAt) {
+      refuseLinkGroup(`"${member.name}" needs a start time before it can share a link`);
+    }
+    startTimes.push(member.startsAt.getTime());
+  }
+  // Span across the whole set, NOT pairwise. Pairwise is not transitive: 08:00, +20h and +40h
+  // each sit within a day of their neighbour while the group spans nearly two days.
+  if (Math.max(...startTimes) - Math.min(...startTimes) > MAX_LINK_GROUP_SPAN_MS) {
+    refuseLinkGroup("Rides sharing one link have to be on the same day");
+  }
+
+  const previousGroupIds = new Set(
+    members.map((member) => member.linkGroupId).filter((id): id is string => id !== null),
+  );
+  // Rides released from a group this save is rebuilding. Collected before the write so a ride
+  // dropped from the group actually goes back to sharing on its own, instead of being left
+  // pointing at a group it is no longer part of.
+  const releasedIds: string[] = [];
+  for (const groupId of previousGroupIds) {
+    for (const ride of await selectEventsByLinkGroup(groupId)) {
+      if (memberIds.includes(ride.id)) continue;
+      if (ride.ownerId !== anchor.ownerId) {
+        // Cannot happen while one-owner-per-group holds. If it ever did, silently un-sharing
+        // someone else's ride is the one outcome that must not happen.
+        refuseLinkGroup("Those rides are already shared under a link that is not yours");
+      }
+      releasedIds.push(ride.id);
+    }
+  }
+
+  const linkGroupId = randomUUID();
+  const written = await applyEventLinkGroup({
+    clearIds: releasedIds,
+    assignIds: memberIds,
+    linkGroupId,
+  });
+  if (!written) {
+    // sql/037 has not been run. Answering 200 here would hand the organizer a group link that
+    // resolves to nothing.
+    throw new ApiError(503, "Connecting rides is not available yet");
+  }
+  logger.info({ eventId, userId, memberIds, releasedIds, linkGroupId }, "ride link group set");
+
+  // A group of one left behind by the release — dissolve it rather than leave a ride pointing
+  // at a group only it belongs to, whose share link would be a chooser with one card on it.
+  for (const groupId of previousGroupIds) {
+    const remaining = await selectEventsByLinkGroup(groupId);
+    if (remaining.length === 1) {
+      await applyEventLinkGroup({ clearIds: [remaining[0].id], assignIds: [], linkGroupId });
+    }
+  }
+
+  return selectEventsByLinkGroup(linkGroupId);
+}
+
+/**
+ * Take one ride out of its link group — "Share this ride on its own" in the sheet.
+ *
+ * A group of one is not a group, so when this would leave a single ride behind, that ride is
+ * cleared too. Otherwise a lone ride would keep a group id and its link would still open a
+ * chooser with exactly one card on it.
+ */
+export async function clearEventLinkGroup(eventId: string, userId: number): Promise<Event[]> {
+  const event = await assertMayManageLinkGroup(eventId, userId);
+  if (!event.linkGroupId) return [event];
+
+  const siblings = (await selectEventsByLinkGroup(event.linkGroupId)).filter(
+    (ride) => ride.id !== event.id,
+  );
+  const clearIds =
+    siblings.length <= 1 ? [event.id, ...siblings.map((ride) => ride.id)] : [event.id];
+
+  const written = await applyEventLinkGroup({
+    clearIds,
+    assignIds: [],
+    linkGroupId: event.linkGroupId,
+  });
+  if (!written) throw new ApiError(503, "Connecting rides is not available yet");
+
+  logger.info({ eventId, userId, clearIds }, "ride link group cleared");
+  const updated = await selectEventById(eventId);
+  return updated ? [updated] : [];
+}
+
+/** One ride in a shared link, as the chooser needs it: the ride itself, plus what this
+ *  particular viewer is allowed to know about it. */
+export interface SharedRideMember {
+  event: Event;
+  /** False for a private ride a stranger has no relationship with. The chooser then shows a
+   *  name-and-type card with no time, place or map — exactly as much as the ride's own code
+   *  already discloses through toEventConfig, and no more. */
+  canSeeInfo: boolean;
+}
+
+export interface SharedRideGroup {
+  linkGroupId: string | null;
+  members: SharedRideMember[];
+}
+
+/**
+ * Resolve a /share/<codeA>-<codeB> link for one viewer.
+ *
+ * WHY THIS RETURNS THE GROUP'S CURRENT MEMBERS AND NOT "THE CODES IN THE URL"
+ *   The link is already sitting in a group chat by the time anyone opens it. If the organizer
+ *   adds a third ride, the link should show three; if they remove one, it should stop offering
+ *   it. Treating the codes as a LOOKUP KEY rather than as the answer is what lets a link
+ *   survive the organizer changing their mind — and it is why a stale code is ignored instead
+ *   of failing the whole link.
+ *
+ * Cancelled and finished rides are dropped: a chooser must never offer a ride nobody can join.
+ * That one rule is also what keeps the live page's share button honest when one of two rides
+ * has already ended.
+ *
+ * Each survivor goes through getEventForViewer, so a member this viewer may not see simply is
+ * not in the list. No new authorization rule exists here.
+ */
+export async function getSharedRideGroup(
+  codes: string[],
+  viewerId: number | null,
+): Promise<SharedRideGroup> {
+  const found = await selectEventsByCodes(codes);
+  if (found.length === 0) throw new ApiError(404, "No rides found for that link");
+
+  const linkGroupId = found.find((event) => event.linkGroupId)?.linkGroupId ?? null;
+
+  // No group at all — every code in the link is shared on its own now. Fall back to the rides
+  // the codes actually name, so an old group link still opens the ride it was sent about.
+  const candidates = linkGroupId ? await selectEventsByLinkGroup(linkGroupId) : found;
+
+  const members: SharedRideMember[] = [];
+  for (const candidate of candidates) {
+    if (candidate.status === "cancelled" || candidate.status === "finished") continue;
+    try {
+      const view = await getEventForViewer(candidate.id, viewerId);
+      members.push({ event: view.event, canSeeInfo: canViewEventInfo(view) });
+    } catch (err) {
+      // 404 from getEventForViewer means "this ride does not exist for you". The chooser
+      // leaves it out rather than telling a stranger a private ride is there.
+      if (err instanceof ApiError && err.status === 404) continue;
+      throw err;
+    }
+  }
+  if (members.length === 0) throw new ApiError(404, "No rides found for that link");
+
+  return { linkGroupId, members };
+}
+
+/**
+ * The sibling rides of one ride, for the "1 of 2 rides that day · Switch ride" chip.
+ *
+ * Returns [] for an ungrouped ride, and leaves out any sibling this viewer cannot see, so the
+ * chip never counts a ride it would then refuse to show.
+ */
+export async function getLinkedRidesForViewer(
+  event: Event,
+  viewerId: number | null,
+): Promise<Event[]> {
+  if (!event.linkGroupId) return [];
+
+  // Same exclusions as getSharedRideGroup, deliberately: the chip counts what the chooser will
+  // actually offer. Counting a finished sibling made the chip say "1 of 2" and the chooser then
+  // show one ride — a discrepancy a rider reads as a bug in the link.
+  const siblings = (await selectEventsByLinkGroup(event.linkGroupId)).filter(
+    (ride) =>
+      ride.id !== event.id && ride.status !== "cancelled" && ride.status !== "finished",
+  );
+
+  const visible: Event[] = [];
+  for (const sibling of siblings) {
+    const [actor, context] = await Promise.all([
+      buildActor(viewerId),
+      buildEventContext(sibling, viewerId),
+    ]);
+    if (canEvent(actor, "event:view", context)) visible.push(sibling);
+  }
+  return visible;
+}
+
+/**
+ * Leave a ride you are on — the rider's own action, nobody else's.
+ *
+ * ⚠ THIS ENDPOINT DID NOT EXIST UNTIL THE LINK-GROUP WORK NEEDED IT.
+ *   EventDetailPage.tsx has been calling POST /events/:eventId/leave for a long time, with a
+ *   comment describing it as "the frozen POST /events/:eventId/leave endpoint". Nothing ever
+ *   registered it — db/audit/audit.constants.ts says so outright — so that button 404'd. The
+ *   chooser's "switch ride" has to move a rider off the ride they were on, which is
+ *   impossible without this, so it is built here, and the old button starts working with it.
+ *
+ * Deliberately narrow: it sets left_at on the CALLER'S OWN participant row and nothing else.
+ * It does not reject, un-approve, touch results, or let anyone act on another rider — those
+ * are the organizer's actions and live in the participant service.
+ *
+ * Idempotent. Leaving a ride you already left is success, not an error: a rider who taps twice
+ * or retries after a dropped connection has got exactly what they asked for.
+ */
+export async function leaveEvent(eventId: string, userId: number): Promise<void> {
+  const event = await selectEventById(eventId);
+  if (!event) throw new ApiError(404, "Event not found");
+
+  /**
+   * A FINISHED RIDE IS CLOSED. Up to that point a rider may come and go freely — including
+   * while the ride is live, which is deliberate: someone who turns up late, or swaps to the
+   * short group at the first junction, is doing something normal and the start list should
+   * follow them.
+   *
+   * Once it is over, their place on that list is history: it is what the results and their
+   * saved track hang off, and letting them quietly remove themselves would rewrite a ride that
+   * already happened. The chooser enforces the other direction — getSharedRideGroup drops
+   * finished members, so nobody can switch ONTO a ride that is over either.
+   *
+   * computeEffectiveStatus, not `event.status`, because a ride whose end time has passed reads
+   * as finished everywhere else in the app without anything having written the column. Gating
+   * on the raw status would leave a ride that is visibly over still leavable.
+   *
+   * 400, not 409 — see refuseLinkGroup above for why 409 is unsafe here.
+   */
+  if (computeEffectiveStatus(event) === "finished") {
+    throw new ApiError(400, "This ride has finished — you can no longer leave it");
+  }
+
+  const participant = await selectParticipantByEventAndUser(eventId, userId);
+  if (!participant || participant.leftAt) return;
+
+  await markParticipantLeft(participant.id, userId);
+  logger.info({ eventId, userId, participantId: participant.id }, "rider left event");
+  void trackAuditEvent({
+    type: "RIDE_LEFT",
+    userId,
+    rideId: eventId,
+    countryCode: event.country,
+    rideVisibility: event.visibility,
+  });
 }
 
 /**

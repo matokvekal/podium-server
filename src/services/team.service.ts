@@ -8,13 +8,12 @@
 // Membership deliberately mirrors event_participants: a member may have no account yet,
 // because they were added by hand, from a spreadsheet, or from phone contacts.
 
+import { buildActor } from "../authz/actor.js";
+import { assertWithinTeamLimit } from "../authz/limits.js";
 import type { Team, TeamMember, TeamMemberStatus } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
-import { buildActor } from "../authz/actor.js";
-import { assertWithinTeamLimit } from "../authz/limits.js";
 import { selectEventById } from "../queries/event.queries.js";
-import { assertOwner } from "./event.service.js";
 import {
   countFollowers,
   countTeamsForOwner,
@@ -35,6 +34,7 @@ import {
   updateMemberStatus,
   updateTeam,
 } from "../queries/team.queries.js";
+import { assertOwner } from "./event.service.js";
 
 async function assertTeamOwner(teamId: number, userId: number): Promise<Team> {
   const team = await selectTeamById(teamId);
@@ -47,10 +47,7 @@ export async function createTeam(
   ownerId: number,
   input: { name: string; avatarUrl?: string },
 ): Promise<Team> {
-  const [actor, current] = await Promise.all([
-    buildActor(ownerId),
-    countTeamsForOwner(ownerId),
-  ]);
+  const [actor, current] = await Promise.all([buildActor(ownerId), countTeamsForOwner(ownerId)]);
   assertWithinTeamLimit(actor, current);
   const team = await insertTeam({
     name: input.name,

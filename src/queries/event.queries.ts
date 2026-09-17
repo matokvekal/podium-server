@@ -51,10 +51,12 @@ interface EventRow {
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
+  terrain_grade?: number | null;
   has_support_vehicle: boolean;
   expected_participants: number | null;
   copied_from_event_id: string | null;
   copied_from_route_id: number | null;
+  link_group_id?: string | null;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -149,6 +151,9 @@ function mapEvent(row: EventRow): Event {
     durationMin: row.duration_min ?? null,
     restStops: row.rest_stops ?? null,
     isAccessible: row.is_accessible ?? false,
+    // undefined on a database without sql/038 — reads as null, i.e. "the organizer has not
+    // stated how technical the ground is", which is what every ride is until they choose.
+    terrainGrade: row.terrain_grade ?? null,
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
@@ -159,6 +164,9 @@ function mapEvent(row: EventRow): Event {
     // which is also what every ride whose track was uploaded or drawn genuinely is.
     copiedFromEventId: row.copied_from_event_id ?? null,
     copiedFromRouteId: row.copied_from_route_id ?? null,
+    // undefined on a database without sql/037 — reads as null, i.e. "shared on its own",
+    // which is what every ride is until an organizer connects it to another one.
+    linkGroupId: row.link_group_id ?? null,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -186,6 +194,16 @@ export interface EventListItem extends Event {
   /** How many rides have been built on the attached route (route_copies count). Only populated
    *  by GET /events/public; null on the other list responses. */
   downloads: number | null;
+  /** The organizer's display name, resolved the same way a participant's is. Null when the
+   *  ride predates owner_id, or when the owner row has no name of any kind. */
+  ownerName: string | null;
+  /** How many riders have liked the ATTACHED TRACK — not the ride. One count per route, shared
+   *  by every ride built on it (sql/036). Only populated by GET /events/public; null elsewhere. */
+  likes: number | null;
+  /** Whether the CURRENT viewer has already liked / bookmarked that track. Null when nobody is
+   *  signed in, which is different from false — the button renders inert rather than unpressed. */
+  likedByMe: boolean | null;
+  favoritedByMe: boolean | null;
 }
 
 /**
@@ -208,21 +226,35 @@ const EVENT_SUMMARY_JOINS = `
      WHERE epc.event_id = e.id
        AND epc.registration_status IN ('registered', 'approved', 'waiting_approval')
        AND epc.left_at IS NULL
-  ) roster_summary ON TRUE`;
+  ) roster_summary ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(
+             NULLIF(TRIM(CONCAT_WS(' ', ow.first_name, ow.last_name)), ''),
+             ow.nickname
+           ) AS owner_name
+      FROM users ow
+     WHERE ow.id = e.owner_id
+  ) owner_summary ON TRUE`;
 
 const EVENT_SUMMARY_COLUMNS = `
   route_summary.route_id AS route_id,
   route_summary.distance_km AS route_distance_km,
   route_summary.elevation_m AS route_elevation_m,
-  COALESCE(roster_summary.participant_count, 0) AS participant_count`;
+  COALESCE(roster_summary.participant_count, 0) AS participant_count,
+  owner_summary.owner_name AS owner_name`;
 
 interface EventSummaryRow extends EventRow {
   route_id: number | null;
   route_distance_km: number | null;
   route_elevation_m: number | null;
   participant_count: number;
+  owner_name: string | null;
   /** Only selected by selectPublicEvents (its own copy_summary lateral) — absent elsewhere. */
   download_count?: number | null;
+  /** Only selected by selectPublicEvents (its like_summary / viewer_summary laterals). */
+  like_count?: number | null;
+  viewer_liked?: boolean | null;
+  viewer_favorited?: boolean | null;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -235,6 +267,13 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     routeId: row.route_id ?? null,
     // null on every list except GET /events/public, where the copy_summary lateral supplies it.
     downloads: row.download_count ?? null,
+    ownerName: row.owner_name ?? null,
+    // Same rule as downloads: only GET /events/public runs the laterals that fill these in.
+    // `?? null` and not `?? 0` — "the server did not answer" must stay distinguishable from
+    // "nobody has liked this", so a card can hold the slot rather than claim a real zero.
+    likes: row.like_count ?? null,
+    likedByMe: row.viewer_liked ?? null,
+    favoritedByMe: row.viewer_favorited ?? null,
   };
 }
 
@@ -379,6 +418,8 @@ export type PublicEventSort =
   | "duration_desc"
   | "downloads_asc"
   | "downloads_desc"
+  | "likes_asc"
+  | "likes_desc"
   | "name_asc";
 
 export interface PublicEventFilters {
@@ -406,6 +447,13 @@ export interface PublicEventFilters {
   /** One row per distinct attached route — the origin ride. The "Browse tracks" picker sends
    *  this; "Find Rides" does not. */
   uniqueTracks?: boolean;
+  /** users.id of whoever is asking, or undefined for a guest. Only ever used to answer "have
+   *  I liked / bookmarked this track" and to scope `favoritesOnly` — never to widen what is
+   *  visible, which stays `visibility = 'public'` for everyone. */
+  viewerId?: number;
+  /** Only tracks this viewer has bookmarked. Ignored without `viewerId` — a guest asking for
+   *  their favourites gets the whole list rather than a 401, so the page still loads. */
+  favoritesOnly?: boolean;
   sort: PublicEventSort;
   limit: number;
   offset: number;
@@ -415,7 +463,8 @@ function isMissingColumnError(err: unknown): err is { code: string; message?: st
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703";
 }
 
-/** Postgres 42P01 — undefined_table. `route_copies` (sql/025) may be absent on a dev DB. */
+/** Postgres 42P01 — undefined_table. `route_copies` (sql/025) and `route_likes` /
+ *  `route_favorites` (sql/036) may be absent on a dev DB. */
 function isMissingRelationError(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42P01";
 }
@@ -440,7 +489,8 @@ export async function selectPublicEvents(
   // $1  q            $2  type          $3  activityType[]   $4  level[]     $5  bucket
   // $6  areas[]      $7  minDistanceKm  $8  maxDistanceKm    $9  minClimbM   $10 maxClimbM
   // $11 durationBuckets[]  $12 country  $13 region           $14 uniqueTracks
-  // $15 limit        $16 offset
+  // $15 viewerId     $16 favoritesOnly
+  // $17 limit        $18 offset
   const where = `e.visibility = 'public'
         AND e.status NOT IN ('cancelled', 'draft')
         AND ($1::text IS NULL
@@ -478,6 +528,9 @@ export async function selectPublicEvents(
         AND ($12::text IS NULL OR e.country = $12)
         AND ($13::text IS NULL OR e.region = $13)
         AND ($14::boolean IS NOT TRUE OR route_summary.route_id IS NOT NULL)
+        AND ($16::boolean IS NOT TRUE OR ($15::bigint IS NOT NULL AND EXISTS (
+          SELECT 1 FROM route_favorites rf
+           WHERE rf.route_id = route_summary.route_id AND rf.user_id = $15::bigint)))
         AND ($14::boolean IS NOT TRUE OR NOT EXISTS (
           SELECT 1 FROM event_routes er2 JOIN events e2 ON e2.id = er2.event_id
            WHERE er2.route_id = route_summary.route_id
@@ -509,6 +562,8 @@ export async function selectPublicEvents(
     filters.country ?? null,
     filters.region ?? null,
     filters.uniqueTracks ?? null,
+    filters.viewerId ?? null,
+    filters.favoritesOnly ?? null,
   ];
 
   // The reuse ("downloads") count for each row's attached route — its own lateral, kept out of
@@ -521,6 +576,32 @@ export async function selectPublicEvents(
         FROM route_copies rc
        WHERE rc.route_id = route_summary.route_id
     ) copy_summary ON TRUE`;
+
+  // Likes on the TRACK, and whether this viewer has already liked / bookmarked it. Its own
+  // lateral for exactly the reason copy_summary has one: route_likes / route_favorites (sql/036)
+  // may be absent on a dev DB, and a 42P01 here must fall to the legacy path below rather than
+  // break every other list query that shares EVENT_SUMMARY_JOINS.
+  //
+  // The viewer flags are NULL rather than false for a guest. "Nobody is signed in" and "signed
+  // in and has not liked this" are different answers, and the card renders the button inert for
+  // the first and unpressed for the second.
+  const likeSummaryJoin = `
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS like_count
+        FROM route_likes rl
+       WHERE rl.route_id = route_summary.route_id
+    ) like_summary ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        CASE WHEN $15::bigint IS NULL THEN NULL ELSE EXISTS (
+          SELECT 1 FROM route_likes rl2
+           WHERE rl2.route_id = route_summary.route_id AND rl2.user_id = $15::bigint
+        ) END AS viewer_liked,
+        CASE WHEN $15::bigint IS NULL THEN NULL ELSE EXISTS (
+          SELECT 1 FROM route_favorites rf2
+           WHERE rf2.route_id = route_summary.route_id AND rf2.user_id = $15::bigint
+        ) END AS viewer_favorited
+    ) viewer_summary ON TRUE`;
 
   // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream. Each
   // non-date order sinks a missing metric to the bottom (NULLS LAST) and tie-breaks on
@@ -540,22 +621,28 @@ export async function selectPublicEvents(
     duration_desc: "e.duration_min DESC NULLS LAST, e.created_at DESC, e.id",
     downloads_asc: "copy_summary.download_count ASC NULLS LAST, e.created_at DESC, e.id",
     downloads_desc: "copy_summary.download_count DESC NULLS LAST, e.created_at DESC, e.id",
+    likes_asc: "like_summary.like_count ASC NULLS LAST, e.created_at DESC, e.id",
+    likes_desc: "like_summary.like_count DESC NULLS LAST, e.created_at DESC, e.id",
     name_asc: "e.name ASC, e.id",
   }[filters.sort];
 
   try {
     const rows = await query<EventSummaryRow>(
-      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}, copy_summary.download_count
+      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}, copy_summary.download_count,
+              like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
          FROM events e
          ${EVENT_SUMMARY_JOINS}
          ${copySummaryJoin}
-        WHERE ${where} ORDER BY ${orderBy} LIMIT $15 OFFSET $16`,
+         ${likeSummaryJoin}
+        WHERE ${where} ORDER BY ${orderBy} LIMIT $17 OFFSET $18`,
       [...params, filters.limit, filters.offset],
     );
     // The COUNT mirrors the SELECT's FROM: the distance / climb / dedup filters test
     // route_summary.*, so the count query needs the same lateral joins (LEFT ... ON TRUE keeps
     // one row per event, so COUNT(*) is still the number of matching events). It does NOT need
-    // copy_summary — nothing in the WHERE reads the download count.
+    // copy_summary or like_summary — nothing in the WHERE reads a count. `favoritesOnly` does
+    // read route_favorites, but through its own EXISTS subquery rather than a lateral, so the
+    // FROM stays the same here.
     const countRow = await queryOne<{ count: string }>(
       `SELECT COUNT(*)::text AS count
          FROM events e
@@ -568,9 +655,11 @@ export async function selectPublicEvents(
     if (!isMissingColumnError(err) && !isMissingRelationError(err)) throw err;
 
     // Older local schemas may lack activity_type / level / elevation_gain_m / duration_min /
-    // country / region, or the route_copies table (sql/025). Drop every filter that needs one
-    // and fall the metric / downloads sorts back to newest — a dev database without the
-    // migrations has no route metrics or reuse counts to order by anyway.
+    // country / region, the route_copies table (sql/025), or route_likes / route_favorites
+    // (sql/036). Drop every filter that needs one and fall the metric / downloads / likes sorts
+    // back to newest — a dev database without the migrations has no route metrics, reuse counts
+    // or likes to order by anyway. `favoritesOnly` is dropped with them, so it WIDENS to the
+    // whole list rather than returning nothing; the client shows the count so that is visible.
     logger.warn({ err }, "events profile columns missing; using legacy public-events query");
 
     const legacyWhere = `visibility = 'public'
@@ -796,6 +885,7 @@ export interface UpdateEventInput {
   isAccessible?: boolean;
   hasSupportVehicle?: boolean;
   expectedParticipants?: number | null;
+  terrainGrade?: number | null;
 }
 
 /**
@@ -891,38 +981,106 @@ export async function updateEventElevationGain(
 }
 
 /**
+ * The column name out of a 42703 raised by an UPDATE/INSERT target list, which Postgres words
+ * as `column "expected_participants" of relation "events" does not exist`.
+ *
+ * Quoted form only, and on purpose: that is the shape transformUpdateTargetList produces. The
+ * other 42703 wording — `column e.region does not exist`, from a SELECT list — names an alias
+ * this function must never mistake for a column, so it deliberately does not match.
+ */
+function missingColumnName(err: { message?: string }): string | null {
+  return /column "([^"]+)" of relation/i.exec(err.message ?? "")?.[1] ?? null;
+}
+
+/**
+ * One additive UPDATE over events columns a given database may not have yet, writing every
+ * column it DOES have.
+ *
+ * ⚠ WHY THE RETRY LOOP, AND WHY IT IS NOT AN OPTIMISATION
+ *   These writers set several columns in one statement, and Postgres rejects the WHOLE
+ *   statement for a single unknown column (42703). One try/catch around the batch therefore
+ *   threw away every other column with it — silently, because the guard warns and returns so
+ *   the PATCH still answers 200.
+ *
+ *   That is not hypothetical. A live database missing only events.expected_participants
+ *   (sql/028) discarded duration_min, rest_stops, is_accessible AND has_support_vehicle on
+ *   every single ride edit: the organizer set an estimated ride time, saved, got no error, and
+ *   the ride page and every card kept showing "soon". The log said
+ *   `events ride-plan columns missing` and named a column nobody had asked about.
+ *
+ *   So: drop only the column the error names, retry with the rest, and the four columns the
+ *   database has are written. Each pass either returns or strictly shrinks `columns`, so this
+ *   terminates in at most one attempt per column.
+ *
+ * Degrading rather than throwing is kept — the callers' whole reason for existing is that the
+ * core create/edit path must not depend on a new column — but `hint` now reaches the log once
+ * per genuinely absent column, naming that column, instead of once per batch naming all of them.
+ */
+async function updateEventColumns(
+  eventId: string,
+  columns: { column: string; value: unknown }[],
+  hint: string,
+): Promise<void> {
+  let remaining = columns;
+
+  while (remaining.length > 0) {
+    const sets = remaining.map((c, i) => `${c.column} = $${i + 2}`);
+    const values = [eventId, ...remaining.map((c) => c.value)];
+    try {
+      await execute(
+        `UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`,
+        values,
+      );
+      return;
+    } catch (err) {
+      if (!isMissingColumnError(err)) throw err;
+
+      const absent = missingColumnName(err);
+      const next = absent ? remaining.filter((c) => c.column !== absent) : remaining;
+      // A 42703 naming nothing we are writing — an alias, a trigger, a column in some other
+      // relation. There is nothing to drop, so stop instead of retrying the same statement.
+      if (next.length === remaining.length) {
+        logger.warn({ err, eventId, columns: remaining.map((c) => c.column) }, hint);
+        return;
+      }
+      logger.warn(
+        { err, eventId, missingColumn: absent, stillWriting: next.map((c) => c.column) },
+        hint,
+      );
+      remaining = next;
+    }
+  }
+
+  if (columns.length > 0) {
+    logger.warn({ eventId, columns: columns.map((c) => c.column) }, hint);
+  }
+}
+
+/**
  * Writes events.country / events.region on their own — same pattern as updateEventElevationGain
  * (own columns, own guarded statement), so create/edit never depends on sql/030-country.sql
  * having run. Each key: `undefined` leaves it; a string sets it; `null` clears `region` only
  * (country is never cleared — it always resolves to a real code). Builds the SET list from the
  * keys the caller passed so a partial edit never wipes the other.
+ *
+ * `country` (sql/030) and `region` (sql/032) arrived in SEPARATE migrations, so a database can
+ * genuinely have one without the other — which is exactly the case updateEventColumns exists
+ * for. Before it, a database with country but no region silently dropped BOTH on every edit
+ * that sent them, and the client always sends both.
  */
 export async function updateEventCountryRegion(
   eventId: string,
   input: { country?: string; region?: string | null },
 ): Promise<void> {
-  const sets: string[] = [];
-  const values: unknown[] = [eventId];
+  const columns: { column: string; value: unknown }[] = [];
+  if (input.country !== undefined) columns.push({ column: "country", value: input.country });
+  if (input.region !== undefined) columns.push({ column: "region", value: input.region });
 
-  if (input.country !== undefined) {
-    values.push(input.country);
-    sets.push(`country = $${values.length}`);
-  }
-  if (input.region !== undefined) {
-    values.push(input.region);
-    sets.push(`region = $${values.length}`);
-  }
-  if (sets.length === 0) return;
-
-  try {
-    await execute(`UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`, values);
-  } catch (err) {
-    if (isMissingColumnError(err)) {
-      logger.warn({ err, eventId }, "events.country/region missing — run sql/030-country.sql");
-      return;
-    }
-    throw err;
-  }
+  await updateEventColumns(
+    eventId,
+    columns,
+    "events country/region column missing — run sql/030-country.sql and sql/032-events-region.sql",
+  );
 }
 
 /**
@@ -935,6 +1093,12 @@ export async function updateEventCountryRegion(
  * Each key: `undefined` means "leave it alone"; any other value (null included, for
  * duration_min / rest_stops) is written as given. Builds the SET list from only the keys the
  * caller actually passed, so a partial PATCH never clears a field it did not mention.
+ *
+ * ⚠ THE FIVE COLUMNS COME FROM THREE DIFFERENT MIGRATIONS — sql/022 (duration_min, rest_stops,
+ * is_accessible), sql/024 (has_support_vehicle) and sql/028 (expected_participants) — so a
+ * database can have some and not others, and the client sends all five on every edit. They are
+ * written through updateEventColumns for that reason; read its header before making this one
+ * statement again.
  */
 export async function updateEventRidePlan(
   eventId: string,
@@ -944,48 +1108,37 @@ export async function updateEventRidePlan(
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
     expectedParticipants?: number | null;
+    terrainGrade?: number | null;
   },
 ): Promise<void> {
-  const sets: string[] = [];
-  const values: unknown[] = [eventId];
-
+  const columns: { column: string; value: unknown }[] = [];
   if (input.durationMin !== undefined) {
-    values.push(input.durationMin);
-    sets.push(`duration_min = $${values.length}`);
+    columns.push({ column: "duration_min", value: input.durationMin });
   }
   if (input.restStops !== undefined) {
-    values.push(input.restStops);
-    sets.push(`rest_stops = $${values.length}`);
+    columns.push({ column: "rest_stops", value: input.restStops });
   }
   if (input.isAccessible !== undefined) {
-    values.push(input.isAccessible);
-    sets.push(`is_accessible = $${values.length}`);
+    columns.push({ column: "is_accessible", value: input.isAccessible });
   }
   if (input.hasSupportVehicle !== undefined) {
-    values.push(input.hasSupportVehicle);
-    sets.push(`has_support_vehicle = $${values.length}`);
+    columns.push({ column: "has_support_vehicle", value: input.hasSupportVehicle });
   }
   if (input.expectedParticipants !== undefined) {
-    values.push(input.expectedParticipants);
-    sets.push(`expected_participants = $${values.length}`);
+    columns.push({ column: "expected_participants", value: input.expectedParticipants });
   }
-  if (sets.length === 0) return;
+  // Rides here, not in its own writer, precisely BECAUSE updateEventColumns drops only the
+  // column a 42703 names: on a database without sql/038 the other five are still written and
+  // just the grade is skipped. A separate writer would have been a second round trip for no gain.
+  if (input.terrainGrade !== undefined) {
+    columns.push({ column: "terrain_grade", value: input.terrainGrade });
+  }
 
-  try {
-    await execute(
-      `UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`,
-      values,
-    );
-  } catch (err) {
-    if (isMissingColumnError(err)) {
-      logger.warn(
-        { err },
-        "events ride-plan columns missing — run sql/022-event-ride-plan.sql, sql/024-event-support-vehicle.sql and sql/028-events-expected-participants.sql",
-      );
-      return;
-    }
-    throw err;
-  }
+  await updateEventColumns(
+    eventId,
+    columns,
+    "events ride-plan column missing — run sql/022-event-ride-plan.sql, sql/024-event-support-vehicle.sql, sql/028-events-expected-participants.sql and sql/038-event-terrain-grade.sql",
+  );
 }
 
 /**
@@ -1015,11 +1168,116 @@ export async function updateEventCopiedFrom(
     );
   } catch (err) {
     if (isMissingColumnError(err)) {
-      logger.warn({ err, eventId }, "events lineage columns missing — run sql/025-track-copy-lineage.sql");
+      logger.warn(
+        { err, eventId },
+        "events lineage columns missing — run sql/025-track-copy-lineage.sql",
+      );
       return;
     }
     throw err;
   }
+}
+
+/**
+ * Link groups — the 2-3 rides that are shared under one /share link (sql/037).
+ *
+ * WHY ONE FUNCTION AND NOT "add" / "remove"
+ *   The organizer's sheet submits the membership it is showing, so every save is a REPLACE:
+ *   some rides join the group, some previously in it drop out, and both must land together or
+ *   neither should. Splitting that into two exported calls would let a caller commit half of
+ *   it — a ride released from its old group while the new group was never stamped.
+ *
+ *   `clearIds` and `assignIds` are therefore disjoint sets decided by the service, and both
+ *   statements run inside one BEGIN/COMMIT.
+ *
+ * DISSOLVING is `assignIds: []` with the whole membership in `clearIds` — a group of one is
+ * not a group, so the service passes the last remaining ride here too.
+ *
+ * WHY THIS DEGRADES INSTEAD OF THROWING (same reason as updateEventCopiedFrom above)
+ *   events.link_group_id may not exist yet. A 42703 means only that sql/037 has not been run:
+ *   connecting rides is unavailable, every ride keeps sharing on its own, and nothing a rider
+ *   or an organizer did is lost. Returns false so the service can answer honestly rather than
+ *   reporting a save that did not happen.
+ */
+export async function applyEventLinkGroup(input: {
+  clearIds: string[];
+  assignIds: string[];
+  linkGroupId: string;
+}): Promise<boolean> {
+  const { clearIds, assignIds, linkGroupId } = input;
+  if (clearIds.length === 0 && assignIds.length === 0) return true;
+
+  try {
+    await withTransaction(async (tx) => {
+      // Released first: a ride moving from one group to another must not be stamped and then
+      // cleared by its own id appearing in both lists. The service keeps them disjoint, and
+      // this order means a bug there fails closed (ungrouped) rather than half-grouped.
+      if (clearIds.length > 0) {
+        await tx.query(
+          "UPDATE events SET link_group_id = NULL, updated_at = NOW() WHERE id = ANY($1::uuid[])",
+          [clearIds],
+        );
+      }
+      if (assignIds.length > 0) {
+        await tx.query(
+          "UPDATE events SET link_group_id = $2, updated_at = NOW() WHERE id = ANY($1::uuid[])",
+          [assignIds, linkGroupId],
+        );
+      }
+    });
+    return true;
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn(
+        { err, clearIds, assignIds, missingColumn: "link_group_id" },
+        "events.link_group_id missing — run sql/037-event-link-groups.sql",
+      );
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Every ride currently in one link group, oldest start first — the share endpoint's only read.
+ *
+ * `SELECT *`, like every other event read here, so the row carries whatever columns this
+ * database has. Ordering by starts_at is what puts the chooser's cards in the order the day
+ * actually runs; NULLS LAST is defensive only, since the service refuses to group a ride with
+ * no start time.
+ *
+ * Returns [] rather than throwing when sql/037 has not been applied: a database with no such
+ * column has no groups, which is exactly what an empty list says.
+ */
+export async function selectEventsByLinkGroup(linkGroupId: string): Promise<Event[]> {
+  try {
+    const rows = await query<EventRow>(
+      `SELECT * FROM events
+        WHERE link_group_id = $1
+        ORDER BY starts_at ASC NULLS LAST, created_at ASC`,
+      [linkGroupId],
+    );
+    return rows.map(mapEvent);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events.link_group_id missing — run sql/037-event-link-groups.sql");
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
+ * Resolve several codes in one round trip — the /share/<codeA>-<codeB> link's entry point.
+ *
+ * Deliberately NOT filtered on is_active, unlike selectActiveEventByCode: a share link is read
+ * long after the ride it names, and the chooser's own rules decide what to do with a finished
+ * or cancelled member. Filtering here would make a group silently shrink for the wrong reason.
+ */
+export async function selectEventsByCodes(codes: string[]): Promise<Event[]> {
+  if (codes.length === 0) return [];
+  const rows = await query<EventRow>("SELECT * FROM events WHERE code = ANY($1)", [codes]);
+  return rows.map(mapEvent);
 }
 
 /** Pause/resume only ever touches this one column — general edits are locked out while live. */
@@ -1184,6 +1442,30 @@ export async function selectParticipantForUser(
 }
 
 /** The viewer's own participation row, if any — drives the Register button and viewer tiering. */
+/**
+ * The rider leaves: stamp left_at on their own participant row.
+ *
+ * The exact inverse of upsertParticipant's `left_at = NULL` on re-join, which is why it sits
+ * next to it — the pair has to stay readable as one story. Scoped by user_id as well as by id
+ * so a mistaken caller cannot end someone else's participation; the service checks the
+ * capability, this makes the SQL itself unable to do the wrong thing.
+ *
+ * Deliberately does NOT touch registration_status. Leaving is not being rejected, and a rider
+ * who leaves and re-joins must come back to the status they had, not to a refusal.
+ *
+ * Idempotent: `AND left_at IS NULL` means a second call affects no row and reports false,
+ * rather than moving the timestamp forward every time someone taps twice.
+ */
+export async function markParticipantLeft(participantId: number, userId: number): Promise<boolean> {
+  const affected = await execute(
+    `UPDATE event_participants
+        SET left_at = NOW()
+      WHERE id = $1 AND user_id = $2 AND left_at IS NULL`,
+    [participantId, userId],
+  );
+  return affected > 0;
+}
+
 export async function selectParticipantByEventAndUser(
   eventId: string,
   userId: number,

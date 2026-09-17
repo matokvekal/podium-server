@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { type AuthProvider, env } from "./env.js";
 import { traceLog } from "../lib/trace-log.js";
+import { type AuthProvider, env } from "./env.js";
 
 export type { AuthProvider };
 

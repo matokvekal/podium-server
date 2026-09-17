@@ -61,6 +61,50 @@ export const eventIdParamSchema = z.object({
   eventId: z.string().uuid(),
 });
 
+/**
+ * The codes in a /share/<codeA>-<codeB> link.
+ *
+ * "-" is the separator the client writes, chosen because an event code is DDMMYYYY plus
+ * letters (sql/001-init.sql) and so can never contain one — the split is unambiguous. "," and
+ * "+" are accepted too, because this string survives being pasted into a chat, a calendar
+ * entry and a poster, and any of the three is what a person might type back by hand. Being
+ * lenient here costs nothing and turns a dead link into a working one.
+ *
+ * Capped at MAX_LINK_GROUP_RIDES (3) so a hand-written URL with fifty codes is refused before
+ * it becomes fifty database lookups. Empty segments are dropped rather than refused, so a
+ * trailing separator still resolves.
+ */
+export const shareCodesParamSchema = z.object({
+  codes: z
+    .string()
+    .min(1)
+    .max(120)
+    .transform((value) =>
+      value
+        .split(/[-,+]/)
+        .map((code) => code.trim().toUpperCase())
+        .filter((code) => code.length > 0),
+    )
+    .refine((codes) => codes.length >= 1 && codes.length <= 3, {
+      message: "A shared link covers between 1 and 3 rides",
+    })
+    .refine((codes) => codes.every((code) => code.length <= 32), {
+      message: "That does not look like a ride code",
+    }),
+});
+
+/**
+ * The rides to share alongside this one — the OTHER rides, so [] means "share this ride on its
+ * own" and dissolves the group.
+ *
+ * Capped at 2 because the anchor ride is implicit: the service's own ceiling is 3 rides in
+ * total. The service re-checks it against the set it actually assembles, since a client may
+ * legitimately include the anchor's own id here.
+ */
+export const linkGroupBodySchema = z.object({
+  eventIds: z.array(z.string().uuid()).max(2).default([]),
+});
+
 export const createEventSchema = z.object({
   name: z.string().min(1).max(255),
   type: z.enum(EVENT_TYPES).optional().default("RIDE"),
@@ -126,6 +170,15 @@ export const createEventSchema = z.object({
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
   restStops: z.number().int().min(0).max(20).nullable().optional(),
   isAccessible: z.boolean().optional(),
+  /**
+   * How technical the ground is, 1-5 (sql/038). Null clears it back to "not stated"; an absent
+   * key leaves the stored value alone, same as every other ride-plan field here.
+   *
+   * The range is the whole validation. Which disciplines OFFER a grade is a product rule the
+   * client owns, and refusing one on a road ride here would also mean an organizer who flips a
+   * ride's discipline back and forth loses what they set.
+   */
+  terrainGrade: z.number().int().min(1).max(5).nullable().optional(),
 
   // The organizer states a support / sag vehicle follows the ride — see
   // sql/024-event-support-vehicle.sql. Omitted means "not set", which the column stores as
@@ -170,6 +223,15 @@ export const updateEventSchema = z.object({
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
   restStops: z.number().int().min(0).max(20).nullable().optional(),
   isAccessible: z.boolean().optional(),
+  /**
+   * How technical the ground is, 1-5 (sql/038). Null clears it back to "not stated"; an absent
+   * key leaves the stored value alone, same as every other ride-plan field here.
+   *
+   * The range is the whole validation. Which disciplines OFFER a grade is a product rule the
+   * client owns, and refusing one on a road ride here would also mean an organizer who flips a
+   * ride's discipline back and forth loses what they set.
+   */
+  terrainGrade: z.number().int().min(1).max(5).nullable().optional(),
 
   // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
   hasSupportVehicle: z.boolean().optional(),
@@ -285,6 +347,12 @@ export const publicEventsQuerySchema = z.object({
     .string()
     .optional()
     .transform((value) => value === "1" || value === "true"),
+  /** Only tracks the caller has hearted. Same string-not-boolean handling as uniqueTracks, and
+   *  the same reason. Silently ignored for a signed-out caller — see listPublicEvents. */
+  favoritesOnly: z
+    .string()
+    .optional()
+    .transform((value) => value === "1" || value === "true"),
   /** The attached route's distance, km. */
   minDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
   maxDistanceKm: z.coerce.number().nonnegative().max(100000).optional(),
@@ -293,7 +361,8 @@ export const publicEventsQuerySchema = z.object({
   maxClimbM: z.coerce.number().nonnegative().max(100000).optional(),
   durationBuckets: csvEnum(DURATION_BUCKET_KEYS),
   /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration/
-   *  downloads orders sink a NULL metric to the bottom and tie-break on created_at DESC, id. */
+   *  downloads/likes orders sink a NULL metric to the bottom and tie-break on created_at
+   *  DESC, id. */
   sort: z
     .enum([
       "soonest",
@@ -308,6 +377,8 @@ export const publicEventsQuerySchema = z.object({
       "duration_desc",
       "downloads_asc",
       "downloads_desc",
+      "likes_asc",
+      "likes_desc",
       "name_asc",
     ])
     .optional(),

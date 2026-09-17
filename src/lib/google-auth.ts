@@ -56,7 +56,10 @@ export async function verifyGoogleIdToken(idToken: string): Promise<GoogleIdenti
     throw new InvalidGoogleTokenError("Google token payload is missing subject or email");
   }
 
-  logger.info({ subject: payload.sub, emailVerified: payload.email_verified }, "google id token verified");
+  logger.info(
+    { subject: payload.sub, emailVerified: payload.email_verified },
+    "google id token verified",
+  );
 
   return {
     subject: payload.sub,

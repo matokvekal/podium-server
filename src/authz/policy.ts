@@ -90,11 +90,7 @@ function canSeeDetails(actor: Actor, ctx: EventContext): boolean {
 
 const FINAL_STATUSES: EventStatus[] = ["finished", "cancelled"];
 
-export function canEvent(
-  actor: Actor,
-  capability: EventCapability,
-  ctx: EventContext,
-): boolean {
+export function canEvent(actor: Actor, capability: EventCapability, ctx: EventContext): boolean {
   // Nothing is visible on an event you cannot see at all.
   if (!canSeeEventExists(actor, ctx)) return false;
 
@@ -148,7 +144,9 @@ export function canEvent(
     case "event:edit":
       // Details are frozen once the ride is out on the road. The show_* flags are NOT details
       // and stay editable — see the separate carve-out in the event service.
-      return isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status) && ctx.event.status !== "live";
+      return (
+        isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status) && ctx.event.status !== "live"
+      );
 
     case "event:change_status":
     case "event:manage_participants":
@@ -156,6 +154,15 @@ export function canEvent(
       return isStaff(ctx);
 
     case "event:manage_route":
+      return isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status);
+
+    case "event:manage_link_group":
+      // Same shape as manage_route, and deliberately WITHOUT event:edit's extra `!== "live"`.
+      // Connecting a long ride to a short one on the morning of the day — one of them already
+      // live — is the most likely moment this is used, and a share link is not a ride detail:
+      // the service's own carve-out already lets sharing switches change after live while
+      // name/date/place stay frozen. Still refused once the ride is finished or cancelled,
+      // where there is nothing left to share.
       return isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status);
 
     case "event:delete":

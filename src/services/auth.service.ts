@@ -1,11 +1,19 @@
-import { trackAuditEvent } from "../db/audit/audit.service.js";
 import { env } from "../config/env.js";
+import { trackAuditEvent } from "../db/audit/audit.service.js";
 import type { AuthProviderType, Role, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { verifyGoogleIdToken } from "../lib/google-auth.js";
 import { signAccessToken } from "../lib/jwt.js";
 import { logger } from "../lib/logger.js";
 import { requestOtp, verifyOtp } from "./otp.service.js";
+import {
+  findSessionByRefreshToken,
+  revokeAllSessions,
+  revokeSession,
+  rotateSession,
+  type SessionContext,
+} from "./session.service.js";
+import { issueTokenPair, type TokenPair } from "./token.service.js";
 import {
   createUserWithIdentity,
   findIdentity,
@@ -19,24 +27,12 @@ import {
   touchLastLogin,
   updateProfile,
 } from "./user.service.js";
-import {
-  findSessionByRefreshToken,
-  revokeAllSessions,
-  revokeSession,
-  rotateSession,
-  type SessionContext,
-} from "./session.service.js";
-import { issueTokenPair, type TokenPair } from "./token.service.js";
 
 function isDuplicateIdentityError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const code = "code" in err ? (err as { code?: unknown }).code : undefined;
-  const constraint =
-    "constraint" in err ? (err as { constraint?: unknown }).constraint : undefined;
-  return (
-    code === "23505" &&
-    constraint === "auth_identities_provider_provider_user_id_key"
-  );
+  const constraint = "constraint" in err ? (err as { constraint?: unknown }).constraint : undefined;
+  return code === "23505" && constraint === "auth_identities_provider_provider_user_id_key";
 }
 
 function wait(ms: number): Promise<void> {
@@ -122,7 +118,10 @@ async function resolveUser(
     if (!recovered) throw err;
     await touchIdentityLastUsed(provider, providerUserId);
     user = await touchLastLogin(recovered.id);
-    logger.info({ userId: user.id, provider, isNewUser: false }, "user authenticated after identity race");
+    logger.info(
+      { userId: user.id, provider, isNewUser: false },
+      "user authenticated after identity race",
+    );
     return user;
   }
   logger.info({ userId: user.id, provider, isNewUser: true }, "user authenticated");

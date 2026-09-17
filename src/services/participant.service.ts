@@ -2,17 +2,12 @@
 // authorization logic anywhere yet, even though the table itself exists — every mutating
 // action here is owner-only until that lands. See plan/01-task-list.md milestone 3.
 
-import type {
-  AttendanceStatus,
-  EventParticipant,
-  ResultStatus,
-} from "../db/types.js";
-import { ApiError } from "../lib/api-error.js";
-import { logger } from "../lib/logger.js";
 import { buildActor } from "../authz/actor.js";
 import { hasRoomForParticipants } from "../authz/participant-capacity.js";
+import type { AttendanceStatus, EventParticipant, ResultStatus } from "../db/types.js";
+import { ApiError } from "../lib/api-error.js";
+import { logger } from "../lib/logger.js";
 import { countJoinedParticipants } from "../queries/event.queries.js";
-import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
 import {
   deleteParticipant as deleteParticipantRow,
   insertManualParticipant,
@@ -24,6 +19,7 @@ import {
   updateRegistrationStatus,
   updateResult,
 } from "../queries/participant.queries.js";
+import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
 
 /**
  * Owner sees everyone. Otherwise: a rider who is on the list may look — approved/registered

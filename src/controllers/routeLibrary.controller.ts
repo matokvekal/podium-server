@@ -16,8 +16,10 @@ import {
   createRoute,
   deleteRoute,
   getRouteForViewer,
+  likeRoute,
   listMyRoutes,
   listPublicRoutes,
+  setRouteFavorite,
   updateRoute,
 } from "../services/routeLibrary.service.js";
 
@@ -94,11 +96,11 @@ export function toRouteSummary(route: RouteWithOwner) {
       route.bboxMinLat === null
         ? null
         : {
-          minLat: route.bboxMinLat,
-          minLon: route.bboxMinLon,
-          maxLat: route.bboxMaxLat,
-          maxLon: route.bboxMaxLon,
-        },
+            minLat: route.bboxMinLat,
+            minLon: route.bboxMinLon,
+            maxLat: route.bboxMaxLat,
+            maxLon: route.bboxMaxLon,
+          },
     createdAt: route.createdAt,
     updatedAt: route.updatedAt,
   };
@@ -157,7 +159,10 @@ export async function listMyRoutesController(req: Request, res: Response, next: 
 export async function listPublicRoutesController(req: Request, res: Response, next: NextFunction) {
   try {
     const q = publicRoutesQuerySchema.parse(req.query);
-    traceLog("routeLibrary.controller.listPublicRoutesController", { page: q.page, pageSize: q.pageSize });
+    traceLog("routeLibrary.controller.listPublicRoutesController", {
+      page: q.page,
+      pageSize: q.pageSize,
+    });
     const { routes, total } = await listPublicRoutes({
       place: q.place,
       minDistance: q.minDistance,
@@ -170,7 +175,9 @@ export async function listPublicRoutesController(req: Request, res: Response, ne
     });
     // `total` is what lets the browser render "‹ 1 2 3 4 ›" — a page of results alone cannot
     // say whether there is a next one.
-    res.status(200).json({ data: routes.map(toRouteSummary), total, page: q.page, pageSize: q.pageSize });
+    res
+      .status(200)
+      .json({ data: routes.map(toRouteSummary), total, page: q.page, pageSize: q.pageSize });
   } catch (err) {
     next(err);
   }
@@ -189,12 +196,64 @@ export async function getRouteController(req: Request, res: Response, next: Next
   }
 }
 
+// POST /api/v1/routes/:routeId/like
+//
+// Idempotent: a second press is not an error and does not unlike. 200 with the current count
+// either way, so the card can render from the response without a re-fetch.
+export async function likeRouteController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    traceLog("routeLibrary.controller.likeRouteController", { routeId, userId: req.auth!.userId });
+    const result = await likeRoute(routeId, req.auth!.userId);
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/v1/routes/:routeId/favorite
+export async function addRouteFavoriteController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    traceLog("routeLibrary.controller.addRouteFavoriteController", {
+      routeId,
+      userId: req.auth!.userId,
+    });
+    const result = await setRouteFavorite(routeId, req.auth!.userId, true);
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/v1/routes/:routeId/favorite
+export async function removeRouteFavoriteController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    traceLog("routeLibrary.controller.removeRouteFavoriteController", {
+      routeId,
+      userId: req.auth!.userId,
+    });
+    const result = await setRouteFavorite(routeId, req.auth!.userId, false);
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // PATCH /api/v1/routes/:routeId
 export async function updateRouteController(req: Request, res: Response, next: NextFunction) {
   try {
     const { routeId } = routeIdParamSchema.parse(req.params);
     const input = updateRouteSchema.parse(req.body);
-    traceLog("routeLibrary.controller.updateRouteController", { routeId, userId: req.auth!.userId });
+    traceLog("routeLibrary.controller.updateRouteController", {
+      routeId,
+      userId: req.auth!.userId,
+    });
     const route = await updateRoute(routeId, req.auth!.userId, input);
     res.status(200).json({ data: toRouteSummary({ ...route, ownerName: null }) });
   } catch (err) {
@@ -206,7 +265,10 @@ export async function updateRouteController(req: Request, res: Response, next: N
 export async function deleteRouteController(req: Request, res: Response, next: NextFunction) {
   try {
     const { routeId } = routeIdParamSchema.parse(req.params);
-    traceLog("routeLibrary.controller.deleteRouteController", { routeId, userId: req.auth!.userId });
+    traceLog("routeLibrary.controller.deleteRouteController", {
+      routeId,
+      userId: req.auth!.userId,
+    });
     await deleteRoute(routeId, req.auth!.userId);
     res.status(204).end();
   } catch (err) {

@@ -5,15 +5,12 @@
 // is "who am I riding with". A club running one Saturday ride at two paces has one event with
 // two groups, and nobody is placed against the other group.
 
+import { buildActor } from "../authz/actor.js";
+import { assertWithinGroupLimit } from "../authz/limits.js";
 import type { EventGroup } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { logger } from "../lib/logger.js";
-import { buildActor } from "../authz/actor.js";
-import { assertWithinGroupLimit } from "../authz/limits.js";
 import { selectEventById } from "../queries/event.queries.js";
-import { assertOwner, getEventForViewer } from "./event.service.js";
-import { selectParticipantsForEvent } from "../queries/participant.queries.js";
-import { getRouteForViewer } from "./routeLibrary.service.js";
 import {
   assignParticipantsToGroup,
   countGroupsForEvent,
@@ -24,6 +21,9 @@ import {
   selectGroupsForEvent,
   updateGroup,
 } from "../queries/group.queries.js";
+import { selectParticipantsForEvent } from "../queries/participant.queries.js";
+import { assertOwner, getEventForViewer } from "./event.service.js";
+import { getRouteForViewer } from "./routeLibrary.service.js";
 
 async function assertEventOwner(eventId: string, userId: number) {
   const event = await selectEventById(eventId);
@@ -111,11 +111,7 @@ export async function editGroup(
   return updated;
 }
 
-export async function removeGroup(
-  eventId: string,
-  userId: number,
-  groupId: number,
-): Promise<void> {
+export async function removeGroup(eventId: string, userId: number, groupId: number): Promise<void> {
   await assertEventOwner(eventId, userId);
   const existing = await selectGroupById(groupId, eventId);
   if (!existing) throw new ApiError(404, "Ride group not found for this event");

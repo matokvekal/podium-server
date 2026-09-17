@@ -4,8 +4,8 @@
 // functions turn rows into the plain inputs it takes.
 
 import { queryOne } from "../db/pool.js";
-import { ApiError } from "../lib/api-error.js";
 import type { Event } from "../db/types.js";
+import { ApiError } from "../lib/api-error.js";
 import { ANONYMOUS_ENTITLEMENTS, resolveEntitlements } from "./entitlements.js";
 import type { Actor, EventContext, EventRole, GlobalRole, Participation } from "./policy.js";
 
@@ -36,7 +36,10 @@ export async function buildActor(userId: number | null): Promise<Actor> {
  * Layer 3 for one event: the role and the participation, kept separate. A person who both
  * organizes and rides has both, and merging them would make that inexpressible.
  */
-export async function buildEventContext(event: Event, userId: number | null): Promise<EventContext> {
+export async function buildEventContext(
+  event: Event,
+  userId: number | null,
+): Promise<EventContext> {
   if (userId === null) return { event, role: null, participation: "none" };
 
   const [memberRow, participantRow] = await Promise.all([

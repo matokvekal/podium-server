@@ -35,6 +35,13 @@ export const AUDIT_EVENT_TYPES = [
    * exactly as route_copies does not. This is the download/copy/reuse metric.
    */
   "ROUTE_COPIED",
+  /**
+   * A rider liked a track in Find Tracks (sql/036 route_likes). Recorded only on the insert
+   * that actually counted — pressing an already-liked button is idempotent and silent, so this
+   * is a real count of distinct (rider, track) likes and not of button presses. Favourites are
+   * deliberately NOT tracked: they are a private bookmark, not an engagement signal.
+   */
+  "ROUTE_LIKED",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

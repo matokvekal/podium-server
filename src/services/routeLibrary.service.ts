@@ -13,7 +13,6 @@ import { ApiError } from "../lib/api-error.js";
 import { computeBbox, simplifyByStride, sumClimbMeters, sumDistanceKm } from "../lib/geo.js";
 import { logger } from "../lib/logger.js";
 import { selectEventById } from "../queries/event.queries.js";
-import { assertOwner } from "./event.service.js";
 // Deleting a library route must first unlink it from any event that uses it — there are no
 // foreign keys, so nothing else clears event_routes.
 import { deleteEventRoutesForRoute } from "../queries/eventRoute.queries.js";
@@ -27,6 +26,14 @@ import {
   selectRoutesForOwner,
   updateRoute as updateRouteRow,
 } from "../queries/routeLibrary.queries.js";
+import {
+  deleteRouteFavorite,
+  insertRouteFavorite,
+  insertRouteLike,
+  selectRouteFavoritedByUser,
+  selectRouteLikeCount,
+} from "../queries/routeLike.queries.js";
+import { assertOwner } from "./event.service.js";
 
 /**
  * How many points a preview line keeps. A route card is a thumbnail a few hundred pixels
@@ -151,4 +158,60 @@ export async function deleteRoute(routeId: number, userId: number): Promise<void
   await deleteEventRoutesForRoute(routeId);
   await deleteRouteRow(routeId);
   logger.info({ routeId, userId }, "route deleted");
+}
+
+/**
+ * LIKES AND FAVOURITES ARE ON THE TRACK, NOT THE RIDE. One `routes` row is shared by every ride
+ * built on it (copying attaches the row rather than forking the geometry — see the box in
+ * eventRoute.service.ts), so a like counted here is the same number on every card that shows
+ * this track. That is the point: a rider rating a line is rating the line.
+ *
+ * Both go through getRouteForViewer first, so a rider can only like or bookmark a track they
+ * could actually open. It 404s rather than 403s an unpublished route, and that rule is not
+ * re-implemented here — reusing it is what keeps the two surfaces honest with each other.
+ */
+
+/**
+ * Liking is ONCE AND PERMANENT, and idempotent by design. Pressing the button again is not an
+ * error and does not unlike: the answer to "have I liked this" is true either way, so a retry
+ * on a bad connection — which is the normal case on a card in an infinite list — is safe.
+ *
+ * There is no unlike. The count is append-only for the same reason the reuse count is
+ * (sql/036, sql/025): it must never go down.
+ */
+export async function likeRoute(
+  routeId: number,
+  userId: number,
+): Promise<{ likes: number; likedByMe: true }> {
+  await getRouteForViewer(routeId, userId);
+  const inserted = await insertRouteLike(routeId, userId);
+  const likes = await selectRouteLikeCount(routeId);
+  if (inserted) {
+    logger.info({ routeId, userId, likes }, "route liked");
+    // Analytics only, and only for a like that actually counted. trackAuditEvent swallows its
+    // own errors, so a failure here can never cost the rider their like.
+    void trackAuditEvent({ type: "ROUTE_LIKED", userId, routeId, details: {} });
+  }
+  return { likes, likedByMe: true };
+}
+
+/**
+ * The rider's own bookmark. Unlike a like this really does toggle — nobody counts it, it is
+ * private to them, and "remove from my list" has to actually remove.
+ *
+ * Also idempotent: favouriting twice, or unfavouriting something that was never there, returns
+ * the state the caller asked for rather than failing.
+ */
+export async function setRouteFavorite(
+  routeId: number,
+  userId: number,
+  on: boolean,
+): Promise<{ favoritedByMe: boolean }> {
+  await getRouteForViewer(routeId, userId);
+  if (on) {
+    await insertRouteFavorite(routeId, userId);
+  } else {
+    await deleteRouteFavorite(routeId, userId);
+  }
+  return { favoritedByMe: await selectRouteFavoritedByUser(routeId, userId) };
 }

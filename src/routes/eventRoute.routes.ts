@@ -8,13 +8,13 @@
 // one, so the handler in this file never ran. One registration per verb now.
 
 import { Router } from "express";
-import { deduplicateClientAction } from "../middleware/clientActions.js";
-import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
 import {
   deleteEventRouteController,
   getEventRouteController,
   setEventRouteController,
 } from "../controllers/eventRoute.controller.js";
+import { deduplicateClientAction } from "../middleware/clientActions.js";
+import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
 
 // mergeParams: true so :eventId from the parent mount (event.routes.ts) is visible here.
 export const eventRouteRouter = Router({ mergeParams: true });

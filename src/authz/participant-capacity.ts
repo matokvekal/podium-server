@@ -18,10 +18,6 @@ export function joinedParticipantCount(counts: JoinedCounts): number {
 }
 
 /** True when `adding` more riders still fits under `max`. */
-export function hasRoomForParticipants(
-  counts: JoinedCounts,
-  adding: number,
-  max: number,
-): boolean {
+export function hasRoomForParticipants(counts: JoinedCounts, adding: number, max: number): boolean {
   return joinedParticipantCount(counts) + adding <= max;
 }

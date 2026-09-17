@@ -149,8 +149,14 @@ event:delete
 event:manage_participants
 event:manage_groups
 event:manage_route
+event:manage_link_group
 event:manage_members
 ```
+
+`event:manage_link_group` is the one staff capability that stays true while a ride is **live**
+(`event:edit` does not). Connecting a ride to the organizer's other rides that day changes only
+how it is SHARED, not the ride, and the morning of the ride is when it is most often needed —
+same carve-out as the sharing flags in section 6.
 
 ### HTTP refusal semantics
 
