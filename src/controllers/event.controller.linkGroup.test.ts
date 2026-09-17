@@ -25,7 +25,18 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { toEventDetail } = await import("./event.controller.js");
+const selectEventRouteSummary = vi.fn();
+vi.mock("../queries/eventRoute.queries.js", async () => {
+  const actual = await vi.importActual<typeof import("../queries/eventRoute.queries.js")>(
+    "../queries/eventRoute.queries.js",
+  );
+  return {
+    ...actual,
+    selectEventRouteSummary: (...args: unknown[]) => selectEventRouteSummary(...args),
+  };
+});
+
+const { toEventDetail, mapSharedRideCards } = await import("./event.controller.js");
 
 const OWNER_ID = 7;
 
@@ -133,5 +144,78 @@ describe("linkGroupId on the summary half of the payload", () => {
   it("reads as null on a database without sql/037, where the column is simply absent", () => {
     // mapEvent coalesces undefined -> null, but the mapper must not reintroduce undefined.
     expect(detail(ride({ linkGroupId: undefined })).linkGroupId).toBeNull();
+  });
+});
+
+describe("the chooser's cards", () => {
+  // The line travels WITH the group because GET /events/:id/route refuses a private ride to
+  // the very reader a share link was sent to — three refusals, three spinners, no maps.
+  const LINE = [
+    [32.1, 34.8],
+    [32.2, 34.9],
+  ];
+
+  function member(event: ReturnType<typeof ride>, canSeeInfo = true) {
+    return { event, canSeeInfo } as unknown as Parameters<typeof mapSharedRideCards>[0][number];
+  }
+
+  it("carries the thinned preview line, not the full route", async () => {
+    selectEventRouteSummary.mockResolvedValue({
+      previewPoints: LINE,
+      distanceKm: 120,
+      elevationM: 1200,
+    });
+
+    const [card] = await mapSharedRideCards([member(ride())]);
+
+    expect(card.route).toEqual({ points: LINE, distanceKm: 120, elevationM: 1200 });
+  });
+
+  it("⚠ gives no map to a member whose details this reader may not see", async () => {
+    selectEventRouteSummary.mockClear();
+    selectEventRouteSummary.mockResolvedValue({
+      previewPoints: LINE,
+      distanceKm: 120,
+      elevationM: 1200,
+    });
+
+    const [card] = await mapSharedRideCards([member(ride(), false)]);
+
+    expect(card.route).toBeNull();
+    // Not even read: the redaction is decided before the query, so a card that must not show
+    // a map cannot cost one either.
+    expect(selectEventRouteSummary).not.toHaveBeenCalled();
+  });
+
+  it("is null for a ride with no track, and for a track stored without a preview line", async () => {
+    selectEventRouteSummary.mockResolvedValueOnce(null);
+    expect((await mapSharedRideCards([member(ride())]))[0].route).toBeNull();
+
+    selectEventRouteSummary.mockResolvedValueOnce({
+      previewPoints: null,
+      distanceKm: 12,
+      elevationM: null,
+    });
+    expect((await mapSharedRideCards([member(ride())]))[0].route).toBeNull();
+  });
+
+  it("⚠ normalises a line stored as {lat,lng} objects into the [lat,lng] wire form", async () => {
+    // Preview lines exist in both shapes in this database. Handing the object form to a client
+    // that projects tuples draws nothing, and draws it silently.
+    selectEventRouteSummary.mockResolvedValue({
+      previewPoints: [
+        { lat: 32.1, lng: 34.8, ele: 40 },
+        { lat: 32.2, lng: 34.9, ele: 55 },
+      ],
+      distanceKm: 120,
+      elevationM: 1200,
+    });
+
+    const [card] = await mapSharedRideCards([member(ride())]);
+
+    expect(card.route?.points).toEqual([
+      [32.1, 34.8],
+      [32.2, 34.9],
+    ]);
   });
 });

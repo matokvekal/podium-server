@@ -394,6 +394,54 @@ function toSharedRideCard(member: SharedRideMember) {
   return { ...summary, startsAt: null, endsAt: null, location: null, area: null };
 }
 
+/**
+ * The line drawn on a chooser card, IN THIS PAYLOAD rather than fetched per card.
+ *
+ * ⚠ WHY IT CANNOT BE LEFT TO GET /events/:id/route
+ *   That endpoint gates on getEventForViewer, so for a PRIVATE ride — the default — it answers
+ *   404 to exactly the person this link was sent to. The chooser asked for three maps, got
+ *   three refusals, and every card sat on a spinner. Moving the read here puts it behind the
+ *   same decision that listed the ride in the first place: holding the link is what entitles
+ *   the reader to the card, map included, and `canSeeInfo` is that decision.
+ *
+ * THE THINNED LINE, NOT THE ROUTE
+ *   `previewPoints` is what the browse cards already draw (routeLibrary ROUTE_SUMMARY_COLUMNS).
+ *   The full geometry runs to ~116 KB per ride — three of those inline would hold the whole
+ *   chooser back behind a third of a megabyte to draw three thumbnails 320px wide.
+ *
+ * Shaped as the client's EventRoute (`points` / `distanceKm` / `elevationM`) so the cards keep
+ * rendering through exactly the code they already did. A ride with no track, or a track stored
+ * without a preview line, is null — a card with no map, which is a normal state here.
+ *
+ * ⚠ THE POINTS GO THROUGH toRouteSummary, NEVER STRAIGHT OUT OF THE ROW.
+ *   A stored preview line is [lat, lng] pairs for some routes and {lat, lng, ele} objects for
+ *   others (splitStoredGeometry reads both). Only the tuple form is the wire format, and
+ *   handing the object form to a client that projects `[lat, lng]` draws nothing at all —
+ *   silently, which is the worst way for a map to be wrong.
+ */
+async function toSharedRideRoute(member: SharedRideMember) {
+  if (!member.canSeeInfo) return null;
+  const route = await getEventRouteSummary(member.event.id);
+  if (!route) return null;
+  const points = toRouteSummary(route).previewPoints;
+  // Two points is the minimum that can be drawn as a line; one is a dot the reader cannot read
+  // anything from, and the client already treats a short list as no map.
+  if (points === null || points.length < 2) return null;
+  return { points, distanceKm: route.distanceKm, elevationM: route.elevationM };
+}
+
+/** Each card plus its line, in the order the service resolved them (earliest start first).
+ *
+ *  Exported as a test seam — controllers/event.controller.linkGroup.test.ts pins that a
+ *  redacted member gets no map, which is a privacy rule and not an implementation detail. */
+export async function mapSharedRideCards(members: SharedRideMember[]) {
+  const cards = [];
+  for (const member of members) {
+    cards.push({ ...toSharedRideCard(member), route: await toSharedRideRoute(member) });
+  }
+  return cards;
+}
+
 // GET /api/v1/events/share/:codes
 export async function getSharedRidesController(req: Request, res: Response, next: NextFunction) {
   try {
@@ -423,7 +471,9 @@ export async function getSharedRidesController(req: Request, res: Response, next
               ...userImageFieldsOf(owner),
             }
           : null,
-        rides: group.members.map(toSharedRideCard),
+        // Sequential rather than Promise.all: at most three members, each one query, and the
+        // pool is shared with every other request on this server.
+        rides: await mapSharedRideCards(group.members),
       },
     });
   } catch (err) {
