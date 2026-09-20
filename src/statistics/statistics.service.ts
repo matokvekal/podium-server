@@ -4,6 +4,7 @@
 
 import { logger } from "../lib/logger.js";
 import { avatarFieldsOf } from "../lib/user-images.js";
+import { getAppFlag, isAppFlagOn } from "../queries/appFlags.queries.js";
 import { selectUserById } from "../queries/user.queries.js";
 import {
   type AchievementProgress,
@@ -11,18 +12,76 @@ import {
   STAT_CATEGORIES,
 } from "./statistics.achievements.js";
 import { defaultSpeedForLevel, estimateCalories } from "./statistics.calories.js";
+import { GEM_STATS, type Gem, type GemStat, gemFor } from "./statistics.gems.js";
+import {
+  isPeriodCacheUsable,
+  isPeriodFinal,
+  isValidPeriod,
+  periodOf,
+  periodsBetween,
+  previousPeriod,
+} from "./statistics.periods.js";
 import {
   type CachedRiderStats,
+  type FactsOptions,
   type FinishedRideFacts,
   type LeaderboardCategory,
   LIFETIME_YEAR,
+  type PeriodType,
   type RiderStatsTotals,
+  selectEventFinishedAt,
   selectFinishedEventParticipantUserIds,
   selectFinishedRideFactsForUser,
+  selectFirstRidePeriod,
   selectLeaderboard,
+  selectPeriodStats,
   selectStatsCache,
+  upsertPeriodStats,
   upsertStatsCache,
 } from "./statistics.queries.js";
+
+/** app_flags key: when 'true', a ride only counts for a rider recorded as having turned up
+ *  (attendance_status present — by auto check-in or the organizer; see checkinRuleSql in
+ *  statistics.queries.ts) — but only for rides that started at/after CHECKIN_FROM_FLAG.
+ *  Default off — sql/039. */
+export const REQUIRE_CHECKIN_FLAG = "stats_require_live_checkin";
+
+/** app_flags key: ISO-8601 instant the check-in requirement starts from (sql/044). Rides that
+ *  started earlier predate auto check-in and keep counting on registration alone. */
+export const CHECKIN_FROM_FLAG = "stats_live_checkin_from";
+
+/** The rollout instant, or null for empty/unparseable — never a guessed date. */
+export function parseCheckinFrom(raw: string | null): Date | null {
+  const text = raw?.trim();
+  if (!text) return null;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * The rules every facts read uses — the live paths AND the history backfill, so the two can never
+ * count differently. Read per computation, never cached here: app_flags has its own 30s cache.
+ *
+ * The check-in requirement needs BOTH flags: 'stats_require_live_checkin' on AND a valid rollout
+ * instant. With the switch on but no usable instant it is NOT applied (and warned about): the
+ * safe direction is keeping history, never dropping it. A failed read counts as OFF (the Phase 1
+ * rule) — Statistics must never fail because of a flag.
+ */
+export async function resolveFactsOptions(): Promise<FactsOptions> {
+  try {
+    if (!(await isAppFlagOn(REQUIRE_CHECKIN_FLAG))) return { requireCheckinFrom: null };
+    const from = parseCheckinFrom(await getAppFlag(CHECKIN_FROM_FLAG));
+    if (!from) {
+      logger.warn(
+        `statistics: ${REQUIRE_CHECKIN_FLAG} is on but ${CHECKIN_FROM_FLAG} is empty/invalid; check-in requirement NOT applied`,
+      );
+    }
+    return { requireCheckinFrom: from };
+  } catch (err) {
+    logger.warn({ err }, "statistics: could not read the check-in flags; treating as off");
+    return { requireCheckinFrom: null };
+  }
+}
 
 /** A cache row older than this is treated as stale and recomputed on next read. Not the only
  *  path to freshness — see refreshStatsForFinishedEvent below, the eager one. */
@@ -157,7 +216,7 @@ export async function getRiderStatsPayload(userId: number): Promise<RiderStatsPa
   // one cheap read.
   let facts: FinishedRideFacts[] | null = null;
   async function factsOnce(): Promise<FinishedRideFacts[]> {
-    if (!facts) facts = await selectFinishedRideFactsForUser(userId);
+    if (!facts) facts = await selectFinishedRideFactsForUser(userId, await resolveFactsOptions());
     return facts;
   }
 
@@ -220,51 +279,303 @@ async function recomputeScope(
 }
 
 /**
- * Called right after an event reaches 'finished' (event.service.ts's finish hook) — the ONLY
+ * Called right after an event reaches 'finished' — by the organizer's finish (event.service.ts's
+ * changeEventStatus) or by the auto-finish sweeper (autoFinish.service.ts) — and the ONLY
  * integration point this subsystem has with the rest of the app. Takes just the eventId so the
- * finish hook needs no knowledge of Statistics' internals; looks up the roster itself.
+ * callers need no knowledge of Statistics' internals; looks up the roster itself.
  *
  * Eager, not lazy — a finished ride's roster is small enough (tens of riders, not thousands)
- * that recomputing each of them synchronously here is cheap next to everything else that same
- * hook already does (writeParticipantTracks). Never throws — a Statistics failure must never
- * undo the organizer finishing their ride; see the try/catch below and this function's own
- * caller in event.service.ts.
+ * that recomputing each of them synchronously here is cheap next to everything else those
+ * callers already do (writeParticipantTracks). Never throws — a Statistics failure must never
+ * undo a ride finishing; see the try/catch below.
  *
- * Refreshes LIFETIME and the CURRENT calendar year only — the ride that just finished cannot
- * belong to any other year, and a rider's older per-year rows are untouched by it.
+ * Refreshes LIFETIME plus the year and month the ride FINISHED in — read from events.finished_at,
+ * not from "now": an auto-finished ride is stamped with its own end time, which can be in an
+ * earlier month than the sweep that closed it. Every other period row is untouched by it.
+ *
+ * `onlyUserIds` narrows the refresh to those riders instead of the whole roster — used when one
+ * rider's numbers change after the finish (refreshStatsAfterAttendanceChange below).
  */
-export async function refreshStatsForFinishedEvent(eventId: string): Promise<void> {
-  const year = new Date().getUTCFullYear();
-  const userIds = await selectFinishedEventParticipantUserIds(eventId).catch((err: unknown) => {
-    // Logged, never thrown — see the per-user catch below for why. Caught here too: this
-    // lookup itself can fail (e.g. rider_stats_cache/034/035 not migrated yet on this
-    // database), and a silent [] would look identical to "an event with no riders" instead of
-    // the real cause.
-    logger.warn({ eventId, err }, "refreshStatsForFinishedEvent: could not list finishers");
-    return [];
-  });
+export async function refreshStatsForFinishedEvent(
+  eventId: string,
+  onlyUserIds?: readonly number[],
+): Promise<void> {
+  const finishedAt =
+    (await selectEventFinishedAt(eventId).catch((err: unknown) => {
+      logger.warn({ eventId, err }, "refreshStatsForFinishedEvent: could not read finished_at");
+      return null;
+    })) ?? new Date();
+  const year = finishedAt.getUTCFullYear();
+  const month = periodOf("month", finishedAt);
+  const userIds =
+    onlyUserIds ??
+    (await selectFinishedEventParticipantUserIds(eventId).catch((err: unknown) => {
+      // Logged, never thrown — see the per-user catch below for why. Caught here too: this
+      // lookup itself can fail (e.g. rider_stats_cache/034/035 not migrated yet on this
+      // database), and a silent [] would look identical to "an event with no riders" instead of
+      // the real cause.
+      logger.warn({ eventId, err }, "refreshStatsForFinishedEvent: could not list finishers");
+      return [];
+    }));
+  const options = await resolveFactsOptions();
   await Promise.all(
     userIds.map(async (userId) => {
       try {
         const [facts, { weightKg, country }] = await Promise.all([
-          selectFinishedRideFactsForUser(userId),
+          selectFinishedRideFactsForUser(userId, options),
           getCallerContext(userId),
         ]);
         await Promise.all([
           recomputeScope(userId, LIFETIME_YEAR, country, facts, weightKg),
           recomputeScope(userId, year, country, facts, weightKg),
+          recomputePeriod(userId, "month", month, facts, weightKg),
+          recomputePeriod(userId, "year", String(year), facts, weightKg),
         ]);
       } catch (err) {
-        // Never let a stats refresh take the finish transition down — a stale cache row
-        // self-heals on this rider's next /statistics/me read (the 24h fallback), so a failure
-        // here costs at most "the milestone card is a bit late", never a broken finish. Logged
-        // rather than silent, though: this is the ONLY signal an operator gets that Statistics
-        // migrations (sql/034/035) haven't been run yet, or that something else here is
-        // consistently broken — a silently-empty catch here would hide that forever.
+        // Never let a stats refresh take a finish down — a stale cache row self-heals on this
+        // rider's next read (the 24h fallback), so a failure here costs at most "the numbers are
+        // a bit late", never a broken finish. Logged rather than silent, though: this is the ONLY
+        // signal an operator gets that Statistics migrations (sql/034/035/039) haven't been run
+        // yet, or that something else here is consistently broken.
         logger.warn({ eventId, userId, err }, "refreshStatsForFinishedEvent: failed for one rider");
       }
     }),
   );
+}
+
+/**
+ * An organizer changed one rider's attendance on a ride that has ALREADY finished. While
+ * stats_require_live_checkin is on, attendance decides whether the ride counts for that rider, so
+ * their numbers are rebuilt now instead of waiting for the 24h fallback (a settled period would
+ * never be rebuilt at all). With the flag off attendance cannot change any total, so this does
+ * nothing. Same recompute as the finish hook, narrowed to the one rider; never throws.
+ */
+export async function refreshStatsAfterAttendanceChange(
+  eventId: string,
+  userId: number,
+): Promise<void> {
+  if (!(await resolveFactsOptions()).requireCheckinFrom) return;
+  await refreshStatsForFinishedEvent(eventId, [userId]);
+}
+
+// ---- The month / year timeline (GET /statistics/periods) --------------------------------------
+
+type StatValues = {
+  rides: number;
+  distanceKm: number;
+  climbM: number;
+  hours: number;
+  calories: number | null;
+};
+
+export interface PeriodEntry extends StatValues {
+  /** 'YYYY-MM' for a month, 'YYYY' for a year. */
+  period: string;
+  gems: Record<GemStat, Gem>;
+  /** The immediately older period's numbers, for the trend arrows. Always present (a period with
+   *  no rides is all zeros — the client shows no percentage against a zero baseline). */
+  previous: StatValues;
+  /** True once the period is over AND its numbers can never change again — the client may keep
+   *  the row forever. False for the current period and for a just-closed one still being settled. */
+  final: boolean;
+}
+
+export interface PeriodTimelinePayload {
+  periodType: PeriodType;
+  generatedAt: string;
+  /** Lets the client show the "set your weight to see calories" prompt without a second call. */
+  weightKg: number | null;
+  /** Newest first, contiguous (empty months included) from the rider's first ride — or from the
+   *  requested `from` — up to the current period. */
+  periods: PeriodEntry[];
+}
+
+function toStatValues(totals: RiderStatsTotals): StatValues {
+  return {
+    rides: totals.ridesCount,
+    distanceKm: totals.totalKm,
+    climbM: totals.totalClimbM,
+    hours: totals.totalHours,
+    calories: totals.totalCalories,
+  };
+}
+
+function gemsFor(periodType: PeriodType, values: StatValues): Record<GemStat, Gem> {
+  const byStat: Record<GemStat, number | null> = {
+    rides: values.rides,
+    distance: values.distanceKm,
+    climb: values.climbM,
+    hours: values.hours,
+    calories: values.calories,
+  };
+  return Object.fromEntries(
+    GEM_STATS.map((stat) => [stat, gemFor(periodType, stat, byStat[stat])]),
+  ) as Record<GemStat, Gem>;
+}
+
+function factsInPeriod(
+  facts: readonly FinishedRideFacts[],
+  type: PeriodType,
+  period: string,
+): FinishedRideFacts[] {
+  return facts.filter((f) =>
+    type === "year"
+      ? String(f.year) === period
+      : `${String(f.year).padStart(4, "0")}-${String(f.month).padStart(2, "0")}` === period,
+  );
+}
+
+async function recomputePeriod(
+  userId: number,
+  type: PeriodType,
+  period: string,
+  facts: readonly FinishedRideFacts[],
+  weightKg: number | null,
+): Promise<RiderStatsTotals> {
+  const totals = computeTotals(factsInPeriod(facts, type, period), weightKg);
+  await upsertPeriodStats(userId, type, period, totals);
+  return totals;
+}
+
+export interface RiderHistory {
+  /** 'YYYY-MM' of the earliest counted ride. */
+  firstPeriod: string;
+  /** What rider_stats_cache holds for LIFETIME_YEAR. */
+  lifetime: RiderStatsTotals;
+  /** rider_stats_cache year scopes — only years with a ride, exactly as the live path writes. */
+  cacheYears: { year: number; totals: RiderStatsTotals }[];
+  /** rider_period_stats month rows: contiguous, oldest first, first ride's month through `now`
+   *  (empty months included — the timeline shows them). */
+  months: { period: string; totals: RiderStatsTotals }[];
+  /** rider_period_stats year rows: contiguous, oldest first, likewise. */
+  years: { period: string; totals: RiderStatsTotals }[];
+  /** Rides that fall in no month row (finished_at in the future, or older than the timeline's
+   *  MAX_TIMELINE_PERIODS window). Still in `lifetime`; never silently lost from the report. */
+  ridesOutsideMonthRows: number;
+}
+
+/**
+ * Every row the history backfill writes for one rider — computed from their ride facts with the
+ * SAME computeTotals / factsInPeriod the live finish hook and timeline use, so a backfilled month
+ * can never differ from what a live recompute of that month would produce. Pure: no I/O.
+ * Null when the rider has no counted ride at all.
+ */
+export function buildRiderHistory(
+  facts: readonly FinishedRideFacts[],
+  weightKg: number | null,
+  now: Date = new Date(),
+): RiderHistory | null {
+  if (facts.length === 0) return null;
+
+  const monthKey = (f: FinishedRideFacts) =>
+    `${String(f.year).padStart(4, "0")}-${String(f.month).padStart(2, "0")}`;
+  const firstPeriod = facts.map(monthKey).sort()[0];
+
+  const monthPeriods = periodsBetween("month", firstPeriod, periodOf("month", now)).reverse();
+  const yearPeriods = periodsBetween(
+    "year",
+    firstPeriod.slice(0, 4),
+    periodOf("year", now),
+  ).reverse();
+  const inMonthRows = new Set(monthPeriods);
+  const cacheYears = [...new Set(facts.map((f) => f.year))].sort((a, b) => a - b);
+
+  return {
+    firstPeriod,
+    lifetime: computeTotals(facts, weightKg),
+    cacheYears: cacheYears.map((year) => ({
+      year,
+      totals: computeTotals(
+        facts.filter((f) => f.year === year),
+        weightKg,
+      ),
+    })),
+    months: monthPeriods.map((period) => ({
+      period,
+      totals: computeTotals(factsInPeriod(facts, "month", period), weightKg),
+    })),
+    years: yearPeriods.map((period) => ({
+      period,
+      totals: computeTotals(factsInPeriod(facts, "year", period), weightKg),
+    })),
+    ridesOutsideMonthRows: facts.filter((f) => !inMonthRows.has(monthKey(f))).length,
+  };
+}
+
+/**
+ * The rider's month-by-month (or year-by-year) results.
+ *
+ *  - the CURRENT period is a real query, cached 24h (and rebuilt the moment a ride finishes)
+ *  - a period that has ended is computed once, then final — never queried again
+ *
+ * `from` lets a client that already holds the settled history ask only for what it lacks (the
+ * oldest period it is not sure of, through now). Without it, the whole history is returned,
+ * starting at the rider's first ride. Raw facts are only read when some requested period is
+ * missing or unusable in the cache.
+ */
+export async function getPeriodTimeline(
+  userId: number,
+  periodType: PeriodType,
+  from?: string,
+): Promise<PeriodTimelinePayload> {
+  const now = new Date();
+  const current = periodOf(periodType, now);
+  const [{ weightKg }, options] = await Promise.all([
+    getCallerContext(userId),
+    resolveFactsOptions(),
+  ]);
+
+  let oldest: string;
+  if (from && isValidPeriod(periodType, from)) {
+    oldest = from;
+  } else {
+    const first = await selectFirstRidePeriod(userId, options);
+    oldest = first ? (periodType === "year" ? first.slice(0, 4) : first) : current;
+  }
+  if (oldest > current) oldest = current;
+
+  // One extra period BELOW the oldest shown: it is only there to be the trend baseline.
+  const wanted = periodsBetween(periodType, previousPeriod(periodType, oldest), current);
+  const cached = await selectPeriodStats(userId, periodType, wanted);
+
+  const totalsByPeriod = new Map<string, { totals: RiderStatsTotals; computedAt: Date }>();
+  const missing: string[] = [];
+  for (const period of wanted) {
+    const hit = cached.get(period);
+    if (hit && isPeriodCacheUsable(periodType, period, hit.computedAt, now)) {
+      totalsByPeriod.set(period, { totals: hit, computedAt: hit.computedAt });
+    } else {
+      missing.push(period);
+    }
+  }
+
+  if (missing.length > 0) {
+    const facts = await selectFinishedRideFactsForUser(userId, options);
+    await Promise.all(
+      missing.map(async (period) => {
+        const totals = await recomputePeriod(userId, periodType, period, facts, weightKg);
+        totalsByPeriod.set(period, { totals, computedAt: new Date() });
+      }),
+    );
+  }
+
+  const periods: PeriodEntry[] = [];
+  for (let i = 0; i < wanted.length - 1; i += 1) {
+    const period = wanted[i];
+    const entry = totalsByPeriod.get(period);
+    const before = totalsByPeriod.get(wanted[i + 1]);
+    if (!entry || !before) continue;
+    const values = toStatValues(entry.totals);
+    periods.push({
+      period,
+      ...values,
+      gems: gemsFor(periodType, values),
+      previous: toStatValues(before.totals),
+      final: isPeriodFinal(periodType, period, entry.computedAt, now),
+    });
+  }
+
+  return { periodType, generatedAt: now.toISOString(), weightKg, periods };
 }
 
 export interface LeaderboardPayload {
@@ -317,7 +628,7 @@ export async function getLeaderboard(
 
   const cached = await selectStatsCache(callerUserId, year);
   if (!isFresh(cached)) {
-    const facts = await selectFinishedRideFactsForUser(callerUserId);
+    const facts = await selectFinishedRideFactsForUser(callerUserId, await resolveFactsOptions());
     await recomputeScope(callerUserId, year, callerCountry, facts, weightKg);
   }
 

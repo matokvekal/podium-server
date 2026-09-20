@@ -7,6 +7,7 @@ import { Router } from "express";
 import {
   addParticipantController,
   approveParticipantController,
+  autoCheckInController,
   bulkAddParticipantsController,
   deleteParticipantController,
   listParticipantsController,
@@ -42,6 +43,13 @@ participantRouter.post(
   deduplicateClientAction,
   bulkAddParticipantsController,
 );
+
+// POST /api/v1/events/:eventId/participants/me/check-in
+// The rider's own automatic arrival (sql/040). Not behind deduplicateClientAction on purpose:
+// it depends on WHERE the rider is and WHEN it is asked, so replaying a queued copy an hour
+// later would be answering a question nobody is asking any more. It is idempotent by itself —
+// the write only fires on a rider nobody has marked.
+participantRouter.post("/me/check-in", requireAuth, autoCheckInController);
 
 // PATCH /api/v1/events/:eventId/participants/:participantId
 participantRouter.patch(

@@ -103,9 +103,18 @@ function toEventSummary(event: Event | EventListItem) {
     // client's (mtb S1-S5, gravel G1-G5); the number is all the API commits to.
     // null = not stated, and a card shows a dash rather than inventing a 1.
     terrainGrade: event.terrainGrade ?? null,
+    // How hard the TRACK is, when it is pleasant, and how shaded (sql/041). On the SUMMARY so
+    // Find Tracks cards and filters need no detail call. null = not stated (every road ride).
+    routeDifficulty: event.routeDifficulty ?? null,
+    season: event.season ?? null,
+    shade: event.shade ?? null,
     // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
     // wants to see which rides have a vehicle behind them without opening each one.
     hasSupportVehicle: event.hasSupportVehicle ?? false,
+    // On the SUMMARY because the app decides from My Rides — before any detail is opened —
+    // whether it is worth asking for a GPS fix when a ride is about to start (sql/040). The
+    // radius and time window are server config and are deliberately not sent.
+    autoCheckIn: event.autoCheckIn ?? false,
     // The organizer's expected head-count, or null when they left it blank. On the SUMMARY so a
     // card can show "12 / 40" without a detail call. NOT the capacity — the plan's
     // participants-per-event ceiling is never serialised to a viewer.
@@ -118,8 +127,7 @@ function toEventSummary(event: Event | EventListItem) {
     elevationGain: summary.elevationGain ?? null,
     participantCount: summary.participantCount ?? null,
     // How many rides have been built on the attached route — only GET /events/public fills
-    // this in (its copy_summary lateral); null everywhere else, and the card falls back to
-    // its per-card ?preview=1 fetch.
+    // this in (its copy_summary lateral); null everywhere else, and a card then shows a dash.
     downloads: summary.downloads ?? null,
     // The ATTACHED TRACK's id. On the summary because likes and favourites belong to the
     // track, not the ride: a card has to know which routes.id to POST to, and which rides
@@ -140,6 +148,14 @@ function toEventSummary(event: Event | EventListItem) {
     likes: summary.likes ?? null,
     likedByMe: summary.likedByMe ?? null,
     favoritedByMe: summary.favoritedByMe ?? null,
+    // The attached route's 60-point card preview { points, elevations? } (routes.thumb_points,
+    // sql/046): what a Find Tracks / My Rides card draws its map and climb profile from, so the
+    // card never makes a geometry request of its own. Present (possibly null = no drawable
+    // route) on every GET /events/public row and on GET /events rows only when the caller sent
+    // ?includePreview=true; absent otherwise, and on the detail payload, which carries `route`
+    // instead. The detailed line stays GET /events/:id/route and the original file
+    // GET /routes/:id/gpx.
+    ...("preview" in summary ? { preview: summary.preview ?? null } : {}),
   };
 }
 
@@ -284,6 +300,8 @@ export function toEventDetail(
           id: myParticipant.id,
           registrationStatus: myParticipant.registrationStatus,
           attendanceStatus: myParticipant.attendanceStatus,
+          // 'auto' | 'manual' | null — lets a rider's own screen say how they were checked in.
+          attendanceSource: myParticipant.attendanceSource ?? null,
         }
       : null,
     /**
@@ -649,9 +667,13 @@ export async function createEventController(req: Request, res: Response, next: N
 // GET /api/v1/events
 export async function listEventsController(req: Request, res: Response, next: NextFunction) {
   try {
-    const { filter } = listEventsQuerySchema.parse(req.query);
-    traceLog("event.controller.listEventsController", { userId: req.auth!.userId, filter });
-    const events = await listMyEvents(req.auth!.userId, filter);
+    const { filter, includePreview } = listEventsQuerySchema.parse(req.query);
+    traceLog("event.controller.listEventsController", {
+      userId: req.auth!.userId,
+      filter,
+      includePreview,
+    });
+    const events = await listMyEvents(req.auth!.userId, filter, { includePreview });
     res.status(200).json({ data: events.map(toEventSummary) });
   } catch (err) {
     next(err);

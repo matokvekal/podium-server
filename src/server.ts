@@ -3,6 +3,7 @@ import { env } from "./config/env.js";
 import { closePool } from "./db/pool.js";
 import { logger } from "./lib/logger.js";
 import { ensureUploadRoot } from "./lib/user-image-storage.js";
+import { startAutoFinishSweeper } from "./services/autoFinish.service.js";
 
 const app = createApp();
 
@@ -23,6 +24,10 @@ const server = app.listen(env.PORT, () => {
   logger.info(`El nino server listening on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
+// Close rides nobody finished, one day after they ended (services/autoFinish.service.ts). Started
+// here, not in createApp(), so tests that build the app never get a background timer.
+const stopAutoFinishSweeper = startAutoFinishSweeper();
+
 server.on("error", (err: NodeJS.ErrnoException) => {
   // console, not logger: this is a startup fatal, and pino's file stream is async — a
   // process.exit() here can discard a buffered log line. Matches config/env.ts.
@@ -41,6 +46,7 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 async function shutdown(signal: string) {
   logger.info(`Received ${signal}, shutting down`);
+  stopAutoFinishSweeper();
   server.close(async (err) => {
     if (err) {
       logger.error({ err }, "Error while closing HTTP server");

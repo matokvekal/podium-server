@@ -27,10 +27,16 @@ export interface Region {
 export const REGION_KEYS = [
   "golan",
   "north",
+  "upper_galilee",
+  "lower_galilee",
+  "western_galilee",
+  "carmel",
+  "gilboa_valleys",
   "sharon",
   "center",
   "jerusalem",
   "shfela",
+  "south_hebron",
   "jordan_valley",
   "dead_sea",
   "negev",
@@ -43,6 +49,40 @@ export type RegionKey = (typeof REGION_KEYS)[number];
 export const IL_REGIONS: Region[] = [
   { key: "golan", he: "גולן", en: "Golan", bbox: [32.85, 35.6, 33.35, 35.95] },
   { key: "north", he: "צפון", en: "North", bbox: [32.5, 34.9, 33.35, 35.68] },
+  // Finer regions nested inside "north" (and, for the Carmel, its edge with the Sharon). Added for
+  // the curated MTB library, whose tracks are labelled at this grain. classifyRegion returns the
+  // SMALLEST box, so a start point in one of them wins over the broad band — same as Eilat in the
+  // Arava. The boxes are as rough as every other one here: they only pre-select the dropdown.
+  {
+    key: "upper_galilee",
+    he: "גליל עליון",
+    en: "Upper Galilee",
+    bbox: [32.95, 35.2, 33.3, 35.65],
+  },
+  {
+    key: "lower_galilee",
+    he: "גליל תחתון",
+    en: "Lower Galilee",
+    bbox: [32.65, 35.0, 32.95, 35.6],
+  },
+  {
+    key: "western_galilee",
+    he: "גליל מערבי",
+    en: "Western Galilee",
+    bbox: [32.8, 34.95, 33.1, 35.25],
+  },
+  {
+    key: "carmel",
+    he: "כרמל / רמות מנשה",
+    en: "Carmel & Menashe Heights",
+    bbox: [32.45, 34.9, 32.8, 35.15],
+  },
+  {
+    key: "gilboa_valleys",
+    he: "גלבוע ועמקים",
+    en: "Gilboa & Valleys",
+    bbox: [32.35, 35.1, 32.75, 35.6],
+  },
   { key: "sharon", he: "השרון", en: "Sharon", bbox: [32.05, 34.8, 32.55, 35.05] },
   { key: "center", he: "מרכז", en: "Center", bbox: [31.88, 34.7, 32.1, 35.02] },
   {
@@ -52,6 +92,12 @@ export const IL_REGIONS: Region[] = [
     bbox: [31.65, 34.95, 31.92, 35.35],
   },
   { key: "shfela", he: "שפלה", en: "Judean Lowlands", bbox: [31.45, 34.55, 31.95, 34.98] },
+  {
+    key: "south_hebron",
+    he: "דרום הר חברון",
+    en: "South Hebron Hills",
+    bbox: [31.2, 34.85, 31.5, 35.2],
+  },
   {
     key: "jordan_valley",
     he: "בקעת הירדן",

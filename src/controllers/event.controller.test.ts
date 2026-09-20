@@ -100,3 +100,9 @@ describe("toEventDetail — the start-list ceiling is the owner's alone", () => 
     expect(detail.isFull).toBe(false);
   });
 });
+
+describe("toEventDetail — the card preview stays on list rows", () => {
+  it("does not add `preview` to the detail payload, which carries `route` instead", () => {
+    expect(detailFor(OWNER_ID)).not.toHaveProperty("preview");
+  });
+});

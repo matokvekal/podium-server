@@ -12,7 +12,13 @@ import type {
   RegistrationStatus,
   ResultStatus,
 } from "../db/types.js";
-import { mapParticipant, PARTICIPANT_DISPLAY_COLUMNS } from "./event.queries.js";
+import type { LatLng } from "../lib/geo.js";
+import { logger } from "../lib/logger.js";
+import {
+  isMissingColumnError,
+  mapParticipant,
+  PARTICIPANT_DISPLAY_COLUMNS,
+} from "./event.queries.js";
 
 interface EventParticipantRow {
   id: number;
@@ -30,6 +36,7 @@ interface EventParticipantRow {
   group_id: number | null;
   registration_status: RegistrationStatus;
   attendance_status: EventParticipant["attendanceStatus"];
+  attendance_source?: EventParticipant["attendanceSource"];
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
@@ -192,24 +199,131 @@ export async function updateParticipant(
  * Attendance and result are separate statements from each other and from registration —
  * three axes, three writes. Both re-join `users` on the way out for the same reason
  * updateParticipant does: the client swaps the row it gets back straight into its list.
+ *
+ * This is the ORGANIZER's write, so it stamps attendance_source = 'manual' — for every status,
+ * `unknown` included. That last part is deliberate: un-ticking a rider an automatic check-in had
+ * marked must stick, and the automatic write only ever fires on `unknown` + a NULL source
+ * (markArrivedAutomatically), so a 'manual' stamp on an `unknown` row is what keeps the app from
+ * ticking that rider straight back.
+ *
+ * ⚠ Retries WITHOUT the source when sql/040 has not run. Ticking riders off at the start is the
+ * one thing an organizer does on the morning of a ride, and it must not start failing on a
+ * database that has not reached this migration yet.
  */
 export async function updateAttendanceStatus(
   participantId: number,
   eventId: string,
   status: AttendanceStatus,
 ): Promise<EventParticipant | null> {
+  const write = (setSource: boolean) =>
+    query<EventParticipantRow>(
+      `WITH updated AS (
+         UPDATE event_participants
+            SET attendance_status = $3${setSource ? ", attendance_source = 'manual'" : ""}
+          WHERE id = $1 AND event_id = $2
+          RETURNING *
+       )
+       SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
+         FROM updated ep
+         LEFT JOIN users u ON u.id = ep.user_id`,
+      [participantId, eventId, status],
+    );
+
+  let rows: EventParticipantRow[];
+  try {
+    rows = await write(true);
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    logger.warn(
+      { err, eventId, participantId },
+      "event_participants.attendance_source missing — run sql/040-auto-check-in.sql",
+    );
+    rows = await write(false);
+  }
+  return rows[0] ? mapParticipant(rows[0]) : null;
+}
+
+/**
+ * A rider's own row on an event, or null. Matched on (event, user) rather than by row id because
+ * the caller only knows who they are. `left_at` is NOT filtered here — the service decides what a
+ * rider who has left is owed — but the ORDER puts the row that counts first, for the legacy
+ * databases that can carry two rows for one (event, user) pair (see updateRegistrationStatus).
+ */
+export async function selectParticipantForEventUser(
+  eventId: string,
+  userId: number,
+): Promise<EventParticipant | null> {
+  const row = await queryOne<EventParticipantRow>(
+    `SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
+       FROM event_participants ep
+       LEFT JOIN users u ON u.id = ep.user_id
+      WHERE ep.event_id = $1 AND ep.user_id = $2
+      ORDER BY
+        CASE WHEN ep.left_at IS NULL THEN 0 ELSE 1 END,
+        CASE ep.registration_status
+          WHEN 'approved' THEN 1
+          WHEN 'registered' THEN 2
+          WHEN 'waiting_approval' THEN 3
+          ELSE 4
+        END,
+        ep.joined_at DESC,
+        ep.id DESC
+      LIMIT 1`,
+    [eventId, userId],
+  );
+  return row ? mapParticipant(row) : null;
+}
+
+/**
+ * The automatic arrival write. Fires only on a rider nobody has written attendance for —
+ * `unknown` AND a NULL source — so it can never overwrite an organizer's decision (manual ticks
+ * and un-ticks both leave a non-NULL source) and a second call is a no-op.
+ *
+ * Returns the updated row when THIS call marked the rider, and null when the guard held (already
+ * arrived, already decided by the organizer). The caller re-reads to tell those two apart.
+ *
+ * No missing-column fallback, unlike updateAttendanceStatus: this only runs for a ride whose
+ * events.auto_check_in is true, and that column comes from the same migration.
+ */
+export async function markArrivedAutomatically(
+  participantId: number,
+  eventId: string,
+): Promise<EventParticipant | null> {
   const rows = await query<EventParticipantRow>(
     `WITH updated AS (
-       UPDATE event_participants SET attendance_status = $3
+       UPDATE event_participants
+          SET attendance_status = 'present', attendance_source = 'auto'
         WHERE id = $1 AND event_id = $2
+          AND attendance_status = 'unknown'
+          AND attendance_source IS NULL
         RETURNING *
      )
      SELECT ep.*, ${PARTICIPANT_DISPLAY_COLUMNS}
        FROM updated ep
        LEFT JOIN users u ON u.id = ep.user_id`,
-    [participantId, eventId, status],
+    [participantId, eventId],
   );
   return rows[0] ? mapParticipant(rows[0]) : null;
+}
+
+/**
+ * Where the ride starts: the first point of its attached route, or null when it has none.
+ *
+ * `routes.start_lat/start_lon` is derived once at upload (routeLibrary.service) — no geometry is
+ * read here. Newest attachment wins, the same tie-break every other event_routes read uses.
+ */
+export async function selectEventStartPoint(eventId: string): Promise<LatLng | null> {
+  const row = await queryOne<{ start_lat: number | null; start_lon: number | null }>(
+    `SELECT r.start_lat, r.start_lon
+       FROM event_routes er
+       JOIN routes r ON r.id = er.route_id
+      WHERE er.event_id = $1
+      ORDER BY er.created_at DESC
+      LIMIT 1`,
+    [eventId],
+  );
+  if (!row || row.start_lat === null || row.start_lon === null) return null;
+  return { lat: Number(row.start_lat), lng: Number(row.start_lon) };
 }
 
 /**

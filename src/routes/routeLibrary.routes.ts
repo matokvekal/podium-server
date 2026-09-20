@@ -9,6 +9,7 @@ import {
   createRouteController,
   deleteRouteController,
   getRouteController,
+  getRouteGpxController,
   likeRouteController,
   listMyRoutesController,
   listPublicRoutesController,
@@ -53,6 +54,11 @@ routeLibraryRouter.get("/", requireAuth, listMyRoutesController);
 routeLibraryRouter.post("/:routeId/like", requireAuth, likeRouteController);
 routeLibraryRouter.post("/:routeId/favorite", requireAuth, addRouteFavoriteController);
 routeLibraryRouter.delete("/:routeId/favorite", requireAuth, removeRouteFavoriteController);
+
+// GET /api/v1/routes/:routeId/gpx
+// The original file, unmodified. Optional auth, same visibility as the route (published, or its
+// owner). Two segments, so it cannot be swallowed by "/:routeId" below.
+routeLibraryRouter.get("/:routeId/gpx", optionalAuth, getRouteGpxController);
 
 // GET /api/v1/routes/:routeId
 // Optional auth: a published route opens for a guest; getRouteForViewer still 404s an

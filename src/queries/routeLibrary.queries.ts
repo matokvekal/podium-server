@@ -14,6 +14,7 @@
 
 import { execute, query, queryOne } from "../db/pool.js";
 import type { Route, RouteMarker, RouteSource, RouteType, TrackPoint } from "../db/types.js";
+import { buildRoutePreview, isMissingThumbColumn, toStoredThumb } from "../lib/route-thumb.js";
 
 export interface RouteRow {
   id: number;
@@ -118,39 +119,55 @@ export interface InsertRouteInput {
 }
 
 export async function insertRoute(input: InsertRouteInput): Promise<Route> {
-  const row = await queryOne<RouteRow>(
-    `INSERT INTO routes
+  const params = [
+    input.ownerId,
+    input.name,
+    input.routeType,
+    input.source,
+    input.distanceKm,
+    input.elevationM,
+    JSON.stringify(input.trackPoints),
+    input.markers === null ? null : JSON.stringify(input.markers),
+    JSON.stringify(input.previewPoints),
+    input.pointCount,
+    input.isPublic,
+    input.placeName,
+    input.startLat,
+    input.startLon,
+    input.endLat,
+    input.endLon,
+    input.bboxMinLat,
+    input.bboxMinLon,
+    input.bboxMaxLat,
+    input.bboxMaxLon,
+  ];
+  // The 60-point card preview (sql/046), derived from the line being stored.
+  const thumb = toStoredThumb(
+    buildRoutePreview(
+      input.trackPoints,
+      input.trackPoints.map((p) => p.ele ?? null),
+    ),
+  );
+  const insertSql = (withThumb: boolean) => `INSERT INTO routes
         (owner_id, name, route_type, source, distance_km, elevation_m,
          track_points, markers, preview_points, point_count, is_public, place_name,
          start_lat, start_lon, end_lat, end_lon,
-         bbox_min_lat, bbox_min_lon, bbox_max_lat, bbox_max_lon)
+         bbox_min_lat, bbox_min_lon, bbox_max_lat, bbox_max_lon${withThumb ? ", thumb_points" : ""})
       VALUES ($1, $2, $3, $4, $5, $6,
               $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12,
-              $13, $14, $15, $16, $17, $18, $19, $20)
-      RETURNING *`,
-    [
-      input.ownerId,
-      input.name,
-      input.routeType,
-      input.source,
-      input.distanceKm,
-      input.elevationM,
-      JSON.stringify(input.trackPoints),
-      input.markers === null ? null : JSON.stringify(input.markers),
-      JSON.stringify(input.previewPoints),
-      input.pointCount,
-      input.isPublic,
-      input.placeName,
-      input.startLat,
-      input.startLon,
-      input.endLat,
-      input.endLon,
-      input.bboxMinLat,
-      input.bboxMinLon,
-      input.bboxMaxLat,
-      input.bboxMaxLon,
-    ],
-  );
+              $13, $14, $15, $16, $17, $18, $19, $20${withThumb ? ", $21::jsonb" : ""})
+      RETURNING *`;
+  let row: RouteRow | null;
+  try {
+    row = await queryOne<RouteRow>(insertSql(true), [
+      ...params,
+      thumb ? JSON.stringify(thumb) : null,
+    ]);
+  } catch (err) {
+    // sql/046 not run yet: save the route without its preview rather than failing the save.
+    if (!isMissingThumbColumn(err)) throw err;
+    row = await queryOne<RouteRow>(insertSql(false), params);
+  }
   if (!row) throw new Error("insertRoute returned no row");
   return mapRoute(row);
 }

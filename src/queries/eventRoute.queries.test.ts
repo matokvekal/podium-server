@@ -354,3 +354,54 @@ describe("publishEventRouteIfOwned", () => {
     expect(await publishEventRouteIfOwned("e1", 999)).toBe(0);
   });
 });
+
+describe("insertDrawnRouteRow — the card preview (sql/046)", () => {
+  const line: [number, number][] = Array.from({ length: 400 }, (_, i) => [
+    32 + i * 0.0001,
+    35 + Math.sin(i / 20) * 0.01,
+  ]);
+  const stored = { id: 9, track_points: line, distance_km: 5, elevation_m: null };
+
+  it("writes a thumb_points of at most 60 points alongside the full line", async () => {
+    queryOne.mockResolvedValue(stored);
+    await insertDrawnRouteRow(1, { points: line, elevations: null }, 5, null, true);
+
+    const [sql, params] = queryOne.mock.calls[0];
+    expect(sql).toContain("thumb_points");
+    const thumb = JSON.parse(params[7] as string);
+    expect(thumb.p.length).toBeLessThanOrEqual(60);
+    expect(thumb.p.length).toBeGreaterThan(2);
+    expect(thumb).not.toHaveProperty("e");
+    // The full line is stored untouched.
+    expect(JSON.parse(params[3] as string)).toHaveLength(400);
+  });
+
+  it("carries the elevation series into the preview", async () => {
+    queryOne.mockResolvedValue(stored);
+    const elevations = line.map((_, i) => 100 + i);
+    await insertDrawnRouteRow(1, { points: line, elevations }, 5, 300, true);
+
+    const thumb = JSON.parse(queryOne.mock.calls[0][1][7] as string);
+    expect(thumb.e).toHaveLength(thumb.p.length);
+  });
+
+  it("still saves the route on a database that has not run sql/046", async () => {
+    const missing = Object.assign(new Error("column thumb_points of relation routes does not exist"), {
+      code: "42703",
+    });
+    queryOne.mockRejectedValueOnce(missing).mockResolvedValueOnce(stored);
+
+    const saved = await insertDrawnRouteRow(1, { points: line, elevations: null }, 5, null, true);
+
+    expect(saved.id).toBe(9);
+    expect(queryOne).toHaveBeenCalledTimes(2);
+    expect(queryOne.mock.calls[1][0]).not.toContain("thumb_points");
+  });
+
+  it("does not swallow an unrelated insert failure", async () => {
+    queryOne.mockRejectedValue(Object.assign(new Error("disk full"), { code: "53100" }));
+    await expect(
+      insertDrawnRouteRow(1, { points: line, elevations: null }, 5, null, true),
+    ).rejects.toThrow("disk full");
+  });
+});

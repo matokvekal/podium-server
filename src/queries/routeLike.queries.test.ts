@@ -68,10 +68,30 @@ describe("selectRouteLikeCount", () => {
     const count = await selectRouteLikeCount(42);
 
     const [sql, params] = queryOne.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/SELECT COUNT\(\*\) AS count FROM route_likes WHERE route_id = \$1/i);
+    // Still counted from the rows; the imported starting count (sql/043) is ADDED to it.
+    expect(sql).toMatch(
+      /SELECT COUNT\(\*\)[\s\S]*imported_like_count[\s\S]*FROM route_likes WHERE route_id = \$1/i,
+    );
     expect(params).toEqual([42]);
     // Postgres returns COUNT as a string; the caller must get a number.
     expect(count).toBe(3);
+  });
+
+  it("falls back to the real rows alone on a database without sql/043", async () => {
+    queryOne
+      .mockRejectedValueOnce(
+        Object.assign(new Error('column "imported_like_count" does not exist'), { code: "42703" }),
+      )
+      .mockResolvedValueOnce({ count: "2" });
+
+    expect(await selectRouteLikeCount(42)).toBe(2);
+    expect(queryOne.mock.calls[1][0]).toMatch(/SELECT COUNT\(\*\) AS count FROM route_likes/);
+    expect(queryOne.mock.calls[1][0]).not.toContain("imported_like_count");
+  });
+
+  it("does not swallow an unrelated database error", async () => {
+    queryOne.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "XX000" }));
+    await expect(selectRouteLikeCount(42)).rejects.toThrow("boom");
   });
 
   it("reads a track nobody has liked as 0, not null", async () => {

@@ -14,6 +14,8 @@ export interface FinishedRideFacts {
   /** Calendar year the ride finished in — EXTRACT(YEAR FROM events.finished_at), never
    *  starts_at (which is when the ride was PLANNED, not when it happened). */
   year: number;
+  /** Calendar month (1-12) the ride finished in, UTC — same clock as `year`. */
+  month: number;
   /** COALESCE(participant_tracks.distance_km, attached route.distance_km, 0) — measured beats
    *  organizer-declared beats "unknown", never invented beyond that. */
   distanceKm: number;
@@ -35,6 +37,7 @@ export interface FinishedRideFacts {
 interface FinishedRideFactsRow {
   event_id: string;
   year: number;
+  month: number;
   distance_km: string | number;
   elevation_m: string | number;
   duration_hours: string | number | null;
@@ -42,12 +45,60 @@ interface FinishedRideFactsRow {
   level: string | null;
 }
 
+/**
+ * The live check-in rule (app_flags stats_require_live_checkin + stats_live_checkin_from, sql/039
+ * and sql/044): a rider only "did" a ride when they are recorded as having TURNED UP —
+ * event_participants.attendance_status 'present' (or 'started').
+ *
+ * PROSPECTIVE ONLY. The rule applies to rides that STARTED at/after `requireCheckinFrom`; a ride
+ * that started earlier counts on registration alone, whatever its attendance says. Auto check-in
+ * did not exist for those rides, so demanding it of them would erase real history.
+ * COALESCE(starts_at, finished_at) because auto check-in acts in a window around starts_at, so a
+ * ride that started before the rollout could never have been checked in automatically.
+ * Shared by the facts query, the first-ride lookup and the backfill's ignored-ride report, so
+ * they can never disagree about what counts.
+ *
+ * attendance_status is the app's one definition of "arrived", so this reuses it instead of
+ * inferring arrival a second way from GPS points. It is written by whichever of these applies:
+ *   - auto check-in (sql/040, src/lib/auto-check-in.ts): the rider's own GPS fix was near the
+ *     route start, inside the window around the start time — "clicked live at the place, around
+ *     the start time";
+ *   - the organizer ticking the rider off by hand (which also lets an organizer fix a rider whose
+ *     phone never got a fix).
+ * A rider nobody marked stays 'unknown' and does not count for a ride the rule applies to.
+ */
+export function checkinRuleSql(paramIndex: number): string {
+  return `(ep.attendance_status IN ('present', 'started')
+            OR COALESCE(e.starts_at, e.finished_at) < $${paramIndex})`;
+}
+
+export interface FactsOptions {
+  /** Apply the check-in rule above to rides that started at/after this instant. null/undefined =
+   *  the rule is off: registration alone counts (Phase 1). */
+  requireCheckinFrom?: Date | null;
+}
+
+/** The extra WHERE clause (and its bind values) for the check-in rule — empty when it is off. */
+function checkinClause(
+  options: FactsOptions,
+  paramIndex: number,
+): { sql: string; params: unknown[] } {
+  return options.requireCheckinFrom
+    ? { sql: `\n       AND ${checkinRuleSql(paramIndex)}`, params: [options.requireCheckinFrom] }
+    : { sql: "", params: [] };
+}
+
 /** One row per ride this user has "completed" per the rule above. */
-export async function selectFinishedRideFactsForUser(userId: number): Promise<FinishedRideFacts[]> {
+export async function selectFinishedRideFactsForUser(
+  userId: number,
+  options: FactsOptions = {},
+): Promise<FinishedRideFacts[]> {
+  const checkin = checkinClause(options, 2);
   const rows = await query<FinishedRideFactsRow>(
     `SELECT
         e.id AS event_id,
-        EXTRACT(YEAR FROM e.finished_at)::int AS year,
+        EXTRACT(YEAR FROM e.finished_at AT TIME ZONE 'UTC')::int AS year,
+        EXTRACT(MONTH FROM e.finished_at AT TIME ZONE 'UTC')::int AS month,
         COALESCE(pt.distance_km, r.distance_km, 0) AS distance_km,
         COALESCE(e.elevation_gain_m, r.elevation_m, 0) AS elevation_m,
         CASE
@@ -71,12 +122,13 @@ export async function selectFinishedRideFactsForUser(userId: number): Promise<Fi
      WHERE ep.user_id = $1
        AND ep.registration_status IN ('registered', 'approved')
        AND ep.left_at IS NULL
-       AND e.finished_at IS NOT NULL`,
-    [userId],
+       AND e.finished_at IS NOT NULL${checkin.sql}`,
+    [userId, ...checkin.params],
   );
   return rows.map((row) => ({
     eventId: row.event_id,
     year: row.year,
+    month: row.month,
     distanceKm: Number(row.distance_km),
     elevationM: Number(row.elevation_m),
     durationHours: row.duration_hours == null ? null : Number(row.duration_hours),
@@ -100,6 +152,16 @@ export async function selectFinishedEventParticipantUserIds(eventId: string): Pr
     [eventId],
   );
   return rows.map((row) => row.user_id);
+}
+
+/** When the event finished. The finish hook needs it because an AUTO-finished ride is stamped
+ *  with the ride's own end time, which can fall in an earlier month than "now". */
+export async function selectEventFinishedAt(eventId: string): Promise<Date | null> {
+  const rows = await query<{ finished_at: Date | null }>(
+    "SELECT finished_at FROM events WHERE id = $1",
+    [eventId],
+  );
+  return rows[0]?.finished_at ?? null;
 }
 
 export interface RiderStatsTotals {
@@ -191,6 +253,97 @@ export async function upsertStatsCache(
       totals.totalCalories,
     ],
   );
+}
+
+export type PeriodType = "month" | "year";
+
+interface PeriodStatsRow {
+  period: string;
+  rides_count: number;
+  total_km: string | number;
+  total_climb_m: string | number;
+  total_hours: string | number;
+  total_calories: number | null;
+  computed_at: Date;
+}
+
+/** Cached rows for one rider and period type, keyed by period ('2026-08' / '2026'). */
+export async function selectPeriodStats(
+  userId: number,
+  periodType: PeriodType,
+  periods: readonly string[],
+): Promise<Map<string, CachedRiderStats>> {
+  if (periods.length === 0) return new Map();
+  const rows = await query<PeriodStatsRow>(
+    `SELECT period, rides_count, total_km, total_climb_m, total_hours, total_calories, computed_at
+       FROM rider_period_stats
+      WHERE user_id = $1 AND period_type = $2 AND period = ANY($3::text[])`,
+    [userId, periodType, periods],
+  );
+  return new Map(
+    rows.map((row) => [
+      row.period,
+      {
+        ridesCount: row.rides_count,
+        totalKm: Number(row.total_km),
+        totalClimbM: Number(row.total_climb_m),
+        totalHours: Number(row.total_hours),
+        totalCalories: row.total_calories,
+        computedAt: row.computed_at,
+      },
+    ]),
+  );
+}
+
+export async function upsertPeriodStats(
+  userId: number,
+  periodType: PeriodType,
+  period: string,
+  totals: RiderStatsTotals,
+): Promise<void> {
+  await query(
+    `INSERT INTO rider_period_stats
+        (user_id, period_type, period, rides_count, total_km, total_climb_m, total_hours,
+         total_calories, computed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ON CONFLICT (user_id, period_type, period) DO UPDATE
+         SET rides_count    = EXCLUDED.rides_count,
+             total_km       = EXCLUDED.total_km,
+             total_climb_m  = EXCLUDED.total_climb_m,
+             total_hours    = EXCLUDED.total_hours,
+             total_calories = EXCLUDED.total_calories,
+             computed_at    = NOW()`,
+    [
+      userId,
+      periodType,
+      period,
+      totals.ridesCount,
+      totals.totalKm,
+      totals.totalClimbM,
+      totals.totalHours,
+      totals.totalCalories,
+    ],
+  );
+}
+
+/** The 'YYYY-MM' of this rider's earliest counted ride — the timeline's lower bound. Null when
+ *  they have none. Same eligibility as selectFinishedRideFactsForUser, one cheap MIN. */
+export async function selectFirstRidePeriod(
+  userId: number,
+  options: FactsOptions = {},
+): Promise<string | null> {
+  const checkin = checkinClause(options, 2);
+  const rows = await query<{ first: string | null }>(
+    `SELECT TO_CHAR(MIN(e.finished_at) AT TIME ZONE 'UTC', 'YYYY-MM') AS first
+       FROM event_participants ep
+       JOIN events e ON e.id = ep.event_id AND e.status = 'finished'
+      WHERE ep.user_id = $1
+        AND ep.registration_status IN ('registered', 'approved')
+        AND ep.left_at IS NULL
+        AND e.finished_at IS NOT NULL${checkin.sql}`,
+    [userId, ...checkin.params],
+  );
+  return rows[0]?.first ?? null;
 }
 
 /** Exactly the four National Leaderboard categories, in this order — no Calories (asked for

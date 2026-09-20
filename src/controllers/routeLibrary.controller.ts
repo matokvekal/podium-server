@@ -16,6 +16,7 @@ import {
   createRoute,
   deleteRoute,
   getRouteForViewer,
+  getRouteGpxForViewer,
   likeRoute,
   listMyRoutes,
   listPublicRoutes,
@@ -191,6 +192,41 @@ export async function getRouteController(req: Request, res: Response, next: Next
     traceLog("routeLibrary.controller.getRouteController", { routeId, viewerId });
     const route = await getRouteForViewer(routeId, viewerId);
     res.status(200).json({ data: toRouteDetail(route) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/v1/routes/:routeId/gpx
+//
+// The original file, exactly as it was imported — the bytes are sent untouched, with a hash the
+// caller can check. 404 when this route has no stored original (the client then builds the GPX
+// itself, as it always has).
+export async function getRouteGpxController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    const viewerId = req.auth?.userId ?? null;
+    traceLog("routeLibrary.controller.getRouteGpxController", { routeId, viewerId });
+    const file = await getRouteGpxForViewer(routeId, viewerId);
+    if (!file) {
+      res
+        .status(404)
+        .json({ error: "No original GPX", message: "This route has no original GPX file" });
+      return;
+    }
+    const fallbackName = `route-${routeId}.gpx`;
+    const name = file.filename?.trim() || fallbackName;
+    res
+      .status(200)
+      .set({
+        "Content-Type": "application/gpx+xml",
+        // RFC 5987 form so a Hebrew file name survives; the plain filename is the ASCII fallback.
+        "Content-Disposition": `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Content-Length": String(file.content.length),
+        "X-Content-SHA256": file.sha256,
+        "Cache-Control": "public, max-age=3600",
+      })
+      .send(file.content);
   } catch (err) {
     next(err);
   }

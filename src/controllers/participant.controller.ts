@@ -3,6 +3,7 @@ import type { EventParticipant } from "../db/types.js";
 import { traceLog } from "../lib/trace-log.js";
 import {
   addParticipantSchema,
+  autoCheckInSchema,
   bulkAddParticipantsSchema,
   participantIdParamSchema,
   participantsEventIdParamSchema,
@@ -14,6 +15,7 @@ import {
   addParticipant,
   addParticipants,
   approveParticipant,
+  autoCheckIn,
   editParticipant,
   listParticipantsForViewer,
   rejectParticipant,
@@ -43,6 +45,9 @@ function toParticipantSummary(participant: EventParticipant) {
     groupId: participant.groupId,
     registrationStatus: participant.registrationStatus,
     attendanceStatus: participant.attendanceStatus,
+    // 'auto' when the rider's own GPS marked them (sql/040), 'manual' when an organizer did,
+    // null when nobody has written it. Additive — a client that ignores it is unaffected.
+    attendanceSource: participant.attendanceSource,
     resultStatus: participant.resultStatus,
     joinedAt: participant.joinedAt,
     finishedAt: participant.finishedAt,
@@ -181,6 +186,34 @@ export async function setAttendanceController(req: Request, res: Response, next:
     });
     const participant = await setAttendance(eventId, req.auth!.userId, participantId, status);
     res.status(200).json({ data: toParticipantSummary(participant) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/v1/events/:eventId/participants/me/check-in
+// Answers 200 with an `outcome` for every normal result, including "not there yet" — see
+// AutoCheckInOutcome. Errors are for a request that is wrong, not one that is early.
+export async function autoCheckInController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { eventId } = participantsEventIdParamSchema.parse(req.params);
+    const { lat, lng, accuracy } = autoCheckInSchema.parse(req.body);
+    traceLog("participants.controller.autoCheckInController", {
+      eventId,
+      userId: req.auth!.userId,
+    });
+    const attempt = await autoCheckIn(eventId, req.auth!.userId, {
+      position: { lat, lng },
+      accuracyM: accuracy,
+    });
+    res.status(200).json({
+      data: {
+        outcome: attempt.outcome,
+        distanceM: attempt.distanceM,
+        // The rider's own row — the rider-safe shape, so no contact details either way.
+        participant: toRiderParticipantSummary(attempt.participant),
+      },
+    });
   } catch (err) {
     next(err);
   }

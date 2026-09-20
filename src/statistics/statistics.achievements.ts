@@ -15,10 +15,9 @@
 // header states.
 //
 // SCOPE NOTE: this is the LIFETIME 5-gem tier model only, feeding StatisticsPage.tsx's single
-// "Next Milestone" card. It is a different, narrower concept from the newer per-period /
-// per-metric timeline gems on StatisticsAchievementsPage.tsx (still mock-only, still UI-review
-// pass — see that page's own header) — that model's thresholds live in server config too, but
-// are not decided yet and are deliberately not built here. Do not conflate the two.
+// "Next Milestone" card. It is a different, narrower concept from the per-period / per-metric
+// gems on StatisticsAchievementsPage.tsx, whose thresholds live in statistics.gems.ts. Do not
+// conflate the two.
 
 export const STAT_CATEGORIES = ["rides", "km", "climbM", "calories"] as const;
 export type StatCategory = (typeof STAT_CATEGORIES)[number];

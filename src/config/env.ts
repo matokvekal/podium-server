@@ -84,6 +84,17 @@ const envSchema = z.object({
   // behaviour every existing account already had; raise a specific user via user_limits.
   DEFAULT_CONCURRENT_LIVE_EVENTS: z.coerce.number().int().nonnegative().default(1),
 
+  // ── Auto check-in (sql/040) ──────────────────────────────────────────────────────────────
+  //
+  // A rider is marked "arrived" automatically when their own GPS fix is within RADIUS_M of the
+  // ride's start point, inside WINDOW_MIN minutes either side of its start time. Read through
+  // src/config/auto-check-in.ts, and the ONLY place these numbers live on the server.
+  // MAX_ACCURACY_M refuses a fix whose own error circle is wider than that: a phone that can only
+  // say "somewhere within 800 m" must not be able to prove it is within 100 m of anything.
+  AUTO_CHECK_IN_RADIUS_M: z.coerce.number().positive().default(100),
+  AUTO_CHECK_IN_WINDOW_MIN: z.coerce.number().positive().default(60),
+  AUTO_CHECK_IN_MAX_ACCURACY_M: z.coerce.number().positive().default(100),
+
   // Toggleable console.log call-tracing through controllers/middleware — see lib/trace-log.ts.
   // On by default so it's visible without any setup; set to "false" to go quiet.
   CONSOLE_TRACE: boolFlag(true),
