@@ -23,6 +23,18 @@ function canSeeStatistics(emails: readonly string[]): boolean {
   return emails.some((e) => STATISTICS_PREVIEW_EMAILS.includes(e.trim().toLowerCase()));
 }
 
+// Wind-along-the-route pilot (client: lib/wind-eligibility.ts). ONE switch decides who gets it:
+// the accounts below now, or everybody by flipping WIND_FORECAST_FOR_EVERYONE. The client also
+// requires the viewer to own or ride the event; the forecast itself is fetched by the browser
+// straight from the weather provider, so there is nothing else to guard server-side. Delete this
+// block (and canSeeWindForecast below) when the pilot is over.
+const WIND_FORECAST_EMAILS = ["mictavim@gmail.com"];
+const WIND_FORECAST_FOR_EVERYONE = false;
+function canSeeWindForecast(emails: readonly string[]): boolean {
+  if (WIND_FORECAST_FOR_EVERYONE) return true;
+  return emails.some((e) => WIND_FORECAST_EMAILS.includes(e.trim().toLowerCase()));
+}
+
 function isMissingRelationError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const code = "code" in err ? (err as { code?: unknown }).code : undefined;
@@ -102,6 +114,8 @@ async function toAccount(user: User) {
     canOrganize: capabilities.includes("event:create"),
     /** See the STATISTICS_PREVIEW_EMAILS comment above — menu visibility only. */
     canSeeStatistics: canSeeStatistics(statisticsEmails),
+    /** See the WIND_FORECAST_EMAILS comment above — UI gate for the wind pilot only. */
+    canSeeWindForecast: canSeeWindForecast(statisticsEmails),
     /**
      * The authoritative per-user limits (user_entitlements folded onto the plan). Top-level and
      * teams-free so a client can mirror exactly what the server enforces on create / join /
