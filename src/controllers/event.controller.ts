@@ -122,8 +122,7 @@ function toEventSummary(event: Event | EventListItem) {
     elevationGain: summary.elevationGain ?? null,
     participantCount: summary.participantCount ?? null,
     // How many rides have been built on the attached route — only GET /events/public fills
-    // this in (its copy_summary lateral); null everywhere else, and the card falls back to
-    // its per-card ?preview=1 fetch.
+    // this in (its copy_summary lateral); null everywhere else, and a card then shows a dash.
     downloads: summary.downloads ?? null,
     // The ATTACHED TRACK's id. On the summary because likes and favourites belong to the
     // track, not the ride: a card has to know which routes.id to POST to, and which rides
@@ -144,6 +143,12 @@ function toEventSummary(event: Event | EventListItem) {
     likes: summary.likes ?? null,
     likedByMe: summary.likedByMe ?? null,
     favoritedByMe: summary.favoritedByMe ?? null,
+    // The attached route's 60-point card preview { points, elevations? } (routes.thumb_points,
+    // sql/046): what a Find Tracks card draws its map and climb profile from, so the card never
+    // makes a geometry request of its own. Present (possibly null = no drawable route) on
+    // GET /events/public rows only; absent on every other list and on the detail payload, which
+    // carries `route` instead. The detailed line stays GET /events/:id/route.
+    ...("preview" in summary ? { preview: summary.preview ?? null } : {}),
   };
 }
 

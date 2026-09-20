@@ -18,6 +18,7 @@ import type {
   RiderLevel,
 } from "../db/types.js";
 import { logger } from "../lib/logger.js";
+import { isMissingThumbColumn, previewFromStored, type RoutePreview } from "../lib/route-thumb.js";
 import { resolveImageUrl } from "../lib/user-images.js";
 
 interface EventRow {
@@ -210,6 +211,11 @@ export interface EventListItem extends Event {
    *  signed in, which is different from false — the button renders inert rather than unpressed. */
   likedByMe: boolean | null;
   favoritedByMe: boolean | null;
+  /** The attached route's 60-point card preview (routes.thumb_points, sql/046), so a card draws
+   *  its map with no per-card geometry request. ABSENT unless the query selected it — only
+   *  GET /events/public does; every other list keeps the payload it always had. Null when the
+   *  ride has no route or the route has no drawable line. */
+  preview?: RoutePreview | null;
 }
 
 /**
@@ -217,9 +223,11 @@ export interface EventListItem extends Event {
  * distance/climb, and the live roster count. Written as LEFT JOIN LATERAL so the list stays a
  * single round trip — never a route/participant query per row.
  */
-const EVENT_SUMMARY_JOINS = `
+const eventSummaryJoins = (withThumb: boolean) => `
   LEFT JOIN LATERAL (
-    SELECT r.id AS route_id, r.distance_km, r.elevation_m
+    SELECT r.id AS route_id, r.distance_km, r.elevation_m${
+      withThumb ? ", COALESCE(r.thumb_points, r.preview_points) AS thumb_source" : ""
+    }
       FROM event_routes er
       JOIN routes r ON r.id = er.route_id
      WHERE er.event_id = e.id
@@ -242,12 +250,34 @@ const EVENT_SUMMARY_JOINS = `
      WHERE ow.id = e.owner_id
   ) owner_summary ON TRUE`;
 
-const EVENT_SUMMARY_COLUMNS = `
+/** The list queries that do not carry the preview (the COUNT, the other lists, the legacy path). */
+const EVENT_SUMMARY_JOINS = eventSummaryJoins(false);
+
+const eventSummaryColumns = (withThumb: boolean) => `
   route_summary.route_id AS route_id,
   route_summary.distance_km AS route_distance_km,
-  route_summary.elevation_m AS route_elevation_m,
+  route_summary.elevation_m AS route_elevation_m,${withThumb ? " route_summary.thumb_source AS thumb_source," : ""}
   COALESCE(roster_summary.participant_count, 0) AS participant_count,
   owner_summary.owner_name AS owner_name`;
+
+const EVENT_SUMMARY_COLUMNS = eventSummaryColumns(false);
+
+/**
+ * Runs a list query WITH the route preview, and once more without it if the database has not
+ * had sql/046 yet (42703 naming thumb_points). There is deliberately no "remember the column is
+ * missing" flag: it would keep serving no previews after the migration ran, until the process
+ * restarted. The cost of not caching is one failed statement per request, and only while the
+ * migration is outstanding.
+ */
+async function withThumbFallback<T>(run: (withThumb: boolean) => Promise<T>): Promise<T> {
+  try {
+    return await run(true);
+  } catch (err) {
+    if (!isMissingThumbColumn(err)) throw err;
+    logger.warn({ err }, "routes.thumb_points missing — run sql/046-route-thumb.sql");
+    return run(false);
+  }
+}
 
 interface EventSummaryRow extends EventRow {
   route_id: number | null;
@@ -261,6 +291,8 @@ interface EventSummaryRow extends EventRow {
   like_count?: number | null;
   viewer_liked?: boolean | null;
   viewer_favorited?: boolean | null;
+  /** routes.thumb_points, else routes.preview_points. Absent when the query did not select it. */
+  thumb_source?: unknown;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -280,6 +312,9 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     likes: row.like_count ?? null,
     likedByMe: row.viewer_liked ?? null,
     favoritedByMe: row.viewer_favorited ?? null,
+    // Only when the query selected the preview column at all; every other list keeps exactly the
+    // payload it always had (no `preview` key, not even a null).
+    ...(row.thumb_source !== undefined ? { preview: previewFromStored(row.thumb_source) } : {}),
   };
 }
 
@@ -634,15 +669,17 @@ export async function selectPublicEvents(
   }[filters.sort];
 
   try {
-    const rows = await query<EventSummaryRow>(
-      `SELECT e.*, ${EVENT_SUMMARY_COLUMNS}, copy_summary.download_count,
-              like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
-         FROM events e
-         ${EVENT_SUMMARY_JOINS}
-         ${copySummaryJoin}
-         ${likeSummaryJoin}
-        WHERE ${where} ORDER BY ${orderBy} LIMIT $17 OFFSET $18`,
-      [...params, filters.limit, filters.offset],
+    const rows = await withThumbFallback((withThumb) =>
+      query<EventSummaryRow>(
+        `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
+                like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
+           FROM events e
+           ${eventSummaryJoins(withThumb)}
+           ${copySummaryJoin}
+           ${likeSummaryJoin}
+          WHERE ${where} ORDER BY ${orderBy} LIMIT $17 OFFSET $18`,
+        [...params, filters.limit, filters.offset],
+      ),
     );
     // The COUNT mirrors the SELECT's FROM: the distance / climb / dedup filters test
     // route_summary.*, so the count query needs the same lateral joins (LEFT ... ON TRUE keeps

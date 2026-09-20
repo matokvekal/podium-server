@@ -26,6 +26,7 @@
 
 import { execute, queryOne, withTransaction } from "../db/pool.js";
 import { simplifyByStride } from "../lib/geo.js";
+import { buildRoutePreview, isMissingThumbColumn, toStoredThumb } from "../lib/route-thumb.js";
 import {
   mapRouteWithOwner,
   ROUTE_OWNER_COLUMN,
@@ -201,22 +202,45 @@ export async function insertDrawnRouteRow(
       ? points.map(([lat, lng], i) => ({ lat, lng, ele: elevations[i] }))
       : points;
   const preview = simplifyByStride(stored, PREVIEW_POINT_TARGET);
-  const row = await queryOne<RouteRow>(
-    `INSERT INTO routes
-        (owner_id, source, distance_km, elevation_m, track_points, preview_points,
-         point_count, is_public)
-      VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5::jsonb, $6, $7)
-      RETURNING id, track_points, distance_km, elevation_m`,
-    [
-      ownerId,
-      distanceKm,
-      elevationM,
-      JSON.stringify(stored),
-      JSON.stringify(preview),
-      points.length,
-      isPublic,
-    ],
+  // The 60-point card preview (sql/046), derived from the same line and elevations being stored.
+  const thumb = toStoredThumb(
+    buildRoutePreview(
+      points.map(([lat, lng]) => ({ lat, lng })),
+      elevations && elevations.length === points.length ? elevations : null,
+    ),
   );
+  const params = [
+    ownerId,
+    distanceKm,
+    elevationM,
+    JSON.stringify(stored),
+    JSON.stringify(preview),
+    points.length,
+    isPublic,
+  ];
+  let row: RouteRow | null;
+  try {
+    row = await queryOne<RouteRow>(
+      `INSERT INTO routes
+          (owner_id, source, distance_km, elevation_m, track_points, preview_points,
+           point_count, is_public, thumb_points)
+        VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb)
+        RETURNING id, track_points, distance_km, elevation_m`,
+      [...params, thumb ? JSON.stringify(thumb) : null],
+    );
+  } catch (err) {
+    // sql/046 not run yet: save the route without its preview rather than failing the save. The
+    // list falls back to deriving one from preview_points, and the backfill fills the column.
+    if (!isMissingThumbColumn(err)) throw err;
+    row = await queryOne<RouteRow>(
+      `INSERT INTO routes
+          (owner_id, source, distance_km, elevation_m, track_points, preview_points,
+           point_count, is_public)
+        VALUES ($1, 'drawn', $2, $3, $4::jsonb, $5::jsonb, $6, $7)
+        RETURNING id, track_points, distance_km, elevation_m`,
+      params,
+    );
+  }
   if (!row) throw new Error("insertDrawnRouteRow returned no row");
   return mapStoredRoute(row);
 }

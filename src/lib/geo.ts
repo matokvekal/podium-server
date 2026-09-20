@@ -74,6 +74,86 @@ export function computeBbox(points: readonly LatLng[]): Bbox | null {
 }
 
 /**
+ * Geometry-aware simplification to AT MOST `maxCount` points — the indices (ascending) of the
+ * points to keep, first and last always among them.
+ *
+ * Douglas-Peucker run as a priority split rather than with a tolerance: the segment whose worst
+ * point sits farthest from its chord is split at that point, again and again, until `maxCount`
+ * points are kept. Each split spends a point where the line deviates most, so a switchback
+ * section keeps many and a straight fire road keeps two — unlike simplifyByStride, which spends
+ * them evenly and cuts every corner. A count target (not a tolerance) is what a fixed-size
+ * card preview needs.
+ *
+ * Distances are measured on a local flat projection (longitude scaled by cos(latitude)), which
+ * is exact enough for one ride's extent. Iterative, so a 30,000-point trace cannot overflow the
+ * stack, and O(n) per split over the segment being split.
+ */
+export function simplifyIndicesToCount(points: readonly LatLng[], maxCount: number): number[] {
+  const n = points.length;
+  if (n <= maxCount) return points.map((_, i) => i);
+  // A line needs two ends; asking for fewer still returns them.
+  if (maxCount < 2) return n > 1 ? [0, n - 1] : [0];
+
+  const kx = Math.cos(toRadians(points[0].lat)) * 111_320;
+  const ky = 110_540;
+  const xs = new Float64Array(n);
+  const ys = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    xs[i] = points[i].lng * kx;
+    ys[i] = points[i].lat * ky;
+  }
+
+  interface Span {
+    start: number;
+    end: number;
+    /** Index of the point farthest from the chord start-end, or -1 when there is none. */
+    worst: number;
+    worstDistance: number;
+  }
+
+  const measure = (start: number, end: number): Span => {
+    const dx = xs[end] - xs[start];
+    const dy = ys[end] - ys[start];
+    const lengthSq = dx * dx + dy * dy;
+    let worst = -1;
+    let worstDistance = 0;
+    for (let i = start + 1; i < end; i++) {
+      let t = lengthSq === 0 ? 0 : ((xs[i] - xs[start]) * dx + (ys[i] - ys[start]) * dy) / lengthSq;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const d = Math.hypot(xs[i] - (xs[start] + t * dx), ys[i] - (ys[start] + t * dy));
+      if (d > worstDistance) {
+        worstDistance = d;
+        worst = i;
+      }
+    }
+    return { start, end, worst, worstDistance };
+  };
+
+  const kept = new Set<number>([0, n - 1]);
+  let spans: Span[] = [measure(0, n - 1)];
+  while (kept.size < maxCount) {
+    let best = -1;
+    for (let i = 0; i < spans.length; i++) {
+      if (spans[i].worst !== -1 && (best === -1 || spans[i].worstDistance > spans[best].worstDistance)) {
+        best = i;
+      }
+    }
+    // Every remaining point lies exactly on its chord (a stationary or dead-straight trace):
+    // nothing left worth keeping.
+    if (best === -1) break;
+    const span = spans[best];
+    kept.add(span.worst);
+    spans = [
+      ...spans.slice(0, best),
+      measure(span.start, span.worst),
+      measure(span.worst, span.end),
+      ...spans.slice(best + 1),
+    ];
+  }
+  return [...kept].sort((a, b) => a - b);
+}
+
+/**
  * Cheap downsampling: keeps roughly `maxCount` evenly-spaced points, always including the
  * first and last. Used for participant_tracks and route preview_points. Real
  * Douglas-Peucker simplification is a documented future improvement — not required for v1,

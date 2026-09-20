@@ -23,7 +23,8 @@
     "lint:fix": "biome check --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "stats:backfill": "tsx src/statistics/statistics.backfill.cli.ts"
+    "stats:backfill": "tsx src/statistics/statistics.backfill.cli.ts",
+    "routes:thumbs": "tsx src/scripts/backfillRouteThumbs.ts"
   },
   "author": "Gilad Dolev",
   "license": "ISC",
