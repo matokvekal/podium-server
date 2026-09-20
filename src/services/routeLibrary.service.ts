@@ -26,6 +26,7 @@ import {
   selectRoutesForOwner,
   updateRoute as updateRouteRow,
 } from "../queries/routeLibrary.queries.js";
+import { type RouteGpxFile, selectRouteAccess, selectRouteGpxFile } from "../queries/routeGpx.queries.js";
 import {
   deleteRouteFavorite,
   insertRouteFavorite,
@@ -112,6 +113,22 @@ export async function getRouteForViewer(
   if (!route) throw new ApiError(404, "Route not found");
   if (!route.isPublic && route.ownerId !== viewerId) throw new ApiError(404, "Route not found");
   return route;
+}
+
+/**
+ * The ORIGINAL GPX of a route, byte for byte (sql/042), or null when it has none — the caller then
+ * answers 404 and the client falls back to the file it rebuilds from the stored line. Same
+ * visibility as the route itself, with the same 404-not-403 rule: an unpublished route's id says
+ * nothing about whether it exists.
+ */
+export async function getRouteGpxForViewer(
+  routeId: number,
+  viewerId: number | null,
+): Promise<RouteGpxFile | null> {
+  const access = await selectRouteAccess(routeId);
+  if (!access) throw new ApiError(404, "Route not found");
+  if (!access.isPublic && access.ownerId !== viewerId) throw new ApiError(404, "Route not found");
+  return selectRouteGpxFile(routeId);
 }
 
 export function listMyRoutes(ownerId: number): Promise<RouteWithOwner[]> {

@@ -114,7 +114,7 @@ export function createApp(): Express {
   /**
    * User images: the shipped preset art, and riders' uploads.
    *
-   * In production nginx serves both directly from disk (see TODO-install-server.md) and
+   * In production nginx serves both directly from disk (see gilad/deployment.md) and
    * these mounts are never reached — they are what makes the feature work in development
    * and what keeps the app self-contained if nginx is not configured for it yet.
    *

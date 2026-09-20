@@ -16,6 +16,9 @@ import type {
   ParticipantLastLocation,
   RegistrationStatus,
   RiderLevel,
+  RouteDifficulty,
+  TrailSeason,
+  TrailShade,
 } from "../db/types.js";
 import { logger } from "../lib/logger.js";
 import { isMissingThumbColumn, previewFromStored, type RoutePreview } from "../lib/route-thumb.js";
@@ -53,6 +56,9 @@ interface EventRow {
   rest_stops: number | null;
   is_accessible: boolean;
   terrain_grade?: number | null;
+  route_difficulty?: Event["routeDifficulty"];
+  season?: Event["season"];
+  shade?: Event["shade"];
   has_support_vehicle: boolean;
   auto_check_in?: boolean;
   expected_participants: number | null;
@@ -158,6 +164,10 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/038 — reads as null, i.e. "the organizer has not
     // stated how technical the ground is", which is what every ride is until they choose.
     terrainGrade: row.terrain_grade ?? null,
+    // undefined on a database without sql/041 — all three read as null, "not stated".
+    routeDifficulty: row.route_difficulty ?? null,
+    season: row.season ?? null,
+    shade: row.shade ?? null,
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
@@ -212,9 +222,10 @@ export interface EventListItem extends Event {
   likedByMe: boolean | null;
   favoritedByMe: boolean | null;
   /** The attached route's 60-point card preview (routes.thumb_points, sql/046), so a card draws
-   *  its map with no per-card geometry request. ABSENT unless the query selected it — only
-   *  GET /events/public does; every other list keeps the payload it always had. Null when the
-   *  ride has no route or the route has no drawable line. */
+   *  its map with no per-card geometry request. ABSENT unless the query asked for it: always on
+   *  GET /events/public, and on GET /events only with ?includePreview=true — that list is
+   *  unpaginated, so a caller that draws no maps must not pay ~1.4 KB per ride for them. Null
+   *  when the ride has no route or the route has no drawable line. Never on the detail payload. */
   preview?: RoutePreview | null;
 }
 
@@ -222,6 +233,11 @@ export interface EventListItem extends Event {
  * The two correlated lookups every list query bolts on: the newest attached route's
  * distance/climb, and the live roster count. Written as LEFT JOIN LATERAL so the list stays a
  * single round trip — never a route/participant query per row.
+ *
+ * `withThumb` adds the route's card preview to the route lateral. COALESCE(thumb_points,
+ * preview_points) is what makes an unbackfilled route still draw: the stored 60-point line when
+ * there is one, else the older 300-point preview, which previewFromStored thins at read time.
+ * Only the queries that RETURN rows ask for it — the COUNT queries do not need it.
  */
 const eventSummaryJoins = (withThumb: boolean) => `
   LEFT JOIN LATERAL (
@@ -250,7 +266,28 @@ const eventSummaryJoins = (withThumb: boolean) => `
      WHERE ow.id = e.owner_id
   ) owner_summary ON TRUE`;
 
-/** The list queries that do not carry the preview (the COUNT, the other lists, the legacy path). */
+// The reuse ("downloads") count for each row's attached route — its own lateral, kept out of
+// the shared EVENT_SUMMARY_JOINS so a dev DB without sql/025's route_copies table cannot
+// break the other list queries. Its two callers — selectPublicEvents and selectEventsForUser
+// with includePreview — both catch a 42P01 and fall back without it.
+//
+// DISPLAYED downloads = the route's imported starting count (routes.imported_download_count,
+// sql/043) + the real route_copies rows. The seed is added here at read time so the ledger stays
+// purely real riders' actions. `withSeeds` is false only on the retry for a database that has
+// not reached sql/043 (see the catch below).
+const copySummaryJoin = (withSeeds: boolean) => `
+  LEFT JOIN LATERAL (
+    SELECT (COUNT(*)${
+      withSeeds
+        ? ` + COALESCE((SELECT r0.imported_download_count FROM routes r0
+                          WHERE r0.id = route_summary.route_id), 0)`
+        : ""
+    })::int AS download_count
+      FROM route_copies rc
+     WHERE rc.route_id = route_summary.route_id
+  ) copy_summary ON TRUE`;
+
+/** The list queries that do not carry the preview (followed rides, the COUNT, the legacy path). */
 const EVENT_SUMMARY_JOINS = eventSummaryJoins(false);
 
 const eventSummaryColumns = (withThumb: boolean) => `
@@ -264,10 +301,11 @@ const EVENT_SUMMARY_COLUMNS = eventSummaryColumns(false);
 
 /**
  * Runs a list query WITH the route preview, and once more without it if the database has not
- * had sql/046 yet (42703 naming thumb_points). There is deliberately no "remember the column is
- * missing" flag: it would keep serving no previews after the migration ran, until the process
- * restarted. The cost of not caching is one failed statement per request, and only while the
- * migration is outstanding.
+ * had sql/046 yet (42703 naming thumb_points). Every list endpoint shares the one lateral, so a
+ * server deployed ahead of the migration would otherwise fail ALL of them. There is deliberately
+ * no "remember the column is missing" flag: it would keep serving no previews after the
+ * migration ran, until the process restarted. The cost of not caching is one failed statement per
+ * request, and only while the migration is outstanding.
  */
 async function withThumbFallback<T>(run: (withThumb: boolean) => Promise<T>): Promise<T> {
   try {
@@ -291,7 +329,8 @@ interface EventSummaryRow extends EventRow {
   like_count?: number | null;
   viewer_liked?: boolean | null;
   viewer_favorited?: boolean | null;
-  /** routes.thumb_points, else routes.preview_points. Absent when the query did not select it. */
+  /** routes.thumb_points, else routes.preview_points — see eventSummaryJoins. Absent when the
+   *  query ran without the preview (COUNT queries, a database without sql/046). */
   thumb_source?: unknown;
 }
 
@@ -312,8 +351,8 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     likes: row.like_count ?? null,
     likedByMe: row.viewer_liked ?? null,
     favoritedByMe: row.viewer_favorited ?? null,
-    // Only when the query selected the preview column at all; every other list keeps exactly the
-    // payload it always had (no `preview` key, not even a null).
+    // Only when the query selected the preview column at all; a list that did not ask for it
+    // keeps exactly the payload it always had (no `preview` key, not even a null).
     ...(row.thumb_source !== undefined ? { preview: previewFromStored(row.thumb_source) } : {}),
   };
 }
@@ -382,21 +421,78 @@ export async function countLiveEventsForOwner(
  * mine/joined/upcoming/live/past happens in the service — event counts per user are small
  * enough that one simple query beats five subtly different ones.
  */
-export async function selectEventsForUser(userId: number): Promise<EventListItem[]> {
-  const rows = await query<EventSummaryRow>(
-    // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
-    // events this user OWNS but was rejected from, which cannot happen today but is exactly
-    // the kind of thing that starts happening once co-organizers land.
-    `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
-       FROM events e
-       LEFT JOIN event_participants ep
-              ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
-       ${EVENT_SUMMARY_JOINS}
-      WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
-      ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
-    [userId],
-  );
-  return rows.map(mapEventListItem);
+export interface MyEventsOptions {
+  /**
+   * Also carry each ride's route preview (`preview`) and its track's reuse count (`downloads`).
+   * Opt-in because this list is UNPAGINATED and its main callers draw no maps: an account that
+   * owns a thousand rides would otherwise pay ~1.4 KB per ride, on every home-screen load, for
+   * geometry nothing displays. The Find Tracks "My rides" tab asks for it.
+   */
+  includePreview?: boolean;
+}
+
+export async function selectEventsForUser(
+  userId: number,
+  options: MyEventsOptions = {},
+): Promise<EventListItem[]> {
+  // The plain list: exactly the statement, columns and payload it has always had.
+  if (!options.includePreview) {
+    const rows = await query<EventSummaryRow>(
+      // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
+      // events this user OWNS but was rejected from, which cannot happen today but is exactly
+      // the kind of thing that starts happening once co-organizers land.
+      `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
+         FROM events e
+         LEFT JOIN event_participants ep
+                ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+         ${EVENT_SUMMARY_JOINS}
+        WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+        ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
+      [userId],
+    );
+    return rows.map(mapEventListItem);
+  }
+
+  // The gallery's list. Three optional features, each dropped on its own if this database lacks
+  // what it needs — the same tolerance selectPublicEvents has, so a server deployed ahead of a
+  // migration still answers: the preview (sql/046), the seeded download count (sql/043) and the
+  // downloads count itself (route_copies, sql/025).
+  const features = { thumb: true, seeds: true, downloads: true };
+  for (;;) {
+    try {
+      const rows = await query<EventSummaryRow>(
+        `SELECT DISTINCT e.*, ${eventSummaryColumns(features.thumb)}${
+          features.downloads ? ", copy_summary.download_count" : ""
+        }
+           FROM events e
+           LEFT JOIN event_participants ep
+                  ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+           ${eventSummaryJoins(features.thumb)}
+           ${features.downloads ? copySummaryJoin(features.seeds) : ""}
+          WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+          ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
+        [userId],
+      );
+      return rows.map(mapEventListItem);
+    } catch (err) {
+      if (features.thumb && isMissingThumbColumn(err)) {
+        logger.warn({ err }, "routes.thumb_points missing — run sql/046-route-thumb.sql");
+        features.thumb = false;
+      } else if (
+        features.seeds &&
+        isMissingColumnError(err) &&
+        /imported_download_count/.test(err.message ?? "")
+      ) {
+        logger.warn({ err }, "routes.imported_download_count missing — run sql/043");
+        features.seeds = false;
+      } else if (features.downloads && isMissingRelationError(err)) {
+        logger.warn({ err }, "route_copies missing — run sql/025; downloads omitted");
+        features.downloads = false;
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 /**
@@ -432,7 +528,7 @@ export async function countEventsCreatedSince(ownerId: number, since: Date): Pro
 }
 
 /**
- * Layer 3 of AUTHORIZATION.md. Idempotent, because event creation may be retried and a
+ * Layer 3 of gilad/agents/server-source-of-truth.md. Idempotent, because event creation may be retried and a
  * duplicate member row would be a unique-index violation rather than a no-op.
  */
 export async function insertEventMember(
@@ -486,6 +582,11 @@ export interface PublicEventFilters {
   maxClimbM?: number;
   /** Any of "lt1" | "1to2" | "2to3" | "3to5" | "gt5" — ranges over events.duration_min. */
   durationBuckets?: string[];
+  /** Exact match against events.route_difficulty / season / shade (sql/041), any of the list.
+   *  Each adds its WHERE clause ONLY when sent, so a database without sql/041 still lists. */
+  routeDifficulty?: RouteDifficulty[];
+  season?: TrailSeason[];
+  shade?: TrailShade[];
   /** One row per distinct attached route — the origin ride. The "Browse tracks" picker sends
    *  this; "Find Rides" does not. */
   uniqueTracks?: boolean;
@@ -589,6 +690,24 @@ export async function selectPublicEvents(
              )
         ))`;
 
+  // sql/041 filters: appended as $17.. only when the caller sent them, so the statement does not
+  // reference columns a database without sql/041 lacks unless a rider actually filters on them.
+  const trailFilters: [string, string[] | undefined][] = [
+    ["route_difficulty", filters.routeDifficulty],
+    ["season", filters.season],
+    ["shade", filters.shade],
+  ];
+  const trailParams: string[][] = [];
+  let trailWhere = "";
+  for (const [column, values] of trailFilters) {
+    if (!values || values.length === 0) continue;
+    trailParams.push(values);
+    trailWhere += `
+        AND e.${column} = ANY($${16 + trailParams.length}::text[])`;
+  }
+  const limitParam = 17 + trailParams.length;
+  const offsetParam = limitParam + 1;
+
   const params = [
     filters.q ?? null,
     filters.type ?? null,
@@ -606,18 +725,8 @@ export async function selectPublicEvents(
     filters.uniqueTracks ?? null,
     filters.viewerId ?? null,
     filters.favoritesOnly ?? null,
+    ...trailParams,
   ];
-
-  // The reuse ("downloads") count for each row's attached route — its own lateral, kept out of
-  // the shared EVENT_SUMMARY_JOINS so a dev DB without sql/025's route_copies table cannot
-  // break the other list queries (they have no try/catch). A 42P01 here falls to the legacy
-  // path below.
-  const copySummaryJoin = `
-    LEFT JOIN LATERAL (
-      SELECT COUNT(*)::int AS download_count
-        FROM route_copies rc
-       WHERE rc.route_id = route_summary.route_id
-    ) copy_summary ON TRUE`;
 
   // Likes on the TRACK, and whether this viewer has already liked / bookmarked it. Its own
   // lateral for exactly the reason copy_summary has one: route_likes / route_favorites (sql/036)
@@ -627,9 +736,14 @@ export async function selectPublicEvents(
   // The viewer flags are NULL rather than false for a guest. "Nobody is signed in" and "signed
   // in and has not liked this" are different answers, and the card renders the button inert for
   // the first and unpressed for the second.
-  const likeSummaryJoin = `
+  const likeSummaryJoin = (withSeeds: boolean) => `
     LEFT JOIN LATERAL (
-      SELECT COUNT(*)::int AS like_count
+      SELECT (COUNT(*)${
+        withSeeds
+          ? ` + COALESCE((SELECT r1.imported_like_count FROM routes r1
+                            WHERE r1.id = route_summary.route_id), 0)`
+          : ""
+      })::int AS like_count
         FROM route_likes rl
        WHERE rl.route_id = route_summary.route_id
     ) like_summary ON TRUE
@@ -668,19 +782,33 @@ export async function selectPublicEvents(
     name_asc: "e.name ASC, e.id",
   }[filters.sort];
 
-  try {
-    const rows = await withThumbFallback((withThumb) =>
-      query<EventSummaryRow>(
-        `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
-                like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
-           FROM events e
-           ${eventSummaryJoins(withThumb)}
-           ${copySummaryJoin}
-           ${likeSummaryJoin}
-          WHERE ${where} ORDER BY ${orderBy} LIMIT $17 OFFSET $18`,
-        [...params, filters.limit, filters.offset],
-      ),
+  const runList = (withSeeds: boolean, withThumb: boolean) =>
+    query<EventSummaryRow>(
+      `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
+              like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
+         FROM events e
+         ${eventSummaryJoins(withThumb)}
+         ${copySummaryJoin(withSeeds)}
+         ${likeSummaryJoin(withSeeds)}
+        WHERE ${where}${trailWhere} ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+      [...params, filters.limit, filters.offset],
     );
+
+  try {
+    // Two independent, optional migrations are tolerated here — sql/043 (seeded counts) and
+    // sql/046 (the card preview). Each degrades ONLY its own feature instead of dropping every
+    // filter (the legacy path below), which is what any other missing column would do.
+    const rows = await withThumbFallback(async (withThumb) => {
+      try {
+        return await runList(true, withThumb);
+      } catch (err) {
+        if (!isMissingColumnError(err) || !/imported_(download|like)_count/.test(err.message ?? "")) {
+          throw err;
+        }
+        logger.warn({ err }, "routes.imported_*_count missing — run sql/043-route-imported-counts.sql");
+        return runList(false, withThumb);
+      }
+    });
     // The COUNT mirrors the SELECT's FROM: the distance / climb / dedup filters test
     // route_summary.*, so the count query needs the same lateral joins (LEFT ... ON TRUE keeps
     // one row per event, so COUNT(*) is still the number of matching events). It does NOT need
@@ -691,7 +819,7 @@ export async function selectPublicEvents(
       `SELECT COUNT(*)::text AS count
          FROM events e
          ${EVENT_SUMMARY_JOINS}
-        WHERE ${where}`,
+        WHERE ${where}${trailWhere}`,
       params,
     );
     return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
@@ -931,6 +1059,9 @@ export interface UpdateEventInput {
   autoCheckIn?: boolean;
   expectedParticipants?: number | null;
   terrainGrade?: number | null;
+  routeDifficulty?: Event["routeDifficulty"];
+  season?: Event["season"];
+  shade?: Event["shade"];
 }
 
 /**
@@ -1155,6 +1286,9 @@ export async function updateEventRidePlan(
     autoCheckIn?: boolean;
     expectedParticipants?: number | null;
     terrainGrade?: number | null;
+    routeDifficulty?: Event["routeDifficulty"];
+    season?: Event["season"];
+    shade?: Event["shade"];
   },
 ): Promise<void> {
   const columns: { column: string; value: unknown }[] = [];
@@ -1183,11 +1317,17 @@ export async function updateEventRidePlan(
   if (input.autoCheckIn !== undefined) {
     columns.push({ column: "auto_check_in", value: input.autoCheckIn });
   }
+  // sql/041 — mtb / gravel track descriptors. null clears, undefined leaves alone.
+  if (input.routeDifficulty !== undefined) {
+    columns.push({ column: "route_difficulty", value: input.routeDifficulty });
+  }
+  if (input.season !== undefined) columns.push({ column: "season", value: input.season });
+  if (input.shade !== undefined) columns.push({ column: "shade", value: input.shade });
 
   await updateEventColumns(
     eventId,
     columns,
-    "events ride-plan column missing — run sql/022-event-ride-plan.sql, sql/024-event-support-vehicle.sql, sql/028-events-expected-participants.sql and sql/038-event-terrain-grade.sql",
+    "events ride-plan column missing — run sql/022-event-ride-plan.sql, sql/024-event-support-vehicle.sql, sql/028-events-expected-participants.sql, sql/038-event-terrain-grade.sql, sql/040-auto-check-in.sql and sql/041-event-trail-metadata.sql",
   );
 }
 

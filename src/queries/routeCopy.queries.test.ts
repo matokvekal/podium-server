@@ -94,6 +94,24 @@ describe("selectRouteCopyCount", () => {
     expect(values).toEqual([42]);
   });
 
+  it("adds the imported starting count to the real rows", async () => {
+    queryOne.mockResolvedValue({ count: "45" });
+    expect(await selectRouteCopyCount(42)).toBe(45);
+    expect(queryOne.mock.calls[0][0]).toMatch(/imported_download_count/);
+  });
+
+  it("falls back to the real rows alone on a database without sql/043", async () => {
+    queryOne
+      .mockRejectedValueOnce(
+        Object.assign(new Error('column "imported_download_count" does not exist'), {
+          code: "42703",
+        }),
+      )
+      .mockResolvedValueOnce({ count: "1" });
+    expect(await selectRouteCopyCount(42)).toBe(1);
+    expect(queryOne.mock.calls[1][0]).not.toContain("imported_download_count");
+  });
+
   it("reads an untouched track as 0, not null", async () => {
     queryOne.mockResolvedValue(null);
     expect(await selectRouteCopyCount(42)).toBe(0);

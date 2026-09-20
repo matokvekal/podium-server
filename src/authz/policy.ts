@@ -4,7 +4,7 @@
 // context and returns booleans. No database, no imports from modules/, no awaits. That is what
 // makes the whole permission system readable in one sitting and testable without a server.
 //
-// The rule from AUTHORIZATION.md: nothing outside src/authz/ asks "is this user premium".
+// The rule from gilad/agents/server-source-of-truth.md: nothing outside src/authz/ asks "is this user premium".
 // Callers ask for a capability; this decides.
 
 import type { Event, EventStatus, EventVisibility } from "../db/types.js";

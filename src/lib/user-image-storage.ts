@@ -98,7 +98,7 @@ export async function deleteUpload(ref: UploadRef): Promise<void> {
   try {
     await rm(target, { force: true });
   } catch (err) {
-    // Deliberately not the path — see logging rules in TODO-install-server.md §11.
+    // Deliberately not the path — see logging rules in gilad/deployment.md (setup checklist, item 5).
     logger.warn({ err: (err as Error).message }, "could not remove a replaced user upload");
   }
 }

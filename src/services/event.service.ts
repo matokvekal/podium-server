@@ -15,6 +15,9 @@ import type {
   EventVisibility,
   RegistrationStatus,
   RiderLevel,
+  RouteDifficulty,
+  TrailSeason,
+  TrailShade,
 } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { datePrefix, letterSuffix } from "../lib/event-code.js";
@@ -280,6 +283,10 @@ export async function createEvent(
     expectedParticipants?: number | null;
     /** How technical the ground is, 1-5 (sql/038). Orthogonal to `level`. */
     terrainGrade?: number | null;
+    /** Track descriptors for mtb / gravel (sql/041). undefined = not set. */
+    routeDifficulty?: RouteDifficulty | null;
+    season?: TrailSeason | null;
+    shade?: TrailShade | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -357,7 +364,10 @@ export async function createEvent(
     input.hasSupportVehicle !== undefined ||
     input.autoCheckIn !== undefined ||
     input.expectedParticipants !== undefined ||
-    input.terrainGrade !== undefined
+    input.terrainGrade !== undefined ||
+    input.routeDifficulty !== undefined ||
+    input.season !== undefined ||
+    input.shade !== undefined
   ) {
     await updateEventRidePlan(event.id, {
       durationMin: input.durationMin,
@@ -367,6 +377,9 @@ export async function createEvent(
       autoCheckIn: input.autoCheckIn,
       expectedParticipants: input.expectedParticipants,
       terrainGrade: input.terrainGrade,
+      routeDifficulty: input.routeDifficulty,
+      season: input.season,
+      shade: input.shade,
     });
   }
 
@@ -409,14 +422,18 @@ export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "f
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
 
-export async function listMyEvents(userId: number, filter: EventsFilter): Promise<EventListItem[]> {
+export async function listMyEvents(
+  userId: number,
+  filter: EventsFilter,
+  options: { includePreview?: boolean } = {},
+): Promise<EventListItem[]> {
   // Asks a different question from "events I own or joined", so it gets its own query rather
   // than filtering that list down to nothing. Covers both people I follow and teams I am in —
   // a team's rides are meant to appear wherever a rider's rides normally do, so they do not
   // need a separate filter (and the client's team page deliberately shows no schedule).
   if (filter === "following") return selectUpcomingEventsForFollowed(userId);
 
-  const events = await selectEventsForUser(userId);
+  const events = await selectEventsForUser(userId, options);
   switch (filter) {
     case "mine":
       return events.filter((event) => event.ownerId === userId);
@@ -454,7 +471,7 @@ export function listPublicEventAreas(): Promise<string[]> {
 /**
  * @deprecated Superseded by the capability model in src/authz/. Kept only as the shape the
  * event controller still threads through; every actual decision now goes through
- * `canEvent()`. See AUTHORIZATION.md.
+ * `canEvent()`. See gilad/agents/server-source-of-truth.md.
  */
 export type ViewerTier = "owner" | "approved" | "pending" | "public" | "stranger";
 
@@ -573,7 +590,10 @@ export async function updateEventDetails(
     input.hasSupportVehicle !== undefined ||
     input.autoCheckIn !== undefined ||
     input.expectedParticipants !== undefined ||
-    input.terrainGrade !== undefined;
+    input.terrainGrade !== undefined ||
+    input.routeDifficulty !== undefined ||
+    input.season !== undefined ||
+    input.shade !== undefined;
   if (wroteRidePlan) {
     await updateEventRidePlan(eventId, {
       durationMin: input.durationMin,
@@ -583,6 +603,9 @@ export async function updateEventDetails(
       autoCheckIn: input.autoCheckIn,
       expectedParticipants: input.expectedParticipants,
       terrainGrade: input.terrainGrade,
+      routeDifficulty: input.routeDifficulty,
+      season: input.season,
+      shade: input.shade,
     });
   }
 
@@ -996,8 +1019,7 @@ export async function getLinkedRidesForViewer(
   // actually offer. Counting a finished sibling made the chip say "1 of 2" and the chooser then
   // show one ride — a discrepancy a rider reads as a bug in the link.
   return (await selectEventsByLinkGroup(event.linkGroupId)).filter(
-    (ride) =>
-      ride.id !== event.id && ride.status !== "cancelled" && ride.status !== "finished",
+    (ride) => ride.id !== event.id && ride.status !== "cancelled" && ride.status !== "finished",
   );
 }
 

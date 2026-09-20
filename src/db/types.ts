@@ -25,7 +25,7 @@ export const EVENT_STATUSES = [
 export type EventStatus = (typeof EVENT_STATUSES)[number];
 
 /**
- * Layer 5 of AUTHORIZATION.md — separate from roles and from plans.
+ * Layer 5 of gilad/agents/server-source-of-truth.md — separate from roles and from plans.
  *   public      anyone, including a signed-out guest
  *   registered  any signed-in user
  *   private     only someone with a participation row or an event role; 404 to everyone else
@@ -68,6 +68,23 @@ export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 /** One difficulty label for a whole ride — not per ride-group. */
 export const RIDER_LEVELS = ["beginner", "intermediate", "masters", "elite", "world_tour"] as const;
 export type RiderLevel = (typeof RIDER_LEVELS)[number];
+
+/** How hard the TRACK is (sql/041). Not events.level (rider pitch) and not terrain_grade (ground). */
+export const ROUTE_DIFFICULTIES = ["easy", "moderate", "hard", "challenging"] as const;
+export type RouteDifficulty = (typeof ROUTE_DIFFICULTIES)[number];
+
+/** When a track is pleasant to ride (sql/041). */
+export const TRAIL_SEASONS = [
+  "all_year",
+  "all_year_summer_ok",
+  "winter_spring",
+  "spring_autumn",
+] as const;
+export type TrailSeason = (typeof TRAIL_SEASONS)[number];
+
+/** How much of a track is shaded (sql/041). */
+export const TRAIL_SHADES = ["shaded", "partial", "exposed"] as const;
+export type TrailShade = (typeof TRAIL_SHADES)[number];
 
 export const ROUTE_TYPES = ["road", "gravel", "mtb", "mixed"] as const;
 export type RouteType = (typeof ROUTE_TYPES)[number];
@@ -210,6 +227,18 @@ export interface Event {
    * it. Reads as null on a database without sql/038.
    */
   terrainGrade: number | null;
+
+  /**
+   * How hard the TRACK is — easy | moderate | hard | challenging (sql/041). Orthogonal to both
+   * `level` (who the ride is pitched at) and `terrainGrade` (what is under the tyre). Collected
+   * for mtb / gravel; null on road and wherever not stated. Reads as null on a database without
+   * sql/041.
+   */
+  routeDifficulty: RouteDifficulty | null;
+  /** When the track is pleasant to ride (sql/041). null = not stated. */
+  season: TrailSeason | null;
+  /** How much of the track is shaded (sql/041). null = not stated. */
+  shade: TrailShade | null;
 
   /**
    * How many riders the organizer EXPECTS — a number they type on the create form, or null
