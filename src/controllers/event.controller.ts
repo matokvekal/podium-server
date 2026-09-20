@@ -209,14 +209,14 @@ export function toEventDetail(
     description: canSeeInfo ? event.description : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
      *  is waiting on the organizer, and the fields above are nulled for them on purpose.
-     *  @deprecated read `capabilities` instead — see AUTHORIZATION.md. */
+     *  @deprecated read `capabilities` instead — see gilad/agents/server-source-of-truth.md. */
     viewerTier: tier,
     /** @deprecated equivalent to capabilities including "event:view_details". */
     canViewEventInfo: canSeeInfo,
     /**
      * THE CONTRACT WITH THE CLIENT. What this caller may do with this ride, already decided.
      * The client hides what is not in this list and never re-derives a rule; when a rule
-     * changes, only the server changes. See AUTHORIZATION.md.
+     * changes, only the server changes. See gilad/agents/server-source-of-truth.md.
      */
     capabilities: view
       ? eventCapabilitiesFor(view.actor, view.context, EVENT_CAPABILITIES)

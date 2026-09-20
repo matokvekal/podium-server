@@ -528,7 +528,7 @@ export async function countEventsCreatedSince(ownerId: number, since: Date): Pro
 }
 
 /**
- * Layer 3 of AUTHORIZATION.md. Idempotent, because event creation may be retried and a
+ * Layer 3 of gilad/agents/server-source-of-truth.md. Idempotent, because event creation may be retried and a
  * duplicate member row would be a unique-index violation rather than a no-op.
  */
 export async function insertEventMember(

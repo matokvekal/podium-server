@@ -471,7 +471,7 @@ export function listPublicEventAreas(): Promise<string[]> {
 /**
  * @deprecated Superseded by the capability model in src/authz/. Kept only as the shape the
  * event controller still threads through; every actual decision now goes through
- * `canEvent()`. See AUTHORIZATION.md.
+ * `canEvent()`. See gilad/agents/server-source-of-truth.md.
  */
 export type ViewerTier = "owner" | "approved" | "pending" | "public" | "stranger";
 

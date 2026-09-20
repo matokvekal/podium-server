@@ -185,7 +185,7 @@ export async function attachLibraryRouteToEvent(
  *
  * This is an attach, not a copy: the source ride's own track row is linked to the new ride. One
  * row of geometry, shared, so a fix to the original reaches every ride built on it — the rule
- * ELNINO_AGENT_SOURCE_OF_TRUTH_SHORT.md has stated all along. Until this existed the client did
+ * gilad/agents/server-source-of-truth.md has stated all along. Until this existed the client did
  * the copy itself, by re-POSTing the geometry it had just fetched, which FORKED a second routes
  * row: the two rides then shared nothing, and the original had no way to know it had been used.
  *

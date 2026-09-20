@@ -25,7 +25,7 @@ export const EVENT_STATUSES = [
 export type EventStatus = (typeof EVENT_STATUSES)[number];
 
 /**
- * Layer 5 of AUTHORIZATION.md — separate from roles and from plans.
+ * Layer 5 of gilad/agents/server-source-of-truth.md — separate from roles and from plans.
  *   public      anyone, including a signed-out guest
  *   registered  any signed-in user
  *   private     only someone with a participation row or an event role; 404 to everyone else
