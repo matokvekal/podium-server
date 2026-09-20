@@ -61,6 +61,21 @@ export const setAttendanceSchema = z.object({
   status: z.enum(ATTENDANCE_STATUSES),
 });
 
+/**
+ * The rider's own GPS fix for POST .../participants/me/check-in. Only the fix — never a claim
+ * about being near the start, a status, or a participant id: the server works out who the
+ * caller is from the token and decides everything else itself.
+ *
+ * `accuracy` is the fix's own error radius in metres (GeolocationCoordinates.accuracy). Optional,
+ * because not every device reports one; when present it is what stops a coarse, network-derived
+ * position from proving anything about a 100 m radius.
+ */
+export const autoCheckInSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracy: z.number().nonnegative().max(1_000_000).optional(),
+});
+
 export const setResultSchema = z.object({
   status: z.enum(RESULT_STATUSES),
   /** Omitted on a "finished" call means "now" — the organizer is tapping as riders arrive. */

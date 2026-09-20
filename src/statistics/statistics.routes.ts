@@ -7,9 +7,16 @@
 
 import { Router } from "express";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { getLeaderboardController, getMyStatisticsController } from "./statistics.controller.js";
+import {
+  getLeaderboardController,
+  getMyStatisticsController,
+  getPeriodTimelineController,
+} from "./statistics.controller.js";
 
 export const statisticsRouter = Router();
+
+// GET /api/v1/statistics/periods?type=month|year&from=
+statisticsRouter.get("/periods", requireAuth, getPeriodTimelineController);
 
 // GET /api/v1/statistics/me
 statisticsRouter.get("/me", requireAuth, getMyStatisticsController);

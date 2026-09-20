@@ -185,6 +185,11 @@ export const createEventSchema = z.object({
   // false. Never nullable: unlike duration there is no third state worth keeping.
   hasSupportVehicle: z.boolean().optional(),
 
+  // Auto check-in at the start — see sql/040-auto-check-in.sql. Omitted leaves the column default
+  // (on) on create and leaves the stored value alone on edit. Only the on/off choice is per ride:
+  // the radius and time window are server config (config/auto-check-in.ts).
+  autoCheckIn: z.boolean().optional(),
+
   // How many riders the organizer expects — see sql/028-events-expected-participants.sql. `null`
   // (or omitted) means "not stated"; a positive number sets it. NOT a capacity — the plan limit
   // is the real ceiling and is never sent to viewers.
@@ -235,6 +240,9 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
   hasSupportVehicle: z.boolean().optional(),
+
+  // See createEventSchema. Omitted leaves it untouched; false turns auto check-in off.
+  autoCheckIn: z.boolean().optional(),
 
   // See createEventSchema. `null` clears it; omitted leaves it untouched.
   expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),

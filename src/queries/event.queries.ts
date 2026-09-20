@@ -53,6 +53,7 @@ interface EventRow {
   is_accessible: boolean;
   terrain_grade?: number | null;
   has_support_vehicle: boolean;
+  auto_check_in?: boolean;
   expected_participants: number | null;
   copied_from_event_id: string | null;
   copied_from_route_id: number | null;
@@ -81,6 +82,8 @@ interface EventParticipantRow {
   group_id: number | null;
   registration_status: EventParticipant["registrationStatus"];
   attendance_status: EventParticipant["attendanceStatus"];
+  // Absent on a database without sql/040 — mapParticipant reads that as null.
+  attendance_source?: EventParticipant["attendanceSource"];
   result_status: EventParticipant["resultStatus"];
   finished_at: Date | null;
   finish_position: number | null;
@@ -157,6 +160,9 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/024 — reads as false, i.e. "no support vehicle
     // stated", which is the same thing the column itself backfills every existing ride to.
     hasSupportVehicle: row.has_support_vehicle ?? false,
+    // undefined on a database without sql/040 — reads as false: auto check-in is OFF there, since
+    // the column that says which rides opted in (and defaults to on) does not exist yet.
+    autoCheckIn: row.auto_check_in ?? false,
     // undefined on a database without sql/028 — reads as null, i.e. "the organizer stated no
     // expected number", exactly what a blank field means.
     expectedParticipants: row.expected_participants ?? null,
@@ -300,6 +306,7 @@ export function mapParticipant(row: EventParticipantRow): EventParticipant {
     groupId: row.group_id,
     registrationStatus: row.registration_status,
     attendanceStatus: row.attendance_status,
+    attendanceSource: row.attendance_source ?? null,
     resultStatus: row.result_status,
     finishedAt: row.finished_at,
     finishPosition: row.finish_position,
@@ -459,7 +466,7 @@ export interface PublicEventFilters {
   offset: number;
 }
 
-function isMissingColumnError(err: unknown): err is { code: string; message?: string } {
+export function isMissingColumnError(err: unknown): err is { code: string; message?: string } {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42703";
 }
 
@@ -884,6 +891,7 @@ export interface UpdateEventInput {
   restStops?: number | null;
   isAccessible?: boolean;
   hasSupportVehicle?: boolean;
+  autoCheckIn?: boolean;
   expectedParticipants?: number | null;
   terrainGrade?: number | null;
 }
@@ -1107,6 +1115,7 @@ export async function updateEventRidePlan(
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
+    autoCheckIn?: boolean;
     expectedParticipants?: number | null;
     terrainGrade?: number | null;
   },
@@ -1132,6 +1141,10 @@ export async function updateEventRidePlan(
   // just the grade is skipped. A separate writer would have been a second round trip for no gain.
   if (input.terrainGrade !== undefined) {
     columns.push({ column: "terrain_grade", value: input.terrainGrade });
+  }
+  // Same reasoning: sql/040 not having run skips only this column, never the rest of the plan.
+  if (input.autoCheckIn !== undefined) {
+    columns.push({ column: "auto_check_in", value: input.autoCheckIn });
   }
 
   await updateEventColumns(
@@ -1303,6 +1316,57 @@ export async function updateEventStatus(
     [eventId, status, isActive, finishedAt],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
+}
+
+/** Statuses an event can still be in while its ride is in the past. Mirrors ONGOING_STATUSES in
+ *  event.service.ts (computeEffectiveStatus) — drafts and cancelled rides are never "rides". */
+export const AUTO_FINISHABLE_STATUSES = ["published", "registration_open", "ready", "live"];
+
+export interface AutoFinishCandidate {
+  id: string;
+  status: EventStatus;
+  /** When the ride actually ended (or, with no end time, started) — becomes finished_at. */
+  rideEndedAt: Date;
+}
+
+/**
+ * Rides whose end time (or start time, when no end was set) is more than `graceHours` ago and
+ * that nobody ever finished. Oldest first, bounded, so the first sweep after this ships works
+ * through a backlog of old rides in batches instead of one enormous burst.
+ */
+export async function selectEventsDueForAutoFinish(
+  graceHours: number,
+  limit: number,
+): Promise<AutoFinishCandidate[]> {
+  const rows = await query<{ id: string; status: EventStatus; ride_ended_at: Date }>(
+    `SELECT id, status, COALESCE(ends_at, starts_at) AS ride_ended_at
+       FROM events
+      WHERE status = ANY($1::text[])
+        AND COALESCE(ends_at, starts_at) < NOW() - make_interval(hours => $2)
+      ORDER BY COALESCE(ends_at, starts_at) ASC
+      LIMIT $3`,
+    [AUTO_FINISHABLE_STATUSES, graceHours, limit],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    rideEndedAt: row.ride_ended_at,
+  }));
+}
+
+/**
+ * Finish one ride on the sweeper's behalf. The status guard makes it race-safe: if the organizer
+ * finished (or cancelled) it between the SELECT and now, no row matches and this returns false,
+ * so the caller skips the finish hook instead of running it twice.
+ */
+export async function autoFinishEvent(eventId: string, finishedAt: Date): Promise<boolean> {
+  const affected = await execute(
+    `UPDATE events
+        SET status = 'finished', is_active = FALSE, finished_at = $2, updated_at = NOW()
+      WHERE id = $1 AND status = ANY($3::text[])`,
+    [eventId, finishedAt, AUTO_FINISHABLE_STATUSES],
+  );
+  return affected > 0;
 }
 
 /** Codes already handed out for a given DDMMYYYY prefix, so the next suffix can be picked. */

@@ -106,6 +106,10 @@ function toEventSummary(event: Event | EventListItem) {
     // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
     // wants to see which rides have a vehicle behind them without opening each one.
     hasSupportVehicle: event.hasSupportVehicle ?? false,
+    // On the SUMMARY because the app decides from My Rides — before any detail is opened —
+    // whether it is worth asking for a GPS fix when a ride is about to start (sql/040). The
+    // radius and time window are server config and are deliberately not sent.
+    autoCheckIn: event.autoCheckIn ?? false,
     // The organizer's expected head-count, or null when they left it blank. On the SUMMARY so a
     // card can show "12 / 40" without a detail call. NOT the capacity — the plan's
     // participants-per-event ceiling is never serialised to a viewer.
@@ -284,6 +288,8 @@ export function toEventDetail(
           id: myParticipant.id,
           registrationStatus: myParticipant.registrationStatus,
           attendanceStatus: myParticipant.attendanceStatus,
+          // 'auto' | 'manual' | null — lets a rider's own screen say how they were checked in.
+          attendanceSource: myParticipant.attendanceSource ?? null,
         }
       : null,
     /**

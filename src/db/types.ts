@@ -48,6 +48,15 @@ export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 export const ATTENDANCE_STATUSES = ["unknown", "present", "dns", "started"] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
+/**
+ * Who last wrote attendance_status — see sql/040-auto-check-in.sql. Separate from the status
+ * itself on purpose: `present` still means present everywhere, and only the two places that
+ * want to SHOW the difference read this. `null` = nobody has written it since the column
+ * existed, which reads as a manual arrival.
+ */
+export const ATTENDANCE_SOURCES = ["manual", "auto"] as const;
+export type AttendanceSource = (typeof ATTENDANCE_SOURCES)[number];
+
 export const RESULT_STATUSES = ["none", "finished", "dnf", "stopped", "unknown"] as const;
 export type ResultStatus = (typeof RESULT_STATUSES)[number];
 
@@ -219,6 +228,14 @@ export interface Event {
   hasSupportVehicle: boolean;
 
   /**
+   * Riders on the start list are marked arrived automatically when their own GPS is near the
+   * route start inside a window around the start time — see sql/040-auto-check-in.sql. The radius
+   * and window are server config (config/auto-check-in.ts), not stored per ride. Reads as false
+   * on a database without sql/040, i.e. the feature is simply off there.
+   */
+  autoCheckIn: boolean;
+
+  /**
    * Where this ride's track came from — see sql/025-track-copy-lineage.sql.
    *
    * Copied from another ride: both set. Picked from Find Tracks: only the route id, because
@@ -281,6 +298,9 @@ export interface EventParticipant {
   // THREE INDEPENDENT AXES — do not merge. See plan/02-database-schema.md.
   registrationStatus: RegistrationStatus;
   attendanceStatus: AttendanceStatus;
+  /** How attendanceStatus was last written — 'auto' is the one the client shows differently.
+   *  null on every row from before sql/040 and on a database without it. */
+  attendanceSource: AttendanceSource | null;
   resultStatus: ResultStatus;
 
   finishedAt: Date | null;

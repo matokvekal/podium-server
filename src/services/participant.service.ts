@@ -4,21 +4,28 @@
 
 import { buildActor } from "../authz/actor.js";
 import { hasRoomForParticipants } from "../authz/participant-capacity.js";
+import { AUTO_CHECK_IN } from "../config/auto-check-in.js";
 import type { AttendanceStatus, EventParticipant, ResultStatus } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
+import { type AutoCheckInDecision, evaluateAutoCheckIn } from "../lib/auto-check-in.js";
+import type { LatLng } from "../lib/geo.js";
 import { logger } from "../lib/logger.js";
 import { countJoinedParticipants } from "../queries/event.queries.js";
 import {
   deleteParticipant as deleteParticipantRow,
   insertManualParticipant,
   insertManualParticipants,
+  markArrivedAutomatically,
+  selectEventStartPoint,
   selectParticipantByIdForEvent,
+  selectParticipantForEventUser,
   selectParticipantsForEvent,
   updateAttendanceStatus,
   updateParticipant as updateParticipantRow,
   updateRegistrationStatus,
   updateResult,
 } from "../queries/participant.queries.js";
+import { refreshStatsAfterAttendanceChange } from "../statistics/statistics.service.js";
 import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
 
 /**
@@ -80,9 +87,10 @@ async function assertRoomForRiders(
   }
 }
 
-async function assertOwnerOf(eventId: string, userId: number): Promise<void> {
+async function assertOwnerOf(eventId: string, userId: number) {
   const { event } = await getEventForViewer(eventId, userId);
   assertOwner(event, userId);
+  return event;
 }
 
 export async function addParticipant(
@@ -221,11 +229,112 @@ export async function setAttendance(
   participantId: number,
   status: AttendanceStatus,
 ): Promise<EventParticipant> {
-  await assertOwnerOf(eventId, userId);
+  const event = await assertOwnerOf(eventId, userId);
   const updated = await updateAttendanceStatus(participantId, eventId, status);
   if (!updated) throw new ApiError(404, "Participant not found for this event");
   logger.info({ eventId, userId, participantId, status }, "attendance status changed");
+  // A tick or un-tick after the ride finished changes whether it counts for that rider (only
+  // while stats_require_live_checkin is on — the statistics side decides). Before the finish
+  // nothing is needed: the finish hook computes everything from scratch.
+  if (event.status === "finished" && updated.userId !== null) {
+    await refreshStatsAfterAttendanceChange(eventId, updated.userId);
+  }
   return updated;
+}
+
+/**
+ * What an auto check-in attempt came to. The geometry/time outcomes come from evaluateAutoCheckIn
+ * (lib/auto-check-in.ts); the rest are about the rider's own row and are decided before any
+ * position is looked at.
+ *
+ *   arrived            this call marked the rider
+ *   already_recorded   attendance was already something other than `unknown` — nothing to do
+ *   organizer_decided  an organizer un-ticked this rider; the app must not tick them back
+ *   not_approved       still waiting for approval, rejected, or has left the ride
+ *
+ * Returned as data, not thrown: "not there yet" is the NORMAL answer for most attempts, and
+ * a 4xx for it would put an error in every rider's console each time the app opens early.
+ */
+export type AutoCheckInOutcome =
+  | AutoCheckInDecision
+  | "already_recorded"
+  | "organizer_decided"
+  | "not_approved";
+
+export interface AutoCheckInAttempt {
+  outcome: AutoCheckInOutcome;
+  /** Metres from the start point, when one was measured. */
+  distanceM: number | null;
+  participant: EventParticipant;
+}
+
+/**
+ * The rider's own "I am here" — sets attendance to present, attendance_source to 'auto'.
+ *
+ * SERVER IS THE AUTHORITY. The client decides only WHEN to ask for a GPS fix (so it does not
+ * prompt for location a week before a ride); every rule — the switch, the time window, the
+ * distance, the accuracy — is checked here against config/auto-check-in.ts, and nothing the
+ * client claims about itself except the fix is believed. A fix can of course be spoofed by
+ * someone determined to; the organizer's manual override is the answer to that, not more
+ * client code.
+ *
+ * Only an approved (or `registered`) rider on the start list may check in: the same tier that
+ * gets the route and live map, and deliberately not "anyone who can see the ride".
+ */
+export async function autoCheckIn(
+  eventId: string,
+  userId: number,
+  fix: { position: LatLng; accuracyM?: number },
+): Promise<AutoCheckInAttempt> {
+  const { event } = await getEventForViewer(eventId, userId);
+
+  const participant = await selectParticipantForEventUser(eventId, userId);
+  if (!participant) {
+    throw new ApiError(403, "Only a rider on this ride's start list can check in");
+  }
+  const approved =
+    participant.registrationStatus === "approved" ||
+    participant.registrationStatus === "registered";
+  if (!approved || participant.leftAt !== null) {
+    return { outcome: "not_approved", distanceM: null, participant };
+  }
+
+  // Nothing to prove if attendance is already on record, and no reason to read the route.
+  if (participant.attendanceStatus !== "unknown") {
+    return { outcome: "already_recorded", distanceM: null, participant };
+  }
+  // `unknown` with a source is an organizer's un-tick (updateAttendanceStatus stamps 'manual').
+  if (participant.attendanceSource !== null) {
+    return { outcome: "organizer_decided", distanceM: null, participant };
+  }
+
+  const { decision, distanceM } = evaluateAutoCheckIn(
+    {
+      autoCheckIn: event.autoCheckIn,
+      status: event.status,
+      startsAt: event.startsAt,
+      // No route read for a ride that has the feature switched off.
+      startPoint: event.autoCheckIn ? await selectEventStartPoint(eventId) : null,
+      now: new Date(),
+      position: fix.position,
+      accuracyM: fix.accuracyM,
+    },
+    AUTO_CHECK_IN,
+  );
+  if (decision !== "arrived") return { outcome: decision, distanceM, participant };
+
+  const updated = await markArrivedAutomatically(participant.id, eventId);
+  if (!updated) {
+    // The guard held: an organizer (or a second request of ours) wrote attendance between the
+    // read above and this write. Report what is on record now rather than claiming we did it.
+    const current = (await selectParticipantForEventUser(eventId, userId)) ?? participant;
+    return { outcome: "already_recorded", distanceM, participant: current };
+  }
+  logger.info(
+    { eventId, userId, participantId: participant.id, distanceM },
+    "rider checked in automatically",
+  );
+  return { outcome: "arrived", distanceM, participant: updated };
 }
 
 /**

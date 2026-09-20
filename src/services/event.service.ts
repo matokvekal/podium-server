@@ -275,6 +275,8 @@ export async function createEvent(
     restStops?: number | null;
     isAccessible?: boolean;
     hasSupportVehicle?: boolean;
+    /** Auto check-in at the start (sql/040). undefined = the column default, which is on. */
+    autoCheckIn?: boolean;
     expectedParticipants?: number | null;
     /** How technical the ground is, 1-5 (sql/038). Orthogonal to `level`. */
     terrainGrade?: number | null;
@@ -353,6 +355,7 @@ export async function createEvent(
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
     input.hasSupportVehicle !== undefined ||
+    input.autoCheckIn !== undefined ||
     input.expectedParticipants !== undefined ||
     input.terrainGrade !== undefined
   ) {
@@ -361,6 +364,7 @@ export async function createEvent(
       restStops: input.restStops,
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
+      autoCheckIn: input.autoCheckIn,
       expectedParticipants: input.expectedParticipants,
       terrainGrade: input.terrainGrade,
     });
@@ -567,6 +571,7 @@ export async function updateEventDetails(
     input.restStops !== undefined ||
     input.isAccessible !== undefined ||
     input.hasSupportVehicle !== undefined ||
+    input.autoCheckIn !== undefined ||
     input.expectedParticipants !== undefined ||
     input.terrainGrade !== undefined;
   if (wroteRidePlan) {
@@ -575,6 +580,7 @@ export async function updateEventDetails(
       restStops: input.restStops,
       isAccessible: input.isAccessible,
       hasSupportVehicle: input.hasSupportVehicle,
+      autoCheckIn: input.autoCheckIn,
       expectedParticipants: input.expectedParticipants,
       terrainGrade: input.terrainGrade,
     });
