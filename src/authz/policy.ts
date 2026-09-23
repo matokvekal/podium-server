@@ -173,6 +173,13 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
       // Co-organizers are a Club-tier feature, and only the owner may appoint them.
       return ctx.role === "owner" && actor.entitlements.features.has("co_organizers");
 
+    case "event:chat":
+      // The ride's chat is for the people ON the ride: its organizers and its approved riders.
+      // Not a pending rider (not in yet) and not a stranger browsing a public ride. Not tied to
+      // status, so a finished ride's chat stays readable from History.
+      // rideChat.queries.ts selectUnreadSummary repeats this rule in SQL — change both.
+      return isStaff(ctx) || isRiding(ctx);
+
     default: {
       // Exhaustiveness: adding a capability without a rule fails to compile rather than
       // silently defaulting to allowed.

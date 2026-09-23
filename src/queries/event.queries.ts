@@ -597,6 +597,9 @@ export interface PublicEventFilters {
   /** Only tracks this viewer has bookmarked. Ignored without `viewerId` — a guest asking for
    *  their favourites gets the whole list rather than a 401, so the page still loads. */
   favoritesOnly?: boolean;
+  /** Only rows riding this track (routes.id) — what a shared /mtb/<trackId> link opens. Like
+   *  the sql/041 filters it is appended only when sent, so every other list is unchanged. */
+  routeId?: number;
   sort: PublicEventSort;
   limit: number;
   offset: number;
@@ -697,13 +700,19 @@ export async function selectPublicEvents(
     ["season", filters.season],
     ["shade", filters.shade],
   ];
-  const trailParams: string[][] = [];
+  const trailParams: (string[] | number)[] = [];
   let trailWhere = "";
   for (const [column, values] of trailFilters) {
     if (!values || values.length === 0) continue;
     trailParams.push(values);
     trailWhere += `
         AND e.${column} = ANY($${16 + trailParams.length}::text[])`;
+  }
+  // One track by id — the share link. Same append-only-when-sent rule as the trail filters.
+  if (filters.routeId !== undefined) {
+    trailParams.push(filters.routeId);
+    trailWhere += `
+        AND route_summary.route_id = $${16 + trailParams.length}::bigint`;
   }
   const limitParam = 17 + trailParams.length;
   const offsetParam = limitParam + 1;

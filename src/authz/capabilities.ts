@@ -44,6 +44,12 @@ export const EVENT_CAPABILITIES = [
   "event:manage_link_group",
   /** Add or remove co-organizers. The Club tier's "multiple admins". */
   "event:manage_members",
+  /**
+   * Read and write this ride's shared chat (sql/047). The ride's organizers and its approved
+   * riders — the people actually on the ride. Stays true after the ride finishes, so History
+   * can still open it.
+   */
+  "event:chat",
 ] as const;
 
 export const TEAM_CAPABILITIES = [

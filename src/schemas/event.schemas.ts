@@ -396,6 +396,8 @@ export const publicEventsQuerySchema = z.object({
   routeDifficulty: csvEnum(ROUTE_DIFFICULTIES),
   season: csvEnum(TRAIL_SEASONS),
   shade: csvEnum(TRAIL_SHADES),
+  /** One track (routes.id) — a shared /mtb/<trackId> link opens exactly this track. */
+  routeId: z.coerce.number().int().positive().optional(),
   /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration/
    *  downloads/likes orders sink a NULL metric to the bottom and tie-break on created_at
    *  DESC, id. */

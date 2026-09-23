@@ -105,3 +105,27 @@ describe("selectPublicEvents — trail filters", () => {
     expect(countParams[16]).toEqual(["all_year"]);
   });
 });
+
+describe("selectPublicEvents — one track by id (share link)", () => {
+  const base = { sort: "newest" as const, limit: 1, offset: 0 };
+
+  it("adds no route-id clause when none is sent", async () => {
+    await selectPublicEvents(base);
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).not.toContain("route_summary.route_id = $");
+  });
+
+  it("binds routeId after the trail filters, in both the page and the COUNT", async () => {
+    await selectPublicEvents({ ...base, shade: ["shaded"], routeId: 42 });
+
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("e.shade = ANY($17::text[])");
+    expect(sql).toContain("route_summary.route_id = $18::bigint");
+    expect(sql).toContain("LIMIT $19 OFFSET $20");
+    expect(params.slice(16)).toEqual([["shaded"], 42, 1, 0]);
+
+    const [countSql, countParams] = queryOne.mock.calls[0] as [string, unknown[]];
+    expect(countSql).toContain("route_summary.route_id = $18::bigint");
+    expect(countParams[17]).toBe(42);
+  });
+});
