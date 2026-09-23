@@ -103,6 +103,11 @@ function toEventSummary(event: Event | EventListItem) {
     // client's (mtb S1-S5, gravel G1-G5); the number is all the API commits to.
     // null = not stated, and a card shows a dash rather than inventing a 1.
     terrainGrade: event.terrainGrade ?? null,
+    // How hard the TRACK is, when it is pleasant, and how shaded (sql/041). On the SUMMARY so
+    // Find Tracks cards and filters need no detail call. null = not stated (every road ride).
+    routeDifficulty: event.routeDifficulty ?? null,
+    season: event.season ?? null,
+    shade: event.shade ?? null,
     // On the SUMMARY too, for the same reason as isAccessible: a rider scanning Find Rides
     // wants to see which rides have a vehicle behind them without opening each one.
     hasSupportVehicle: event.hasSupportVehicle ?? false,
@@ -144,10 +149,12 @@ function toEventSummary(event: Event | EventListItem) {
     likedByMe: summary.likedByMe ?? null,
     favoritedByMe: summary.favoritedByMe ?? null,
     // The attached route's 60-point card preview { points, elevations? } (routes.thumb_points,
-    // sql/046): what a Find Tracks card draws its map and climb profile from, so the card never
-    // makes a geometry request of its own. Present (possibly null = no drawable route) on
-    // GET /events/public rows only; absent on every other list and on the detail payload, which
-    // carries `route` instead. The detailed line stays GET /events/:id/route.
+    // sql/046): what a Find Tracks / My Rides card draws its map and climb profile from, so the
+    // card never makes a geometry request of its own. Present (possibly null = no drawable
+    // route) on every GET /events/public row and on GET /events rows only when the caller sent
+    // ?includePreview=true; absent otherwise, and on the detail payload, which carries `route`
+    // instead. The detailed line stays GET /events/:id/route and the original file
+    // GET /routes/:id/gpx.
     ...("preview" in summary ? { preview: summary.preview ?? null } : {}),
   };
 }
@@ -202,14 +209,14 @@ export function toEventDetail(
     description: canSeeInfo ? event.description : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
      *  is waiting on the organizer, and the fields above are nulled for them on purpose.
-     *  @deprecated read `capabilities` instead — see AUTHORIZATION.md. */
+     *  @deprecated read `capabilities` instead — see gilad/agents/server-source-of-truth.md. */
     viewerTier: tier,
     /** @deprecated equivalent to capabilities including "event:view_details". */
     canViewEventInfo: canSeeInfo,
     /**
      * THE CONTRACT WITH THE CLIENT. What this caller may do with this ride, already decided.
      * The client hides what is not in this list and never re-derives a rule; when a rule
-     * changes, only the server changes. See AUTHORIZATION.md.
+     * changes, only the server changes. See gilad/agents/server-source-of-truth.md.
      */
     capabilities: view
       ? eventCapabilitiesFor(view.actor, view.context, EVENT_CAPABILITIES)
@@ -660,9 +667,13 @@ export async function createEventController(req: Request, res: Response, next: N
 // GET /api/v1/events
 export async function listEventsController(req: Request, res: Response, next: NextFunction) {
   try {
-    const { filter } = listEventsQuerySchema.parse(req.query);
-    traceLog("event.controller.listEventsController", { userId: req.auth!.userId, filter });
-    const events = await listMyEvents(req.auth!.userId, filter);
+    const { filter, includePreview } = listEventsQuerySchema.parse(req.query);
+    traceLog("event.controller.listEventsController", {
+      userId: req.auth!.userId,
+      filter,
+      includePreview,
+    });
+    const events = await listMyEvents(req.auth!.userId, filter, { includePreview });
     res.status(200).json({ data: events.map(toEventSummary) });
   } catch (err) {
     next(err);

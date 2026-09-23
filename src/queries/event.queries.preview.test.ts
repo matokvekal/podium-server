@@ -112,8 +112,9 @@ describe("selectPublicEvents — preview", () => {
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls[1][0]).not.toContain("thumb_points");
     expect(events).toHaveLength(1);
-    // No thumb column selected, so no preview key at all — the card draws no line, and nothing breaks.
-    expect(events[0]).not.toHaveProperty("preview");
+    // No preview column was selected, so the row carries no `preview` key at all — the same
+    // payload as a list that never asked. The client draws no line for absent or null alike.
+    expect(events[0].preview).toBeUndefined();
     expect(total).toBe(1);
   });
 
@@ -123,13 +124,40 @@ describe("selectPublicEvents — preview", () => {
   });
 });
 
-describe("selectEventsForUser — GET /events is unchanged", () => {
-  it("does not select the preview and adds no `preview` key, so its payload stays as it was", async () => {
+describe("selectEventsForUser — My Rides carries the same preview when asked", () => {
+  it("leaves the plain list exactly as it was — no preview column, no preview key", async () => {
     query.mockResolvedValue([row()]);
     const events = await selectEventsForUser(1);
-    const sql = query.mock.calls[0][0] as string;
-    expect(sql).not.toContain("thumb");
-    expect(sql).not.toContain("preview_points");
-    expect(events[0]).not.toHaveProperty("preview");
+    expect(query.mock.calls[0][0]).not.toContain("thumb_source");
+    expect(events[0].preview).toBeUndefined();
+  });
+
+  it("selects the preview lateral and maps it (includePreview)", async () => {
+    query.mockResolvedValue([
+      row({
+        thumb_source: {
+          p: [
+            [1, 2],
+            [3, 4],
+          ],
+        },
+      }),
+    ]);
+    const events = await selectEventsForUser(1, { includePreview: true });
+    expect(query.mock.calls[0][0]).toContain("route_summary.thumb_source AS thumb_source");
+    expect(events[0].preview).toEqual({
+      points: [
+        [1, 2],
+        [3, 4],
+      ],
+    });
+  });
+
+  it("falls back cleanly before sql/046", async () => {
+    query.mockRejectedValueOnce(missingThumb).mockResolvedValueOnce([row()]);
+    const events = await selectEventsForUser(1, { includePreview: true });
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1][0]).not.toContain("thumb_points");
+    expect(events[0].preview).toBeUndefined();
   });
 });

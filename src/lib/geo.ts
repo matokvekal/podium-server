@@ -82,7 +82,8 @@ export function computeBbox(points: readonly LatLng[]): Bbox | null {
  * points are kept. Each split spends a point where the line deviates most, so a switchback
  * section keeps many and a straight fire road keeps two — unlike simplifyByStride, which spends
  * them evenly and cuts every corner. A count target (not a tolerance) is what a fixed-size
- * card preview needs.
+ * card preview needs; lib/mtb-import/simplify.ts is the tolerance-driven sibling that builds
+ * the stored display line.
  *
  * Distances are measured on a local flat projection (longitude scaled by cos(latitude)), which
  * is exact enough for one ride's extent. Iterative, so a 30,000-point trace cannot overflow the

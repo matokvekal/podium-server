@@ -9,6 +9,7 @@
 
 import { Router } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
+import { RIDE_CHAT_SENDS_PER_MINUTE } from "../config/ride-chat.js";
 import {
   cancelEventController,
   changeEventStatusController,
@@ -41,6 +42,11 @@ import {
   getResultsController,
   getTracksController,
 } from "../controllers/result.controller.js";
+import {
+  listRideChatController,
+  rideChatUnreadController,
+  sendRideChatController,
+} from "../controllers/rideChat.controller.js";
 import { linkEventTeamController } from "../controllers/team.controller.js";
 import { deduplicateClientAction } from "../middleware/clientActions.js";
 import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
@@ -83,6 +89,19 @@ const liveLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) =>
     req.auth?.userId ? `user:${req.auth.userId}` : `ip:${ipKeyGenerator(req.ip ?? "")}`,
+});
+
+/**
+ * Ride chat sends, per signed-in rider. A small guard against a stuck retry loop or a
+ * held-down Enter key — not moderation. Reads are not limited here: an open chat polls once
+ * every ~30 s, and the unread badge refresh is one request per ~5 min for the whole list.
+ */
+const rideChatSendLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: RIDE_CHAT_SENDS_PER_MINUTE,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${req.auth?.userId ?? "unauthenticated"}`,
 });
 
 // ---- the three frozen Android-transmitter endpoints ---------------------------------------
@@ -153,6 +172,19 @@ eventRouter.get("/share/:codes", optionalAuth, getSharedRidesController);
 // A link that lost its codes. Registered so it says so, instead of falling through to
 // "/:eventId" and being rejected as a malformed event id nobody asked about.
 eventRouter.get("/share", optionalAuth, getSharedRidesIndexController);
+
+// ---- ride chat (sql/047) --------------------------------------------------------------------
+
+// GET /api/v1/events/chat/unread?rides=<rideId>:<lastReadId>,...
+// Unread badges for a whole ride list in ONE request (never one per card). Two segments, so
+// "/:eventId" can never match it.
+eventRouter.get("/chat/unread", requireAuth, rideChatUnreadController);
+
+// GET /api/v1/events/:eventId/chat[?afterId=N]   — history, or only newer messages (polling)
+// POST /api/v1/events/:eventId/chat   { text }  — send; identity/name/time are server-side
+// Both authorised by policy.ts "event:chat" in rideChat.service.ts.
+eventRouter.get("/:eventId/chat", requireAuth, listRideChatController);
+eventRouter.post("/:eventId/chat", requireAuth, rideChatSendLimiter, sendRideChatController);
 
 // GET /api/v1/events/:eventId
 // Optional auth, not required: a public event is viewable by a stranger, same as its card on

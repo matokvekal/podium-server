@@ -16,6 +16,7 @@
 // that re-saves ten times still counts once.
 
 import { query, queryOne } from "../db/pool.js";
+import { withImportedCounts } from "./importedCounts.js";
 
 export interface RouteCopyInput {
   /** routes.id — the track that got used. */
@@ -56,9 +57,19 @@ export async function insertRouteCopy(input: RouteCopyInput): Promise<boolean> {
  * sql/018-user-limits.sql sets for usage: a count derived from rows can never drift.
  */
 export async function selectRouteCopyCount(routeId: number): Promise<number> {
-  const row = await queryOne<{ count: string | number }>(
-    "SELECT COUNT(*) AS count FROM route_copies WHERE route_id = $1",
-    [routeId],
+  // Displayed downloads = the route's imported starting count (sql/043) + the real copy rows.
+  const row = await withImportedCounts(
+    () =>
+      queryOne<{ count: string | number }>(
+        `SELECT COUNT(*) + COALESCE((SELECT imported_download_count FROM routes WHERE id = $1), 0) AS count
+           FROM route_copies WHERE route_id = $1`,
+        [routeId],
+      ),
+    () =>
+      queryOne<{ count: string | number }>(
+        "SELECT COUNT(*) AS count FROM route_copies WHERE route_id = $1",
+        [routeId],
+      ),
   );
   return Number(row?.count ?? 0);
 }
@@ -72,12 +83,24 @@ export async function selectRouteCopyCount(routeId: number): Promise<number> {
  */
 export async function selectRouteCopyCounts(routeIds: number[]): Promise<Map<number, number>> {
   if (routeIds.length === 0) return new Map();
-  const rows = await query<{ route_id: number; count: string | number }>(
-    `SELECT route_id, COUNT(*) AS count
-       FROM route_copies
-      WHERE route_id = ANY($1::bigint[])
-      GROUP BY route_id`,
-    [routeIds],
+  const rows = await withImportedCounts(
+    () =>
+      query<{ route_id: number; count: string | number }>(
+        `SELECT r.id AS route_id, r.imported_download_count + COUNT(rc.id) AS count
+           FROM routes r
+           LEFT JOIN route_copies rc ON rc.route_id = r.id
+          WHERE r.id = ANY($1::bigint[])
+          GROUP BY r.id, r.imported_download_count`,
+        [routeIds],
+      ),
+    () =>
+      query<{ route_id: number; count: string | number }>(
+        `SELECT route_id, COUNT(*) AS count
+           FROM route_copies
+          WHERE route_id = ANY($1::bigint[])
+          GROUP BY route_id`,
+        [routeIds],
+      ),
   );
   return new Map(rows.map((r) => [Number(r.route_id), Number(r.count)]));
 }

@@ -6,6 +6,9 @@ import {
   EVENT_TYPES,
   EVENT_VISIBILITIES,
   RIDER_LEVELS,
+  ROUTE_DIFFICULTIES,
+  TRAIL_SEASONS,
+  TRAIL_SHADES,
 } from "../db/types.js";
 import { REGION_KEYS } from "../lib/regions.js";
 
@@ -180,6 +183,13 @@ export const createEventSchema = z.object({
    */
   terrainGrade: z.number().int().min(1).max(5).nullable().optional(),
 
+  // How hard the TRACK is, and when / how shaded — see sql/041-event-trail-metadata.sql. Collected
+  // for mtb / gravel; null clears, omitted leaves the stored value alone. Orthogonal to `level`
+  // and `terrainGrade`.
+  routeDifficulty: z.enum(ROUTE_DIFFICULTIES).nullable().optional(),
+  season: z.enum(TRAIL_SEASONS).nullable().optional(),
+  shade: z.enum(TRAIL_SHADES).nullable().optional(),
+
   // The organizer states a support / sag vehicle follows the ride — see
   // sql/024-event-support-vehicle.sql. Omitted means "not set", which the column stores as
   // false. Never nullable: unlike duration there is no third state worth keeping.
@@ -238,6 +248,13 @@ export const updateEventSchema = z.object({
    */
   terrainGrade: z.number().int().min(1).max(5).nullable().optional(),
 
+  // How hard the TRACK is, and when / how shaded — see sql/041-event-trail-metadata.sql. Collected
+  // for mtb / gravel; null clears, omitted leaves the stored value alone. Orthogonal to `level`
+  // and `terrainGrade`.
+  routeDifficulty: z.enum(ROUTE_DIFFICULTIES).nullable().optional(),
+  season: z.enum(TRAIL_SEASONS).nullable().optional(),
+  shade: z.enum(TRAIL_SHADES).nullable().optional(),
+
   // See createEventSchema. Omitted leaves it untouched; false turns the badge off again.
   hasSupportVehicle: z.boolean().optional(),
 
@@ -275,6 +292,13 @@ export const listEventsQuerySchema = z.object({
     .enum(["mine", "joined", "upcoming", "live", "past", "following"])
     .optional()
     .default("mine"),
+  // Opt-in: carry each ride's 60-point route `preview` (and its track's `downloads` count). Off by
+  // default because this list is unpaginated and most callers draw no maps. Lenient on purpose —
+  // anything but "true"/"1" is off rather than a 400, like the other list params here.
+  includePreview: z
+    .string()
+    .optional()
+    .transform((value) => value === "true" || value === "1"),
 });
 
 /** The ride-duration filter offers ranges, not a free number — see the client's DURATION_BUCKETS
@@ -368,6 +392,12 @@ export const publicEventsQuerySchema = z.object({
   minClimbM: z.coerce.number().nonnegative().max(100000).optional(),
   maxClimbM: z.coerce.number().nonnegative().max(100000).optional(),
   durationBuckets: csvEnum(DURATION_BUCKET_KEYS),
+  /** Any of the listed values (sql/041). Unknown values are dropped, like every csvEnum. */
+  routeDifficulty: csvEnum(ROUTE_DIFFICULTIES),
+  season: csvEnum(TRAIL_SEASONS),
+  shade: csvEnum(TRAIL_SHADES),
+  /** One track (routes.id) — a shared /mtb/<trackId> link opens exactly this track. */
+  routeId: z.coerce.number().int().positive().optional(),
   /** Default depends on the bucket — see listPublicEvents. The distance/elevation/duration/
    *  downloads/likes orders sink a NULL metric to the bottom and tie-break on created_at
    *  DESC, id. */

@@ -1,5 +1,5 @@
 // Audit records for business/security actions — deliberately separate from the technical
-// request logging around it, per TODO-install-server.md §13.
+// request logging around it, per gilad/deployment.md (setup checklist, item 5).
 //
 // Today an audit record is a structured pino line carrying exactly the fields §13 asks for
 // (actor, action, entity, entityId, timestamp, requestId, metadata). There is no audit_log

@@ -20,6 +20,7 @@
 // offline replay still counts once.
 
 import { query, queryOne } from "../db/pool.js";
+import { withImportedCounts } from "./importedCounts.js";
 
 /**
  * Records one like. Returns true when a row was actually written, false when this rider had
@@ -48,9 +49,19 @@ export async function insertRouteLike(routeId: number, userId: number): Promise<
  * sql/018-user-limits.sql sets for usage: a count derived from rows can never drift.
  */
 export async function selectRouteLikeCount(routeId: number): Promise<number> {
-  const row = await queryOne<{ count: string | number }>(
-    "SELECT COUNT(*) AS count FROM route_likes WHERE route_id = $1",
-    [routeId],
+  // Displayed likes = the route's imported starting count (sql/043) + the real like rows.
+  const row = await withImportedCounts(
+    () =>
+      queryOne<{ count: string | number }>(
+        `SELECT COUNT(*) + COALESCE((SELECT imported_like_count FROM routes WHERE id = $1), 0) AS count
+           FROM route_likes WHERE route_id = $1`,
+        [routeId],
+      ),
+    () =>
+      queryOne<{ count: string | number }>(
+        "SELECT COUNT(*) AS count FROM route_likes WHERE route_id = $1",
+        [routeId],
+      ),
   );
   return Number(row?.count ?? 0);
 }
@@ -73,12 +84,25 @@ export async function selectRouteLikedByUser(routeId: number, userId: number): P
  */
 export async function selectRouteLikeCounts(routeIds: number[]): Promise<Map<number, number>> {
   if (routeIds.length === 0) return new Map();
-  const rows = await query<{ route_id: number; count: string | number }>(
-    `SELECT route_id, COUNT(*) AS count
-       FROM route_likes
-      WHERE route_id = ANY($1::bigint[])
-      GROUP BY route_id`,
-    [routeIds],
+  // Seeded: a route with an imported count but no rows yet is still present in the map.
+  const rows = await withImportedCounts(
+    () =>
+      query<{ route_id: number; count: string | number }>(
+        `SELECT r.id AS route_id, r.imported_like_count + COUNT(rl.id) AS count
+           FROM routes r
+           LEFT JOIN route_likes rl ON rl.route_id = r.id
+          WHERE r.id = ANY($1::bigint[])
+          GROUP BY r.id, r.imported_like_count`,
+        [routeIds],
+      ),
+    () =>
+      query<{ route_id: number; count: string | number }>(
+        `SELECT route_id, COUNT(*) AS count
+           FROM route_likes
+          WHERE route_id = ANY($1::bigint[])
+          GROUP BY route_id`,
+        [routeIds],
+      ),
   );
   return new Map(rows.map((r) => [Number(r.route_id), Number(r.count)]));
 }
