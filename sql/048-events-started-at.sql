@@ -1,0 +1,32 @@
+-- 048-events-started-at.sql — when a ride ACTUALLY went live.
+--
+--   events.started_at  TIMESTAMPTZ NULL
+--
+-- WHY THIS EXISTS
+--   The live screen's "Elapsed" clock counted from events.starts_at — the PLANNED start. A ride
+--   started early showed 00:00:00 until the planned time; a ride started late showed the minutes
+--   everyone waited. Nothing recorded the moment the organizer pressed Start (finished_at has
+--   always existed; its twin never did). This column is that moment: written once, by
+--   changeEventStatus, the first time a ride moves to 'live' (a pause/resume or a replay never
+--   moves it).
+--
+-- EXISTING ROWS
+--   Stay NULL. The client falls back to the planned start for them, and hides Elapsed rather
+--   than show a frozen 00:00:00 when the planned start is still in the future.
+--
+-- BACKWARDS COMPATIBILITY
+--   Safe to deploy the server BEFORE this file runs: the write swallows 42703 (logged), the
+--   read is SELECT * (the key is simply absent), and the client falls back as above.
+--
+-- HOW TO RUN
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/048-events-started-at.sql
+--
+-- SAFE ON LIVE DATA and safe to run more than once. One nullable column, no default, no
+-- rewrite of existing rows; nothing is read or changed.
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+
+-- Verify afterwards:
+--   SELECT column_name, data_type, is_nullable FROM information_schema.columns
+--    WHERE table_name = 'events' AND column_name = 'started_at';
+--   -- expect: started_at | timestamp with time zone | YES

@@ -180,6 +180,8 @@ export interface Event {
    *  then editable. The picker's area filter is this, not the free-text `area`. */
   region: string | null;
   finishedAt: Date | null;
+  /** When the ride actually went live (sql/048); null before it has, or on an older database. */
+  startedAt?: Date | null;
 
   // Collected by the create form since long before the server could store any of them.
   activityType: ActivityType | null;
