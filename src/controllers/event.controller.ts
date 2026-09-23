@@ -222,6 +222,9 @@ export function toEventDetail(
       ? eventCapabilitiesFor(view.actor, view.context, EVENT_CAPABILITIES)
       : [...EVENT_CAPABILITIES],
     finishedAt: event.finishedAt,
+    // When the ride actually went live (sql/048) — the live screen's Elapsed clock counts from
+    // this, not from the planned startsAt. null before it has gone live / on an older database.
+    startedAt: event.startedAt ?? null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
     isOwner: viewerIsOwner,

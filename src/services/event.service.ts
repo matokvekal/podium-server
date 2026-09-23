@@ -33,6 +33,7 @@ import {
   insertLocationPoints,
   insertParticipantIfRoom,
   type LocationPointInput,
+  markEventStarted,
   markParticipantLeft,
   type PublicEventFilters,
   selectActiveEventByCode,
@@ -702,6 +703,16 @@ export async function changeEventStatus(
     finishedAt,
   );
   if (!updated) throw new Error(`changeEventStatus: event ${eventId} not found after update`);
+
+  // The moment it actually went live (sql/048) — what the live Elapsed clock counts from. Set
+  // once; non-fatal like the other follow-ups here: the status change has already committed.
+  if (nextStatus === "live") {
+    try {
+      updated.startedAt = (await markEventStarted(eventId)) ?? updated.startedAt ?? null;
+    } catch (err) {
+      logger.warn({ err, eventId }, "could not record when the ride went live");
+    }
+  }
   logger.info({ eventId, userId, from: event.status, to: nextStatus }, "event status changed");
 
   // THE FINISH HOOK. location_points is purge-eligible and participant_tracks is never

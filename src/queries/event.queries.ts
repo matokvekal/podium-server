@@ -45,6 +45,8 @@ interface EventRow {
   country: string | null;
   region: string | null;
   finished_at: Date | null;
+  /** sql/048 — absent (undefined) on a database without it. */
+  started_at?: Date | null;
   activity_type: ActivityType | null;
   level: RiderLevel | null;
   organizer_group: string | null;
@@ -148,6 +150,7 @@ function mapEvent(row: EventRow): Event {
     country: row.country ?? null,
     region: row.region ?? null,
     finishedAt: row.finished_at,
+    startedAt: row.started_at ?? null,
     activityType: row.activity_type,
     level: row.level,
     organizerGroup: row.organizer_group,
@@ -1502,6 +1505,29 @@ export async function updateEventStatus(
     [eventId, status, isActive, finishedAt],
   );
   return rows[0] ? mapEvent(rows[0]) : null;
+}
+
+/**
+ * Stamp the moment a ride ACTUALLY went live (sql/048), once: `started_at IS NULL` keeps a
+ * pause/resume or a replayed request from moving it. Returns the stored value.
+ *
+ * Tolerates a database without sql/048 (42703): logged and answered with null, so going live
+ * never fails over the missing column — the client then falls back to the planned start.
+ */
+export async function markEventStarted(eventId: string): Promise<Date | null> {
+  try {
+    const rows = await query<{ started_at: Date | null }>(
+      `UPDATE events SET started_at = COALESCE(started_at, NOW())
+        WHERE id = $1
+        RETURNING started_at`,
+      [eventId],
+    );
+    return rows[0]?.started_at ?? null;
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    logger.warn({ err, eventId }, "events.started_at missing — run sql/048-events-started-at.sql");
+    return null;
+  }
 }
 
 /** Statuses an event can still be in while its ride is in the past. Mirrors ONGOING_STATUSES in
