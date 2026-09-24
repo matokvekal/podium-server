@@ -91,6 +91,11 @@ function toEventSummary(event: Event | EventListItem) {
     // means the organiser has not set one.
     country: event.country ?? null,
     region: event.region ?? null,
+    // The organizer's choice of a built-in ride cover photo (sql/051) — a key into the
+    // client's registry (src/lib/ride-images.ts on the client), never a URL. On the SUMMARY so
+    // a card can show it with no per-card detail call. null = no built-in image chosen; the
+    // client's existing cover chain (owner's avatar/cover, generated placeholder) applies.
+    rideImageKey: event.rideImageKey ?? null,
     ownerId: event.ownerId,
     // On the SUMMARY, not just the detail: these are exactly what a rider filters and scans
     // the "Find Rides" list by, and a list must not need a detail call per card to show them.

@@ -55,6 +55,7 @@ import {
   updateEventElevationGain,
   updateEventMeetingPoint,
   updateEventPaused,
+  updateEventRideImage,
   updateEventRidePlan,
   updateEventStatus,
   upsertParticipant,
@@ -296,6 +297,10 @@ export async function createEvent(
     routeDifficulty?: RouteDifficulty | null;
     season?: TrailSeason | null;
     shade?: TrailShade | null;
+    /** The organizer's choice of a built-in ride cover photo (sql/051), validated against
+     *  RIDE_IMAGE_KEYS by the schema. undefined = none chosen; null is treated the same on
+     *  create. Stored in events.ride_image_key via updateEventRideImage. */
+    rideImageKey?: string | null;
   },
 ): Promise<Event> {
   const actor = await buildActor(ownerId);
@@ -403,6 +408,12 @@ export async function createEvent(
     country: input.country ?? "IL",
     ...(input.region !== undefined ? { region: input.region } : {}),
   });
+
+  // Ride image — own column, own guarded statement (see updateEventRideImage). Nothing to
+  // clear on create, so only written when the organizer actually picked one.
+  if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
+    await updateEventRideImage(event.id, input.rideImageKey);
+  }
 
   // Owning a ride and riding it are different things — event_members says who runs it,
   // event_participants says who is on the start list. An organizer who ticked "I'm riding
@@ -638,6 +649,12 @@ export async function updateEventDetails(
       ...(input.country !== undefined ? { country: input.country } : {}),
       ...(input.region !== undefined ? { region: input.region } : {}),
     });
+  }
+
+  // Ride image — same pattern. `undefined` means the caller left it out; `null` clears the
+  // chosen image (falls back to the cover chain).
+  if (input.rideImageKey !== undefined) {
+    await updateEventRideImage(eventId, input.rideImageKey);
   }
 
   // A ride that has just BECOME public publishes its own track, so it is reusable in Find Tracks

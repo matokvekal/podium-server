@@ -70,6 +70,8 @@ interface EventRow {
   copied_from_event_id: string | null;
   copied_from_route_id: number | null;
   link_group_id?: string | null;
+  /** sql/051 — absent (undefined) on a database without it. */
+  ride_image_key?: string | null;
   show_event_info: boolean;
   show_participants: boolean;
   show_route: boolean;
@@ -194,6 +196,9 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/037 — reads as null, i.e. "shared on its own",
     // which is what every ride is until an organizer connects it to another one.
     linkGroupId: row.link_group_id ?? null,
+    // undefined on a database without sql/051 — reads as null, i.e. "no built-in image
+    // chosen", which is what every existing ride genuinely is.
+    rideImageKey: row.ride_image_key ?? null,
     showEventInfo: row.show_event_info,
     showParticipants: row.show_participants,
     showRoute: row.show_route,
@@ -1085,6 +1090,10 @@ export interface UpdateEventInput {
   routeDifficulty?: Event["routeDifficulty"];
   season?: Event["season"];
   shade?: Event["shade"];
+  /** Handled by updateEventRideImage, NOT the updateEvent SQL below. undefined = leave alone;
+   *  null = clear the chosen image; a value (validated against RIDE_IMAGE_KEYS by the schema)
+   *  sets it. */
+  rideImageKey?: string | null;
 }
 
 /**
@@ -1173,6 +1182,31 @@ export async function updateEventElevationGain(
         { err },
         "events.elevation_gain_m missing — run sql/021-events-elevation-gain.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.ride_image_key on its own. Kept separate from insertEvent/updateEvent, and
+ * guarded against a database that has not had sql/051-events-ride-image.sql applied yet, so the
+ * core create/edit path never depends on the new column. Pass null to clear the organizer's
+ * choice (reads then fall back to the owner-cover / generated-placeholder chain — see
+ * app/event-visuals.ts on the client).
+ */
+export async function updateEventRideImage(
+  eventId: string,
+  rideImageKey: string | null,
+): Promise<void> {
+  try {
+    await execute("UPDATE events SET ride_image_key = $2, updated_at = NOW() WHERE id = $1", [
+      eventId,
+      rideImageKey,
+    ]);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events.ride_image_key missing — run sql/051-events-ride-image.sql");
       return;
     }
     throw err;
