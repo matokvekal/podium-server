@@ -158,3 +158,50 @@ describe("clearing a description", () => {
     expect(result.data?.description).toBe("06:00 from the square");
   });
 });
+
+// meetingPoint: same three-state shape as description (set / clear / leave alone), plus range
+// validation on the pair — see sql/050-events-meeting-point.sql.
+describe("meetingPoint", () => {
+  it("accepts a valid coordinate pair on create", () => {
+    const result = createEventSchema.safeParse({
+      ...base,
+      meetingPoint: { lat: 32.05, lon: 34.78 },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.meetingPoint).toEqual({ lat: 32.05, lon: 34.78 });
+  });
+
+  it("accepts an explicit null as 'clear the override' on update", () => {
+    const result = updateEventSchema.safeParse({ meetingPoint: null });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.meetingPoint).toBeNull();
+  });
+
+  it("leaves meetingPoint undefined when the key is absent, so the stored override is kept", () => {
+    const result = updateEventSchema.safeParse({ name: "New name" });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.meetingPoint).toBeUndefined();
+    expect("meetingPoint" in (result.data ?? {})).toBe(false);
+  });
+
+  it("rejects latitude/longitude out of range", () => {
+    expect(
+      updateEventSchema.safeParse({ meetingPoint: { lat: 91, lon: 0 } }).success,
+    ).toBe(false);
+    expect(
+      updateEventSchema.safeParse({ meetingPoint: { lat: 0, lon: 181 } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a half-set pair — lat without lon or vice versa", () => {
+    expect(
+      updateEventSchema.safeParse({ meetingPoint: { lat: 32 } }).success,
+    ).toBe(false);
+    expect(
+      updateEventSchema.safeParse({ meetingPoint: { lon: 34 } }).success,
+    ).toBe(false);
+  });
+});

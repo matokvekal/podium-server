@@ -49,6 +49,16 @@ const description = z
   .nullable()
   .transform((value) => (value === "" ? null : value));
 
+/**
+ * The organizer's meeting-point override — see sql/050-events-meeting-point.sql. `null` clears
+ * it (fall back to the attached route's start point); an object sets it; omitted leaves the
+ * stored value alone. Always both coordinates together — there is no "just one".
+ */
+const meetingPoint = z
+  .object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180) })
+  .nullable()
+  .optional();
+
 /** ISO 3166-1 alpha-2, uppercased on the way in — the same shape used everywhere else. */
 const countryCode = z
   .string()
@@ -168,6 +178,8 @@ export const createEventSchema = z.object({
   // events.elevation_gain_m; see sql/021-events-elevation-gain.sql.
   elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
 
+  meetingPoint,
+
   // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
   // means "not stated / leave alone", a value sets it. duration in whole minutes.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
@@ -233,6 +245,8 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. `null` clears the organizer's value; omitted leaves it untouched.
   elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
+
+  meetingPoint,
 
   // See createEventSchema. `null` clears the field; omitted leaves it untouched.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),

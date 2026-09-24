@@ -202,6 +202,15 @@ export interface Event {
   elevationGainM: number | null;
 
   /**
+   * The organizer's meeting-point override, or both null when there isn't one — the map pin and
+   * Waze/Google-Maps links then fall back to the attached route's own start point. Always both
+   * set or both null (sql/050-events-meeting-point.sql's pair constraint). Never touches the
+   * route/GPX itself — purely "where do we meet before riding it".
+   */
+  meetingLat: number | null;
+  meetingLon: number | null;
+
+  /**
    * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,
    * so they are stored, not computed.
    *   durationMin  expected ride time in whole minutes, or null when not stated

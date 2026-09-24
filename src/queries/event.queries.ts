@@ -54,6 +54,9 @@ interface EventRow {
   requires_approval: boolean;
   is_paused: boolean;
   elevation_gain_m: number | null;
+  /** sql/050 — absent (undefined) on a database without it. */
+  meeting_lat?: number | null;
+  meeting_lon?: number | null;
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
@@ -159,6 +162,10 @@ function mapEvent(row: EventRow): Event {
     isPaused: row.is_paused,
     // undefined on a database that has not had sql/021 applied yet — treated as "not set".
     elevationGainM: row.elevation_gain_m ?? null,
+    // undefined on a database without sql/050 — reads as null, i.e. "no meeting-point override,
+    // use the route's start point", which is exactly today's behaviour on such a database.
+    meetingLat: row.meeting_lat ?? null,
+    meetingLon: row.meeting_lon ?? null,
     // undefined on a database without sql/022 — duration/stops read as "not stated", the
     // accessibility marker as false (the safe default the column also backfills to).
     durationMin: row.duration_min ?? null,
@@ -1062,6 +1069,10 @@ export interface UpdateEventInput {
    *  only so the service can pass the parsed body straight through. undefined = leave alone,
    *  null = clear. */
   elevationGainM?: number | null;
+  /** Handled by updateEventMeetingPoint, NOT the updateEvent SQL below. undefined = leave alone;
+   *  null = clear the override (fall back to the route's start point); a value sets it. Never
+   *  touches the route/GPX. */
+  meetingPoint?: { lat: number; lon: number } | null;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
    *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
@@ -1161,6 +1172,35 @@ export async function updateEventElevationGain(
       logger.warn(
         { err },
         "events.elevation_gain_m missing — run sql/021-events-elevation-gain.sql",
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.meeting_lat / meeting_lon as a pair. Kept separate from insertEvent/updateEvent,
+ * and guarded against a database that has not had sql/050-events-meeting-point.sql applied yet,
+ * so the core create/edit path never depends on the new columns.
+ *
+ * Pass `null` to clear the override (reads then fall back to the attached route's start point).
+ * There is no "set only one" — the pair constraint means both or neither.
+ */
+export async function updateEventMeetingPoint(
+  eventId: string,
+  point: { lat: number; lon: number } | null,
+): Promise<void> {
+  try {
+    await execute(
+      "UPDATE events SET meeting_lat = $2, meeting_lon = $3, updated_at = NOW() WHERE id = $1",
+      [eventId, point?.lat ?? null, point?.lon ?? null],
+    );
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn(
+        { err },
+        "events.meeting_lat/meeting_lon missing — run sql/050-events-meeting-point.sql",
       );
       return;
     }

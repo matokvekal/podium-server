@@ -53,6 +53,7 @@ import {
   updateEvent,
   updateEventCountryRegion,
   updateEventElevationGain,
+  updateEventMeetingPoint,
   updateEventPaused,
   updateEventRidePlan,
   updateEventStatus,
@@ -275,6 +276,10 @@ export async function createEvent(
     /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
+    /** Organizer's meeting-point override — stored in events.meeting_lat/meeting_lon
+     *  (sql/050). undefined = none set; null is treated the same on create. Never touches the
+     *  route/GPX. */
+    meetingPoint?: { lat: number; lon: number } | null;
     /** Organizer-set ride plan — stored in events.duration_min / rest_stops / is_accessible /
      *  has_support_vehicle / expected_participants / terrain_grade via updateEventRidePlan.
      *  undefined = not set. */
@@ -357,6 +362,11 @@ export async function createEvent(
   // not carrying it yet is fine.
   if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
     await updateEventElevationGain(event.id, input.elevationGainM);
+  }
+
+  // Same story for the meeting-point override — own guarded pair of columns, own statement.
+  if (input.meetingPoint !== undefined && input.meetingPoint !== null) {
+    await updateEventMeetingPoint(event.id, input.meetingPoint);
   }
 
   // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
@@ -586,6 +596,13 @@ export async function updateEventDetails(
     await updateEventElevationGain(eventId, input.elevationGainM);
   }
 
+  // Meeting-point override — same pattern. `null` clears it back to the route's start point;
+  // never touches the route/GPX itself.
+  const wroteMeetingPoint = input.meetingPoint !== undefined;
+  if (input.meetingPoint !== undefined) {
+    await updateEventMeetingPoint(eventId, input.meetingPoint);
+  }
+
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
   const wroteRidePlan =
     input.durationMin !== undefined ||
@@ -681,7 +698,7 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteRidePlan || wroteCountryRegion) {
+  if (wroteElevation || wroteMeetingPoint || wroteRidePlan || wroteCountryRegion) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }
