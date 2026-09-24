@@ -42,9 +42,11 @@ const event = {
   isPaused: false,
   isActive: true,
   description: null,
-  location: null,
+  location: "Ashkelon parking lot",
   area: null,
   expectedParticipants: 40,
+  meetingLat: 31.66,
+  meetingLon: 34.57,
 } as unknown as Parameters<typeof toEventDetail>[0];
 
 /** 6 riders on a start list whose owner is allowed 50 — the numbers from the request. */
@@ -104,5 +106,18 @@ describe("toEventDetail — the start-list ceiling is the owner's alone", () => 
 describe("toEventDetail — the card preview stays on list rows", () => {
   it("does not add `preview` to the detail payload, which carries `route` instead", () => {
     expect(detailFor(OWNER_ID)).not.toHaveProperty("preview");
+  });
+});
+
+describe("toEventDetail — meetingPoint follows the same redaction as location", () => {
+  it("gives a full viewer the organizer's meeting-point override", () => {
+    expect(detailFor(OWNER_ID).meetingPoint).toEqual({ lat: 31.66, lon: 34.57 });
+  });
+
+  it("nulls it for a viewer who may not see the ride's details, same as location", () => {
+    const redacted = toEventDetail(event, STRANGER_ID, null, "owner", null, null, null, false, capacity);
+
+    expect(redacted.location).toBeNull();
+    expect(redacted.meetingPoint).toBeNull();
   });
 });

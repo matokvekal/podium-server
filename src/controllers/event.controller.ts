@@ -75,6 +75,13 @@ function toEventSummary(event: Event | EventListItem) {
     startsAt: event.startsAt,
     endsAt: event.endsAt,
     location: event.location,
+    // The organizer's meeting-point override (sql/050), or null when there isn't one — the
+    // client then falls back to the attached route's own start point. Never the route/GPX
+    // itself. On the SUMMARY too: a card's map pin needs it exactly like the detail page does.
+    meetingPoint:
+      event.meetingLat != null && event.meetingLon != null
+        ? { lat: event.meetingLat, lon: event.meetingLon }
+        : null,
     // Free-text region/area (sql/009-events-area.sql). On the SUMMARY so the edit form
     // prefills it, the "Find Rides" list can sort by it, and a card can show it — the
     // client already sends it on create/PATCH and reads it back here.
@@ -205,6 +212,7 @@ export function toEventDetail(
     endsAt: canSeeInfo ? summary.endsAt : null,
     location: canSeeInfo ? summary.location : null,
     area: canSeeInfo ? summary.area : null,
+    meetingPoint: canSeeInfo ? summary.meetingPoint : null,
     requiresBib: event.requiresBib,
     description: canSeeInfo ? event.description : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
@@ -405,14 +413,21 @@ async function ownerDetail(event: Event, userId: number) {
  *
  * Built on toEventSummary so a card here shows the same Distance / Elevation / Riders a card
  * anywhere else in the app does — then redacted for a viewer who may not see the ride's
- * details, nulling exactly the four fields toEventDetail nulls for the same reason. A private
+ * details, nulling exactly the fields toEventDetail nulls for the same reason. A private
  * ride therefore gives a stranger a name-and-type card: precisely what its own code already
  * discloses through toEventConfig, and nothing more.
  */
 function toSharedRideCard(member: SharedRideMember) {
   const summary = toEventSummary(member.event);
   if (member.canSeeInfo) return summary;
-  return { ...summary, startsAt: null, endsAt: null, location: null, area: null };
+  return {
+    ...summary,
+    startsAt: null,
+    endsAt: null,
+    location: null,
+    area: null,
+    meetingPoint: null,
+  };
 }
 
 /**
