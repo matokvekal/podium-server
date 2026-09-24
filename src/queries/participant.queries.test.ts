@@ -11,15 +11,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
 const queryOne = vi.fn();
+const execute = vi.fn();
 
 vi.mock("../db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args),
   queryOne: (...args: unknown[]) => queryOne(...args),
-  execute: vi.fn(),
+  execute: (...args: unknown[]) => execute(...args),
   withTransaction: vi.fn(),
 }));
 
-const { updateRegistrationStatus } = await import("./participant.queries.js");
+const { approveAllWaitingParticipants, updateRegistrationStatus } = await import(
+  "./participant.queries.js"
+);
 
 const EVENT_ID = "1ccab6f1-b2f6-4ede-bd2d-face92179797";
 
@@ -67,6 +70,7 @@ function expectEveryBoundParamIsReferenced(sql: string, params: readonly unknown
 beforeEach(() => {
   query.mockReset();
   queryOne.mockReset();
+  execute.mockReset();
 });
 
 describe("updateRegistrationStatus — SQL / parameter contract", () => {
@@ -141,5 +145,26 @@ describe("updateRegistrationStatus — SQL / parameter contract", () => {
     }
     expect(query.mock.calls[0][1]).toEqual([EVENT_ID, "approved", 11]);
     expect(query.mock.calls[1][1]).toEqual([EVENT_ID, "approved", 22]);
+  });
+});
+
+describe("approveAllWaitingParticipants — SQL / parameter contract", () => {
+  it("only touches waiting_approval rows on this event, and returns the affected count", async () => {
+    execute.mockResolvedValueOnce(3);
+
+    const count = await approveAllWaitingParticipants(EVENT_ID);
+
+    expect(count).toBe(3);
+    const [sql, params] = execute.mock.calls[0] as [string, unknown[]];
+    expectEveryBoundParamIsReferenced(sql, params);
+    expect(params).toEqual([EVENT_ID]);
+    expect(sql).toMatch(/SET registration_status = 'approved'/);
+    expect(sql).toMatch(/WHERE event_id = \$1 AND registration_status = 'waiting_approval'/);
+  });
+
+  it("is a no-op count when nobody was waiting", async () => {
+    execute.mockResolvedValueOnce(0);
+
+    expect(await approveAllWaitingParticipants(EVENT_ID)).toBe(0);
   });
 });

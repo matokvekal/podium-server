@@ -418,3 +418,19 @@ export async function updateRegistrationStatus(
   );
   return rows[0] ? mapParticipant(rows[0]) : null;
 }
+
+/**
+ * Bulk-approve every rider still `waiting_approval` on this event — what the organizer means by
+ * turning "requires approval" off: everyone queued under the old rule gets in, not just future
+ * joiners (event.service.ts's updateEventDetails calls this on that one transition).
+ *
+ * Only `waiting_approval` moves. `rejected` stays rejected — turning approval off is not the
+ * organizer un-rejecting someone, and `registered`/`approved` rows have nothing to do here.
+ */
+export async function approveAllWaitingParticipants(eventId: string): Promise<number> {
+  return execute(
+    "UPDATE event_participants SET registration_status = 'approved' " +
+      "WHERE event_id = $1 AND registration_status = 'waiting_approval'",
+    [eventId],
+  );
+}
