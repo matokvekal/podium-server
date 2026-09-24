@@ -180,6 +180,11 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
       // rideChat.queries.ts selectUnreadSummary repeats this rule in SQL — change both.
       return isStaff(ctx) || isRiding(ctx);
 
+    case "event:manage_stops":
+      // The ride's creator only — asked for directly, so a co-organizer (operator) does not get
+      // it. Live is allowed on purpose (a stop can move on the day); finished / cancelled is not.
+      return ctx.role === "owner" && !FINAL_STATUSES.includes(ctx.event.status);
+
     default: {
       // Exhaustiveness: adding a capability without a rule fails to compile rather than
       // silently defaulting to allowed.
