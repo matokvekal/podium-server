@@ -50,6 +50,12 @@ export const EVENT_CAPABILITIES = [
    * can still open it.
    */
   "event:chat",
+  /**
+   * Add, move, rename and delete this ride's stop points — the coffee / break stops on its map
+   * (sql/049). The ride's creator only, not co-organizers. Stays open while the ride is live so
+   * a stop can still move on the day; closed once it is finished or cancelled.
+   */
+  "event:manage_stops",
 ] as const;
 
 export const TEAM_CAPABILITIES = [

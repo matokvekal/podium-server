@@ -47,6 +47,12 @@ import {
   rideChatUnreadController,
   sendRideChatController,
 } from "../controllers/rideChat.controller.js";
+import {
+  createRideStopController,
+  deleteRideStopController,
+  listRideStopsController,
+  updateRideStopController,
+} from "../controllers/rideStops.controller.js";
 import { linkEventTeamController } from "../controllers/team.controller.js";
 import { deduplicateClientAction } from "../middleware/clientActions.js";
 import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
@@ -185,6 +191,18 @@ eventRouter.get("/chat/unread", requireAuth, rideChatUnreadController);
 // Both authorised by policy.ts "event:chat" in rideChat.service.ts.
 eventRouter.get("/:eventId/chat", requireAuth, listRideChatController);
 eventRouter.post("/:eventId/chat", requireAuth, rideChatSendLimiter, sendRideChatController);
+
+// ---- ride stop points (sql/049) -------------------------------------------------------------
+
+// GET    /api/v1/events/:eventId/stops                 — anyone who may see the ride's route
+// POST   /api/v1/events/:eventId/stops                 { label, lat, lng, kind? }
+// PATCH  /api/v1/events/:eventId/stops/:stopId         { label?, lat?, lng?, kind?, sortOrder? }
+// DELETE /api/v1/events/:eventId/stops/:stopId
+// Writes authorised by policy.ts "event:manage_stops" (the creator only) in rideStops.service.ts.
+eventRouter.get("/:eventId/stops", optionalAuth, listRideStopsController);
+eventRouter.post("/:eventId/stops", requireAuth, createRideStopController);
+eventRouter.patch("/:eventId/stops/:stopId", requireAuth, updateRideStopController);
+eventRouter.delete("/:eventId/stops/:stopId", requireAuth, deleteRideStopController);
 
 // GET /api/v1/events/:eventId
 // Optional auth, not required: a public event is viewable by a stranger, same as its card on
