@@ -1,0 +1,72 @@
+-- 051-events-ride-image.sql — the organizer's choice of a built-in ride cover photo.
+--
+--   events.ride_image_key  VARCHAR(64) NULL — a key into the built-in image registry
+--                          (src/config/ride-images.ts), NOT a URL, NOT binary data.
+--
+-- WHAT THIS IS
+--   V1 of the "ride image" feature is picker-only: the organizer chooses one of a small set of
+--   images we curate and ship as static files (elnino-client/public/ride-images/, served
+--   directly by the client's web server — nginx in prod, Vite in dev — exactly like the existing
+--   event-cover / identity-preset SVGs). No upload, no binary storage, no image endpoint. The
+--   database stores only the stable key, e.g. "sukkot-01".
+--
+-- WHY A PLAIN VARCHAR AND NOT A FOREIGN KEY / ENUM TYPE
+--   The registry is a source file, not a table (same reasoning as
+--   src/config/user-image-presets.ts for user avatar/cover presets) — adding an image is "add a
+--   file + one array entry + deploy", never a migration. The server still refuses any value not
+--   currently in that registry: z.enum(RIDE_IMAGE_KEYS) on both createEventSchema and
+--   updateEventSchema (src/schemas/event.schemas.ts) rejects anything else with a 400 before it
+--   ever reaches this column.
+--
+-- WHY NULLABLE WITH NO DEFAULT
+--   NULL means "no built-in image chosen", which is what every existing ride genuinely is and
+--   what a new ride is until an organizer picks one. Reads then fall back through the existing
+--   cover chain (owner's own avatar/cover, then the per-event generated placeholder scene) —
+--   see app/event-visuals.ts / lib/user-identity.ts on the client. No existing ride's display
+--   changes because of this column.
+--
+-- BACKWARDS COMPATIBILITY
+--   Safe to deploy the server code BEFORE OR AFTER this file runs, in either order — same
+--   pattern as elevation_gain_m (sql/021) and meeting_lat/meeting_lon (sql/050).
+--
+--   Reads: mapEvent (queries/event.queries.ts) coalesces `row.ride_image_key ?? null`; the
+--   column is simply absent (undefined) before this file runs, which reads the same as NULL.
+--
+--   Writes: written by updateEventRideImage on its own guarded statement (own column, own
+--   try/catch on the 42703 "missing column" error), never inside insertEvent/updateEvent's main
+--   statement — so a database without this column still creates and edits rides normally; only
+--   the image choice is silently skipped, with a warning naming this file.
+--
+-- HOW TO RUN
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/051-events-ride-image.sql
+--
+-- SAFE ON LIVE DATA and safe to run more than once. One nullable column is added. No existing
+-- row is read or written; nothing is dropped, renamed or retyped. Every existing ride keeps
+-- ride_image_key = NULL, i.e. exactly today's behaviour.
+
+ALTER TABLE events ADD COLUMN IF NOT EXISTS ride_image_key VARCHAR(64);
+
+COMMENT ON COLUMN events.ride_image_key IS
+    'Key into the built-in ride-image registry (client src/lib/ride-images.ts, server src/config/ride-images.ts). NULL = no built-in image chosen. Never a URL or binary data.';
+
+------------------------------------------------------------------------------------------
+-- No index, no FK, no CHECK
+------------------------------------------------------------------------------------------
+-- Nothing filters or sorts on this. The allow-list is enforced by the Zod schema at write
+-- time, not by the database — the registry is a source file that must stay deployable without
+-- a migration every time an image is added (see header). A CHECK naming every key would defeat
+-- that.
+
+------------------------------------------------------------------------------------------
+-- Verify afterwards
+------------------------------------------------------------------------------------------
+--   SELECT column_name, data_type, character_maximum_length, is_nullable
+--     FROM information_schema.columns
+--    WHERE table_name = 'events' AND column_name = 'ride_image_key';
+--   -- expect: ride_image_key | character varying | 64 | YES
+--
+--   SELECT count(*) FROM events WHERE ride_image_key IS NOT NULL;   -- expect 0
+--   SELECT count(*) FROM events;                                    -- expect unchanged
+--
+-- Roll back (safe at any time — nothing else depends on this column):
+--   ALTER TABLE events DROP COLUMN IF EXISTS ride_image_key;

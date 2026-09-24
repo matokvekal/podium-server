@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RIDE_IMAGE_KEYS } from "../config/ride-images.js";
 import {
   ACTIVITY_TYPES,
   DISPLAY_MODES,
@@ -216,6 +217,12 @@ export const createEventSchema = z.object({
   // (or omitted) means "not stated"; a positive number sets it. NOT a capacity — the plan limit
   // is the real ceiling and is never sent to viewers.
   expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
+
+  // The organizer's choice of a built-in ride cover photo — see sql/051-events-ride-image.sql.
+  // A key into the registry the server publishes (src/config/ride-images.ts), never a URL or
+  // arbitrary string. `null` (or omitted) means "no built-in image chosen" — the client falls
+  // back to its existing cover chain (owner's avatar/cover, then a generated placeholder).
+  rideImageKey: z.enum(RIDE_IMAGE_KEYS).nullable().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -277,6 +284,10 @@ export const updateEventSchema = z.object({
 
   // See createEventSchema. `null` clears it; omitted leaves it untouched.
   expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
+
+  // See createEventSchema. `null` clears the chosen image (falls back to the cover chain);
+  // omitted leaves it untouched.
+  rideImageKey: z.enum(RIDE_IMAGE_KEYS).nullable().optional(),
 });
 
 export const changeEventStatusSchema = z.object({

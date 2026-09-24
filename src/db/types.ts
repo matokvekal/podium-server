@@ -303,6 +303,16 @@ export interface Event {
    */
   linkGroupId: string | null;
 
+  /**
+   * The organizer's choice of a built-in ride cover photo — a key into the registry the server
+   * publishes (src/config/ride-images.ts), NEVER a URL or binary data. See
+   * sql/051-events-ride-image.sql. `null` = no built-in image chosen; the client falls back to
+   * its existing cover chain (owner's own avatar/cover, then a generated placeholder).
+   *
+   * Reads as null on a database that has not had sql/051 applied yet.
+   */
+  rideImageKey: string | null;
+
   // What MAY OTHER PEOPLE see — per event, not per user. See plan/02-database-schema.md.
   showEventInfo: boolean;
   showParticipants: boolean;
