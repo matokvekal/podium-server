@@ -60,7 +60,10 @@ import {
   upsertParticipantLastLocation,
 } from "../queries/event.queries.js";
 import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
-import { selectParticipantsForEvent } from "../queries/participant.queries.js";
+import {
+  approveAllWaitingParticipants,
+  selectParticipantsForEvent,
+} from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 
@@ -645,6 +648,29 @@ export async function updateEventDetails(
       );
     } catch (err) {
       logger.warn({ err, eventId }, "could not publish the ride's track to the library");
+    }
+  }
+
+  // Turning "requires approval" OFF is the organizer saying everyone queued under the old rule
+  // is in, not just riders who join from now on — so every rider still `waiting_approval` on
+  // THIS event becomes `approved` in the same PATCH, instead of sitting there until the
+  // organizer approves each one by hand (or forever, if they never notice).
+  //
+  // A TRANSITION, NOT A STATE — same reasoning as the visibility block above: only fires when
+  // requiresApproval actually crossed true -> false, so a later PATCH of an already-open event
+  // never re-touches participants a rejection or a fresh join since moved elsewhere.
+  //
+  // The reverse direction (OFF -> ON) needs nothing here: existing riders keep whatever status
+  // they already have (approved stays approved, registered stays registered) — only a NEW join
+  // from this point on lands in waiting_approval (joinEvent's initialStatus, above). Turning
+  // approval on is not the organizer retroactively un-approving anyone.
+  if (input.requiresApproval === false && event.requiresApproval === true) {
+    const approvedCount = await approveAllWaitingParticipants(eventId);
+    if (approvedCount > 0) {
+      logger.info(
+        { eventId, userId, approvedCount },
+        "requiresApproval turned off; auto-approved riders still waiting",
+      );
     }
   }
 
