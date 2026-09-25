@@ -128,6 +128,13 @@ const envSchema = z.object({
   // Preset art (assets/presets/), which ships WITH the code and is read-only at runtime.
   // Unlike UPLOADS_DIR this is meant to be replaced by every deploy.
   ASSETS_DIR: z.string().optional(),
+
+  // Where the manually-curated profile-image gallery lives (GET /api/v1/profile-images,
+  // users.avatar_type = 'gallery'). Same reasoning as UPLOADS_DIR: an operator drops/removes
+  // files here directly, so it MUST sit outside the directory a deployment replaces — required
+  // in production, see resolveProfileImagesDir() below. The dev default points at the
+  // repo-adjacent images/PUBLIC-APP-IMAGES folder this project already keeps out of git.
+  PROFILE_IMAGES_DIR: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -186,6 +193,31 @@ function resolveUploadsDir(value: string | undefined, nodeEnv: (typeof data)["NO
   return path.resolve(process.cwd(), "var/uploads");
 }
 
+/**
+ * The profile-image gallery root. Unset is fine in development — it resolves to the
+ * repo-adjacent images/PUBLIC-APP-IMAGES folder this monorepo already keeps outside every
+ * package's own git history. In production it is required and must be absolute, for the same
+ * reason as UPLOADS_DIR: a directory a routine deploy can reach or replace is not safe for
+ * files an operator manages by hand.
+ */
+function resolveProfileImagesDir(
+  value: string | undefined,
+  nodeEnv: (typeof data)["NODE_ENV"],
+): string {
+  if (value && value.trim() !== "") return path.resolve(value.trim());
+
+  if (nodeEnv === "production") {
+    console.error(
+      "PROFILE_IMAGES_DIR is required in production and must point OUTSIDE the deployment " +
+        "directory (e.g. /var/lib/podium/profile-images). A deploy replaces the app directory " +
+        "on every release and would take a path inside it with it.",
+    );
+    process.exit(1);
+  }
+
+  return path.resolve(process.cwd(), "../images/PUBLIC-APP-IMAGES");
+}
+
 export const env = {
   ...data,
   JWT_ACCESS_SECRET: resolveSecret(
@@ -195,6 +227,7 @@ export const env = {
     data.NODE_ENV,
   ),
   UPLOADS_DIR: resolveUploadsDir(data.UPLOADS_DIR, data.NODE_ENV),
+  PROFILE_IMAGES_DIR: resolveProfileImagesDir(data.PROFILE_IMAGES_DIR, data.NODE_ENV),
   ASSETS_DIR: path.resolve(
     data.ASSETS_DIR && data.ASSETS_DIR.trim() !== ""
       ? data.ASSETS_DIR.trim()

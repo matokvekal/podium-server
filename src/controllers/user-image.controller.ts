@@ -4,8 +4,13 @@ import { USER_IMAGE_KINDS, type UserImageKind } from "../config/user-images.js";
 import { ApiError } from "../lib/api-error.js";
 import { traceLog } from "../lib/trace-log.js";
 import { presetPublicUrl } from "../lib/user-images.js";
-import { selectPresetSchema } from "../schemas/user-image.schemas.js";
-import { resetImage, setPreset, setUpload } from "../services/user-image.service.js";
+import { selectGalleryImageSchema, selectPresetSchema } from "../schemas/user-image.schemas.js";
+import {
+  resetImage,
+  setGalleryImage,
+  setPreset,
+  setUpload,
+} from "../services/user-image.service.js";
 import { toProfile } from "./user.controller.js";
 
 /**
@@ -17,10 +22,14 @@ import { toProfile } from "./user.controller.js";
  */
 
 /**
- * PUT accepts either shape on the same path, told apart by Content-Type:
+ * PUT accepts three shapes on the same path, told apart by Content-Type and, for JSON, by
+ * which key is present:
  *
- *   application/json  { "presetId": "avatar-mtb-01" }   -> choose a built-in image
- *   image/png|jpeg|webp|gif  <raw bytes>                  -> upload
+ *   application/json  { "presetId": "avatar-mtb-01" }      -> choose a shipped built-in image
+ *   application/json  { "galleryKey": "trail-01.webp" }    -> choose from the operator-managed
+ *                                                              gallery (config/profile-images.ts)
+ *                                                              — AVATAR ONLY, see setGalleryImage
+ *   image/png|jpeg|webp|gif  <raw bytes>                     -> upload
  *
  * express.raw() in app.ts buffers only the image content types (and only up to that kind's
  * byte limit); a JSON body falls through to the ordinary parser. `req.body` is therefore a
@@ -49,6 +58,15 @@ function putImage(kind: UserImageKind) {
           `Send a ${kind} as JPEG, PNG, WebP or GIF bytes with a matching Content-Type, ` +
             `or as JSON { "presetId": "..." }`,
         );
+      }
+
+      // Checked by key, not by kind, so a cover request carrying "galleryKey" falls through to
+      // the presetId branch below and gets an ordinary "presetId required" 400 — there is no
+      // gallery write path for a cover (see USER_IMAGE_SOURCES in config/user-images.ts).
+      if (kind === "avatar" && "galleryKey" in req.body) {
+        const { galleryKey } = selectGalleryImageSchema.parse(req.body);
+        const user = await setGalleryImage(req, userId, galleryKey);
+        return res.status(200).json({ data: toProfile(user) });
       }
 
       const { presetId } = selectPresetSchema.parse(req.body);

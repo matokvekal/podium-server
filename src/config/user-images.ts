@@ -7,8 +7,17 @@
 export const USER_IMAGE_KINDS = ["avatar", "cover"] as const;
 export type UserImageKind = (typeof USER_IMAGE_KINDS)[number];
 
-/** Where an image came from. Stored in users.{avatar,cover}_type. */
-export const USER_IMAGE_SOURCES = ["preset", "upload"] as const;
+/**
+ * Where an image came from. Stored in users.{avatar,cover}_type.
+ *
+ * "gallery" is avatar-only in V1 (see config/profile-images.ts): a filename in the
+ * operator-managed PROFILE_IMAGES_DIR folder, resolved dynamically rather than from a
+ * compiled registry like "preset". Enforced in two places: no write path offers it for a
+ * cover (services/user-image.service.ts), and resolveImageUrl/toImageAsset
+ * (lib/user-images.ts) only recognise it for kind === "avatar" — a "gallery" value that
+ * somehow reached cover_type would resolve as if nothing were chosen, not as a broken image.
+ */
+export const USER_IMAGE_SOURCES = ["preset", "upload", "gallery"] as const;
 export type UserImageSource = (typeof USER_IMAGE_SOURCES)[number];
 
 export function isUserImageSource(value: unknown): value is UserImageSource {

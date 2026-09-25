@@ -1,0 +1,1 @@
+Not an image extension — must never appear in GET /api/v1/profile-images or be selectable.

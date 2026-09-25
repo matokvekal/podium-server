@@ -10,8 +10,9 @@
 //
 //     1. an uploaded image        -> its /uploads URL
 //     2. a chosen preset          -> that preset's /assets URL
-//     3. the Google picture       -> users.avatar_url, exactly as before
-//     4. nothing                  -> null, exactly as before
+//     3. a gallery pick           -> its /public-app-images URL (avatar only — see below)
+//     4. the Google picture       -> users.avatar_url, exactly as before
+//     5. nothing                  -> null, exactly as before
 //
 // So a client that has never heard of this feature shows the rider's real, current avatar
 // with no change at all, and a client that has reads the richer `avatar` object next to it.
@@ -20,6 +21,7 @@
 // A cover has no step 3: there is no legacy cover anywhere, so an unset cover is simply null.
 
 import { env } from "../config/env.js";
+import { profileImagePublicUrl } from "../config/profile-images.js";
 import { findPreset } from "../config/user-image-presets.js";
 import {
   isUserImageSource,
@@ -78,6 +80,15 @@ export function toImageAsset(
     return { url: uploadPublicUrl(value), presetId: null, source: "upload" };
   }
 
+  // Avatar-only (see USER_IMAGE_SOURCES in config/user-images.ts). No existence check against
+  // disk here — resolving a stored value to a URL never touches the filesystem, by design; a
+  // file an operator has since deleted still resolves to a URL, and the client's <img onError>
+  // fallback (app/Avatar.tsx) is what keeps that from ever showing as broken.
+  if (type === "gallery") {
+    if (kind !== "avatar") return null;
+    return { url: profileImagePublicUrl(value), presetId: null, source: "gallery" };
+  }
+
   // A preset id this server does not publish is not echoed back as if it were valid.
   const preset = findPreset(kind, value);
   if (!preset) return null;
@@ -103,6 +114,9 @@ export function resolveImageUrl(
     const preset = findPreset(kind, value);
     if (preset) return presetPublicUrl(preset.file);
   }
+
+  // Avatar-only, and no filesystem check — see toImageAsset's "gallery" branch above for why.
+  if (type === "gallery" && value && kind === "avatar") return profileImagePublicUrl(value);
 
   return kind === "avatar" ? (googleAvatarUrl ?? null) : null;
 }

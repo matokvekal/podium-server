@@ -43,6 +43,16 @@ describe("resolveImageUrl — the backward-compatibility rule", () => {
     expect(resolveImageUrl("avatar", "s3", "bucket/key.png", GOOGLE)).toBe(GOOGLE);
   });
 
+  it("resolves a gallery pick without touching the filesystem", () => {
+    expect(resolveImageUrl("avatar", "gallery", "trail-01.webp", GOOGLE)).toBe(
+      `${env.PUBLIC_BASE_URL}/public-app-images/trail-01.webp`,
+    );
+  });
+
+  it("never resolves a gallery value for a cover — avatar-only in V1", () => {
+    expect(resolveImageUrl("cover", "gallery", "trail-01.webp")).toBeNull();
+  });
+
   it("gives a cover no Google fallback — there is no legacy cover", () => {
     expect(resolveImageUrl("cover", null, null, GOOGLE)).toBeNull();
   });
@@ -89,6 +99,18 @@ describe("toImageAsset — the shape the web client already reads", () => {
     expect(toImageAsset("avatar", null, null)).toBeNull();
     expect(toImageAsset("avatar", "preset", null)).toBeNull();
     expect(toImageAsset("avatar", "s3", "bucket/key.png")).toBeNull();
+  });
+
+  it("gives a gallery pick a resolved url, a null presetId, and no filesystem check", () => {
+    expect(toImageAsset("avatar", "gallery", "trail-01.webp")).toEqual({
+      url: `${env.PUBLIC_BASE_URL}/public-app-images/trail-01.webp`,
+      presetId: null,
+      source: "gallery",
+    });
+  });
+
+  it("never returns a gallery asset for a cover — avatar-only in V1", () => {
+    expect(toImageAsset("cover", "gallery", "trail-01.webp")).toBeNull();
   });
 
   it("is null for a preset id this server does not publish", () => {

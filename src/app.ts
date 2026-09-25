@@ -6,6 +6,7 @@ import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import { pinoHttp } from "pino-http";
 import { env } from "./config/env.js";
+import { PROFILE_IMAGES_URL_PREFIX } from "./config/profile-images.js";
 import { UPLOAD_MIME_TYPES, USER_IMAGE_RULES } from "./config/user-images.js";
 import { logger } from "./lib/logger.js";
 import { UPLOADS_URL_PREFIX } from "./lib/user-image-storage.js";
@@ -15,6 +16,7 @@ import { notFound } from "./middleware/not-found.js";
 import { adminAnalyticsRouter } from "./routes/adminAnalytics.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { eventRouter } from "./routes/event.routes.js";
+import { profileImagesRouter } from "./routes/profileImages.routes.js";
 import { routeLibraryRouter } from "./routes/routeLibrary.routes.js";
 import { teamRouter } from "./routes/team.routes.js";
 import { userRouter } from "./routes/user.routes.js";
@@ -112,23 +114,28 @@ export function createApp(): Express {
   });
 
   /**
-   * User images: the shipped preset art, and riders' uploads.
+   * User images: the shipped preset art, riders' uploads, and the operator-managed
+   * profile-image gallery (config/profile-images.ts).
    *
-   * In production nginx serves both directly from disk (see gilad/deployment.md) and
+   * In production nginx serves all three directly from disk (see gilad/deployment.md) and
    * these mounts are never reached — they are what makes the feature work in development
    * and what keeps the app self-contained if nginx is not configured for it yet.
    *
    * helmet() sets Cross-Origin-Resource-Policy: same-origin by default, which would block
    * the web client (app.domain.com) from loading any image from the API (api.domain.com).
    * Relaxing it HERE and only here keeps that default in force for every JSON route: these
-   * two paths serve nothing but public, immutable picture files.
+   * paths serve nothing but public, immutable picture files.
+   *
+   * The 1-year immutable cache is why a replaced gallery file must get a NEW filename
+   * (config/profile-images.ts's key) rather than reusing an old one — see gilad/deployment.md.
    */
   const imageStatic: Parameters<typeof express.static>[1] = {
     index: false,
     dotfiles: "deny",
     redirect: false,
-    // Every uploaded file carries a random token in its name and preset ids are stable, so
-    // a URL's contents never change — a replacement is always a different URL.
+    // Every uploaded file carries a random token in its name, preset ids are stable, and a
+    // gallery file is expected to be replaced under a new name rather than in place — so a
+    // URL's contents never change and a replacement is always a different URL.
     immutable: true,
     maxAge: "1y",
     setHeaders: (res) => {
@@ -139,9 +146,13 @@ export function createApp(): Express {
 
   app.use(PRESET_URL_PREFIX, express.static(path.join(env.ASSETS_DIR, "presets"), imageStatic));
   app.use(UPLOADS_URL_PREFIX, express.static(env.UPLOADS_DIR, imageStatic));
+  // The operator-managed profile-image gallery (config/profile-images.ts). Same dev-only
+  // fallback as the two mounts above — nginx serves this directly from disk in production.
+  app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
 
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
+  app.use("/api/v1/profile-images", profileImagesRouter);
   app.use("/api/v1/events", eventRouter);
   app.use("/api/v1/routes", routeLibraryRouter);
   app.use("/api/v1/teams", teamRouter);
