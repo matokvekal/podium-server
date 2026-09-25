@@ -78,7 +78,7 @@ describe("selectPublicEvents — trail filters", () => {
     expect(sql).not.toContain("route_difficulty");
     expect(sql).not.toContain("e.season");
     expect(sql).not.toContain("e.shade");
-    expect(sql).toContain("LIMIT $17 OFFSET $18");
+    expect(sql).toContain("LIMIT $20 OFFSET $21");
   });
 
   it("binds each filter as its own array parameter and moves LIMIT / OFFSET after them", async () => {
@@ -89,20 +89,20 @@ describe("selectPublicEvents — trail filters", () => {
     });
 
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("e.route_difficulty = ANY($17::text[])");
-    expect(sql).toContain("e.shade = ANY($18::text[])");
+    expect(sql).toContain("e.route_difficulty = ANY($20::text[])");
+    expect(sql).toContain("e.shade = ANY($21::text[])");
     expect(sql).not.toContain("e.season");
-    expect(sql).toContain("LIMIT $19 OFFSET $20");
-    expect(params.slice(16)).toEqual([["easy", "moderate"], ["shaded"], 24, 48]);
+    expect(sql).toContain("LIMIT $22 OFFSET $23");
+    expect(params.slice(19)).toEqual([["easy", "moderate"], ["shaded"], 24, 48]);
   });
 
   it("applies the same clauses to the COUNT so the total matches the page", async () => {
     await selectPublicEvents({ ...base, season: ["all_year"] });
 
     const [countSql, countParams] = queryOne.mock.calls[0] as [string, unknown[]];
-    expect(countSql).toContain("e.season = ANY($17::text[])");
-    expect(countParams).toHaveLength(17);
-    expect(countParams[16]).toEqual(["all_year"]);
+    expect(countSql).toContain("e.season = ANY($20::text[])");
+    expect(countParams).toHaveLength(20);
+    expect(countParams[19]).toEqual(["all_year"]);
   });
 });
 
@@ -119,13 +119,13 @@ describe("selectPublicEvents — one track by id (share link)", () => {
     await selectPublicEvents({ ...base, shade: ["shaded"], routeId: 42 });
 
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("e.shade = ANY($17::text[])");
-    expect(sql).toContain("route_summary.route_id = $18::bigint");
-    expect(sql).toContain("LIMIT $19 OFFSET $20");
-    expect(params.slice(16)).toEqual([["shaded"], 42, 1, 0]);
+    expect(sql).toContain("e.shade = ANY($20::text[])");
+    expect(sql).toContain("route_summary.route_id = $21::bigint");
+    expect(sql).toContain("LIMIT $22 OFFSET $23");
+    expect(params.slice(19)).toEqual([["shaded"], 42, 1, 0]);
 
     const [countSql, countParams] = queryOne.mock.calls[0] as [string, unknown[]];
-    expect(countSql).toContain("route_summary.route_id = $18::bigint");
-    expect(countParams[17]).toBe(42);
+    expect(countSql).toContain("route_summary.route_id = $21::bigint");
+    expect(countParams[20]).toBe(42);
   });
 });

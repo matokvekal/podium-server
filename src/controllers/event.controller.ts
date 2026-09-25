@@ -160,6 +160,10 @@ function toEventSummary(event: Event | EventListItem) {
     likes: summary.likes ?? null,
     likedByMe: summary.likedByMe ?? null,
     favoritedByMe: summary.favoritedByMe ?? null,
+    // Distance (km) from a "near me" search's device position to the attached route's start
+    // point. Only GET /events/public fills this in, and only when the caller sent
+    // nearLat/nearLon — null otherwise, and null for a ride with no route or start point.
+    distanceFromMeKm: summary.distanceFromMeKm ?? null,
     // The attached route's 60-point card preview { points, elevations? } (routes.thumb_points,
     // sql/046): what a Find Tracks / My Rides card draws its map and climb profile from, so the
     // card never makes a geometry request of its own. Present (possibly null = no drawable

@@ -443,10 +443,17 @@ export const publicEventsQuerySchema = z.object({
       "likes_asc",
       "likes_desc",
       "name_asc",
+      "near_me",
     ])
     .optional(),
   limit: z.coerce.number().int().positive().max(100).optional().default(20),
   offset: z.coerce.number().int().nonnegative().optional().default(0),
+  // "Near me" — the caller's own device position, sent only when they tap the toggle (never on
+  // page load). radiusKm without both lat/lon is ignored server-side rather than excluding
+  // every row — see selectPublicEvents.
+  nearLat: z.coerce.number().min(-90).max(90).optional(),
+  nearLon: z.coerce.number().min(-180).max(180).optional(),
+  nearRadiusKm: z.coerce.number().positive().max(500).optional(),
 });
 
 export const joinEventSchema = z.object({

@@ -236,6 +236,12 @@ export interface EventListItem extends Event {
    *  signed in, which is different from false — the button renders inert rather than unpressed. */
   likedByMe: boolean | null;
   favoritedByMe: boolean | null;
+  /** Great-circle distance (km) from the caller's `nearLat`/`nearLon` to the attached route's
+   *  start point (routes.start_lat/start_lon), when a "near me" search asked for one. Only
+   *  populated by GET /events/public when nearLat/nearLon were sent; null otherwise, and null
+   *  for a ride with no route or whose route has no recorded start point — same "not answered"
+   *  treatment as downloads/likes. */
+  distanceFromMeKm: number | null;
   /** The attached route's 60-point card preview (routes.thumb_points, sql/046), so a card draws
    *  its map with no per-card geometry request. ABSENT unless the query asked for it: always on
    *  GET /events/public, and on GET /events only with ?includePreview=true — that list is
@@ -256,7 +262,7 @@ export interface EventListItem extends Event {
  */
 const eventSummaryJoins = (withThumb: boolean) => `
   LEFT JOIN LATERAL (
-    SELECT r.id AS route_id, r.distance_km, r.elevation_m${
+    SELECT r.id AS route_id, r.distance_km, r.elevation_m, r.start_lat, r.start_lon${
       withThumb ? ", COALESCE(r.thumb_points, r.preview_points) AS thumb_source" : ""
     }
       FROM event_routes er
@@ -347,6 +353,9 @@ interface EventSummaryRow extends EventRow {
   /** routes.thumb_points, else routes.preview_points — see eventSummaryJoins. Absent when the
    *  query ran without the preview (COUNT queries, a database without sql/046). */
   thumb_source?: unknown;
+  /** Only selected by selectPublicEvents's runList, computed from nearLat/nearLon — see
+   *  NEAR_ME_DISTANCE_EXPR. Absent on every other query. */
+  distance_from_me_km?: number | null;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -366,6 +375,8 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     likes: row.like_count ?? null,
     likedByMe: row.viewer_liked ?? null,
     favoritedByMe: row.viewer_favorited ?? null,
+    // Same rule again: only present when a near-me search actually ran.
+    distanceFromMeKm: row.distance_from_me_km ?? null,
     // Only when the query selected the preview column at all; a list that did not ask for it
     // keeps exactly the payload it always had (no `preview` key, not even a null).
     ...(row.thumb_source !== undefined ? { preview: previewFromStored(row.thumb_source) } : {}),
@@ -573,7 +584,8 @@ export type PublicEventSort =
   | "downloads_desc"
   | "likes_asc"
   | "likes_desc"
-  | "name_asc";
+  | "name_asc"
+  | "near_me";
 
 export interface PublicEventFilters {
   q?: string;
@@ -615,6 +627,13 @@ export interface PublicEventFilters {
   /** Only rows riding this track (routes.id) — what a shared /mtb/<trackId> link opens. Like
    *  the sql/041 filters it is appended only when sent, so every other list is unchanged. */
   routeId?: number;
+  /** "Near me" — the caller's own device position. Sorts/filters against the attached route's
+   *  start point (routes.start_lat/start_lon, already indexed since sql/004). `nearRadiusKm`
+   *  without both `nearLat`/`nearLon` is ignored rather than excluding everything — see
+   *  listPublicEvents. */
+  nearLat?: number;
+  nearLon?: number;
+  nearRadiusKm?: number;
   sort: PublicEventSort;
   limit: number;
   offset: number;
@@ -651,7 +670,18 @@ export async function selectPublicEvents(
   // $6  areas[]      $7  minDistanceKm  $8  maxDistanceKm    $9  minClimbM   $10 maxClimbM
   // $11 durationBuckets[]  $12 country  $13 region           $14 uniqueTracks
   // $15 viewerId     $16 favoritesOnly
-  // $17 limit        $18 offset
+  // $17 nearLat      $18 nearLon       $19 nearRadiusKm
+  // $20 limit        $21 offset
+  //
+  // "Near me" (routes.start_lat/start_lon, indexed since sql/004 — see idx_routes_public_start):
+  // a plain-SQL haversine against the attached route's start point. $19 (nearRadiusKm) only
+  // narrows the list when $17/$18 are ALSO both present — sending a radius with no position is
+  // ignored rather than excluding every row, the same "missing half of a pair does nothing"
+  // rule updateEventMeetingPoint uses. Mirrors src/lib/geo.ts's haversineDistanceKm exactly
+  // (EARTH_RADIUS_KM = 6371) — written out in SQL because that file is plain JS, not callable
+  // from a query string; keep the two in step if either changes.
+  const NEAR_ME_DISTANCE_EXPR =
+    "(2 * 6371 * ASIN(SQRT(POWER(SIN(RADIANS(route_summary.start_lat - $17::float8) / 2), 2) + COS(RADIANS($17::float8)) * COS(RADIANS(route_summary.start_lat)) * POWER(SIN(RADIANS(route_summary.start_lon - $18::float8) / 2), 2))))";
   const where = `e.visibility = 'public'
         AND e.status NOT IN ('cancelled', 'draft')
         AND ($1::text IS NULL
@@ -706,9 +736,11 @@ export async function selectPublicEvents(
                      AND e.copied_from_event_id IS NULL THEN 0 ELSE 1 END,
                e.created_at, e.id
              )
-        ))`;
+        ))
+        AND ($19::float8 IS NULL OR $17::float8 IS NULL OR $18::float8 IS NULL
+             OR ${NEAR_ME_DISTANCE_EXPR} <= $19)`;
 
-  // sql/041 filters: appended as $17.. only when the caller sent them, so the statement does not
+  // sql/041 filters: appended as $20.. only when the caller sent them, so the statement does not
   // reference columns a database without sql/041 lacks unless a rider actually filters on them.
   const trailFilters: [string, string[] | undefined][] = [
     ["route_difficulty", filters.routeDifficulty],
@@ -721,15 +753,15 @@ export async function selectPublicEvents(
     if (!values || values.length === 0) continue;
     trailParams.push(values);
     trailWhere += `
-        AND e.${column} = ANY($${16 + trailParams.length}::text[])`;
+        AND e.${column} = ANY($${19 + trailParams.length}::text[])`;
   }
   // One track by id — the share link. Same append-only-when-sent rule as the trail filters.
   if (filters.routeId !== undefined) {
     trailParams.push(filters.routeId);
     trailWhere += `
-        AND route_summary.route_id = $${16 + trailParams.length}::bigint`;
+        AND route_summary.route_id = $${19 + trailParams.length}::bigint`;
   }
-  const limitParam = 17 + trailParams.length;
+  const limitParam = 20 + trailParams.length;
   const offsetParam = limitParam + 1;
 
   const params = [
@@ -749,6 +781,9 @@ export async function selectPublicEvents(
     filters.uniqueTracks ?? null,
     filters.viewerId ?? null,
     filters.favoritesOnly ?? null,
+    filters.nearLat ?? null,
+    filters.nearLon ?? null,
+    filters.nearRadiusKm ?? null,
     ...trailParams,
   ];
 
@@ -804,12 +839,16 @@ export async function selectPublicEvents(
     likes_asc: "like_summary.like_count ASC NULLS LAST, e.created_at DESC, e.id",
     likes_desc: "like_summary.like_count DESC NULLS LAST, e.created_at DESC, e.id",
     name_asc: "e.name ASC, e.id",
+    // NULLS LAST here means "no route start point" sinks to the bottom, same as every other
+    // metric sort — never mistaken for "0 km away".
+    near_me: `${NEAR_ME_DISTANCE_EXPR} ASC NULLS LAST, e.created_at DESC, e.id`,
   }[filters.sort];
 
   const runList = (withSeeds: boolean, withThumb: boolean) =>
     query<EventSummaryRow>(
       `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
-              like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited
+              like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited,
+              ${NEAR_ME_DISTANCE_EXPR} AS distance_from_me_km
          FROM events e
          ${eventSummaryJoins(withThumb)}
          ${copySummaryJoin(withSeeds)}

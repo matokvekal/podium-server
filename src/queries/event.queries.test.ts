@@ -257,6 +257,7 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       "likes_asc",
       "likes_desc",
       "name_asc",
+      "near_me",
     ] as const;
 
     for (const sort of sorts) {
@@ -264,7 +265,7 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
       queryOne.mockResolvedValueOnce({ count: "0" });
       await selectPublicEvents({ sort, limit: 24, offset: 0 });
       const [sql] = query.mock.calls.at(-1) as [string];
-      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$17 OFFSET \$18/);
+      expect(sql).toMatch(/ORDER BY [^\n]+, e\.id LIMIT \$20 OFFSET \$21/);
       if (sort !== "name_asc" && sort !== "oldest") {
         expect(sql).toMatch(/NULLS LAST, e\.created_at DESC, e\.id/);
       }
