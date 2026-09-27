@@ -20,6 +20,31 @@ export interface CountryRow {
   rides: number;
 }
 
+/**
+ * One day of PAGE_VIEW traffic (analytics_events). `bots`/`humanPageViews` are an informational
+ * split of `pageViews` — never subtracted from it, since bot detection is a heuristic
+ * (src/lib/user-agent.ts), not a certainty.
+ */
+export interface TrafficDailyRow {
+  /** YYYY-MM-DD. */
+  date: string;
+  pageViews: number;
+  /** Distinct details->>'visitorId', regardless of bot flag or sign-in state. */
+  uniqueVisitors: number;
+  /** Distinct authenticated user_id. */
+  loggedIn: number;
+  /** Distinct visitorId among rows with no user_id. */
+  anonymous: number;
+  bots: number;
+  humanPageViews: number;
+}
+
+export interface TopPageRow {
+  path: string;
+  views: number;
+  uniqueVisitors: number;
+}
+
 export interface AnalyticsResponse {
   generatedAt: string;
   /** Which range the `daily` rows cover. null = all time. */
@@ -70,4 +95,15 @@ export interface AnalyticsResponse {
 
   /** Users and rides per country (all time), most rides first. */
   countries: CountryRow[];
+
+  /**
+   * Site traffic from PAGE_VIEW analytics_events (sql/031) — the one section of this response
+   * that reads analytics_events rather than the business tables. Clipped to the same range as
+   * `daily`. `today` is the row of `daily` dated today, or null if there has been no traffic yet.
+   */
+  traffic: {
+    today: TrafficDailyRow | null;
+    daily: TrafficDailyRow[];
+    topPages: TopPageRow[];
+  };
 }

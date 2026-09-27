@@ -14,6 +14,7 @@ import { PRESET_URL_PREFIX } from "./lib/user-images.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFound } from "./middleware/not-found.js";
 import { adminAnalyticsRouter } from "./routes/adminAnalytics.routes.js";
+import { analyticsRouter } from "./routes/analytics.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { eventRouter } from "./routes/event.routes.js";
 import { profileImagesRouter } from "./routes/profileImages.routes.js";
@@ -162,6 +163,7 @@ export function createApp(): Express {
   app.use("/api/v1/routes", routeLibraryRouter);
   app.use("/api/v1/teams", teamRouter);
   app.use("/api/v1/admin", adminAnalyticsRouter);
+  app.use("/api/v1/analytics", analyticsRouter);
   app.use("/api/v1/statistics", statisticsRouter);
 
   app.use(notFound);

@@ -10,8 +10,10 @@ import {
   countriesBreakdown,
   countUsers,
   dailyActivity,
+  dailyTraffic,
   ridesByVisibility,
   routeStats,
+  topPages,
 } from "./adminAnalytics.queries.js";
 import type { AnalyticsRange, AnalyticsResponse } from "./adminAnalytics.types.js";
 
@@ -27,6 +29,8 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
     routes,
     daily,
     countryRows,
+    traffic,
+    topPageRows,
   ] = await Promise.all([
     countUsers(),
     countRideCreators(),
@@ -38,7 +42,11 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
     routeStats(),
     dailyActivity(range),
     countriesBreakdown(),
+    dailyTraffic(range),
+    topPages(range),
   ]);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -58,5 +66,10 @@ export async function getAdminAnalytics(range: AnalyticsRange): Promise<Analytic
     },
     daily,
     countries: countryRows,
+    traffic: {
+      today: traffic.find((row) => row.date === todayStr) ?? null,
+      daily: traffic,
+      topPages: topPageRows,
+    },
   };
 }

@@ -1,8 +1,10 @@
 // The analytics event catalogue. One string per meaningful business action — the same names
 // the migration comment and the summary view speak (sql/031-analytics-events.sql).
 //
-// V1 tracks only actions that change business state. No LOGIN / PAGE_VIEW / SEARCH / clicks —
-// those are UI noise and there is no client analytics in this system by design.
+// V1 tracked only actions that change business state — no LOGIN / PAGE_VIEW / SEARCH / clicks,
+// deliberately, as UI noise. PAGE_VIEW below is the one reversal of that: a minimal, permanent
+// site-traffic count for /admin2026 (daily visits, bot vs human), still through this same table
+// and the same non-fatal trackAuditEvent() contract — see src/routes/analytics.routes.ts.
 
 export const AUDIT_EVENT_TYPES = [
   /** A brand-new user row was created for a provider identity (auth.service.ts::resolveUser). */
@@ -42,6 +44,13 @@ export const AUDIT_EVENT_TYPES = [
    * deliberately NOT tracked: they are a private bookmark, not an engagement signal.
    */
   "ROUTE_LIKED",
+  /**
+   * A real SPA route navigation (analytics.controller.ts), fired client-side on pathname
+   * change and POSTed to /api/v1/analytics/page-view. `details` carries path/visitorId/
+   * sessionId/referrer/isBot/deviceType — see src/schemas/analytics.schemas.ts. Excludes
+   * /admin2026 itself, API calls, and static assets (those never go through this endpoint).
+   */
+  "PAGE_VIEW",
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
