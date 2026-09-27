@@ -11,6 +11,8 @@ const q = {
   routeStats: vi.fn(),
   dailyActivity: vi.fn(),
   countriesBreakdown: vi.fn(),
+  dailyTraffic: vi.fn(),
+  topPages: vi.fn(),
 };
 
 vi.mock("./adminAnalytics.queries.js", () => q);
@@ -34,6 +36,27 @@ beforeEach(() => {
     { countryCode: "IL", users: 1100, rides: 430 },
     { countryCode: "SE", users: 48, rides: 36 },
   ]);
+  q.dailyTraffic.mockResolvedValue([
+    {
+      date: "2026-09-07",
+      pageViews: 60,
+      uniqueVisitors: 40,
+      loggedIn: 15,
+      anonymous: 25,
+      bots: 5,
+      humanPageViews: 55,
+    },
+    {
+      date: "2026-09-06",
+      pageViews: 50,
+      uniqueVisitors: 30,
+      loggedIn: 10,
+      anonymous: 20,
+      bots: 3,
+      humanPageViews: 47,
+    },
+  ]);
+  q.topPages.mockResolvedValue([{ path: "/", views: 40, uniqueVisitors: 30 }]);
 });
 
 describe("getAdminAnalytics", () => {
@@ -59,6 +82,53 @@ describe("getAdminAnalytics", () => {
     });
     expect(r.countries[0]).toEqual({ countryCode: "IL", users: 1100, rides: 430 });
     expect(typeof r.generatedAt).toBe("string");
+    expect(r.traffic.daily).toEqual([
+      {
+        date: "2026-09-07",
+        pageViews: 60,
+        uniqueVisitors: 40,
+        loggedIn: 15,
+        anonymous: 25,
+        bots: 5,
+        humanPageViews: 55,
+      },
+      {
+        date: "2026-09-06",
+        pageViews: 50,
+        uniqueVisitors: 30,
+        loggedIn: 10,
+        anonymous: 20,
+        bots: 3,
+        humanPageViews: 47,
+      },
+    ]);
+    expect(r.traffic.topPages).toEqual([{ path: "/", views: 40, uniqueVisitors: 30 }]);
+  });
+
+  it("traffic.today is the row dated today, null when there is none", async () => {
+    vi.setSystemTime(new Date("2026-09-07T12:00:00.000Z"));
+    const withToday = await getAdminAnalytics(30);
+    expect(withToday.traffic.today).toEqual({
+      date: "2026-09-07",
+      pageViews: 60,
+      uniqueVisitors: 40,
+      loggedIn: 15,
+      anonymous: 25,
+      bots: 5,
+      humanPageViews: 55,
+    });
+
+    vi.setSystemTime(new Date("2026-09-08T12:00:00.000Z"));
+    const withoutToday = await getAdminAnalytics(30);
+    expect(withoutToday.traffic.today).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("passes the range through to the traffic queries too", async () => {
+    await getAdminAnalytics(90);
+    expect(q.dailyTraffic).toHaveBeenCalledWith(90);
+    expect(q.topPages).toHaveBeenCalledWith(90);
   });
 
   it("passes the range through (null = all time)", async () => {
@@ -86,6 +156,8 @@ describe("getAdminAnalytics", () => {
     q.routeStats.mockResolvedValue({ created: 0, fromGpx: 0, copies: 0, distinctCopiers: 0 });
     q.dailyActivity.mockResolvedValue([]);
     q.countriesBreakdown.mockResolvedValue([]);
+    q.dailyTraffic.mockResolvedValue([]);
+    q.topPages.mockResolvedValue([]);
 
     const r = await getAdminAnalytics(30);
 
@@ -107,6 +179,7 @@ describe("getAdminAnalytics", () => {
     });
     expect(r.daily).toEqual([]);
     expect(r.countries).toEqual([]);
+    expect(r.traffic).toEqual({ today: null, daily: [], topPages: [] });
   });
 
   it("missing visibility buckets read as 0, not undefined", async () => {

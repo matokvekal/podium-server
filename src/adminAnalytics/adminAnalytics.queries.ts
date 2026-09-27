@@ -1,7 +1,8 @@
-// Every SQL statement the /admin2026 dashboard needs. All read-only, all plain aggregates over
-// the real business tables (users, events, event_participants) — the spec's rule: historical
-// totals come from the business timestamps, not from analytics_events (which only started
-// collecting later).
+// Every SQL statement the /admin2026 dashboard needs. Mostly read-only aggregates over the real
+// business tables (users, events, event_participants) — the spec's rule: historical totals come
+// from the business timestamps, not from analytics_events (which only started collecting
+// later). The one deliberate exception is site traffic (dailyTraffic/topPages below): there is
+// no business-table equivalent for a page view, so those two read analytics_events directly.
 //
 // `events.country` / `users.country` arrive with sql/030. If that migration has not run on this
 // database yet, the country queries here return empty rather than 500 — same
@@ -9,7 +10,7 @@
 
 import { query } from "../db/pool.js";
 import { logger } from "../lib/logger.js";
-import type { CountryRow, DailyRow } from "./adminAnalytics.types.js";
+import type { CountryRow, DailyRow, TopPageRow, TrafficDailyRow } from "./adminAnalytics.types.js";
 
 function errCode(err: unknown): unknown {
   return typeof err === "object" && err !== null && "code" in err
@@ -188,4 +189,67 @@ export async function countriesBreakdown(): Promise<CountryRow[]> {
     }
     throw err;
   }
+}
+
+/**
+ * Daily PAGE_VIEW traffic (analytics_events, sql/031) — the only reads in this file that go
+ * through analytics_events rather than the business tables, since traffic has no business-table
+ * equivalent. Same range-bucketing idiom as dailyActivity(), NEWEST FIRST. `bots`/
+ * `humanPageViews` are informational splits of `pageViews`, never subtracted from it.
+ */
+export async function dailyTraffic(sinceDays: number | null): Promise<TrafficDailyRow[]> {
+  const rows = await query<{
+    date: string;
+    page_views: number | string;
+    unique_visitors: number | string;
+    logged_in: number | string;
+    anonymous: number | string;
+    bots: number | string;
+    human_page_views: number | string;
+  }>(
+    `SELECT to_char(event_time::date, 'YYYY-MM-DD') AS date,
+            COUNT(*)::int AS page_views,
+            COUNT(DISTINCT details->>'visitorId')::int AS unique_visitors,
+            COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL)::int AS logged_in,
+            COUNT(DISTINCT details->>'visitorId') FILTER (WHERE user_id IS NULL)::int AS anonymous,
+            COUNT(*) FILTER (WHERE details->>'isBot' = 'true')::int AS bots,
+            COUNT(*) FILTER (WHERE details->>'isBot' IS DISTINCT FROM 'true')::int AS human_page_views
+       FROM analytics_events
+      WHERE event_type = 'PAGE_VIEW'
+        AND ($1::int IS NULL OR event_time::date >= (CURRENT_DATE - ($1::int - 1)))
+      GROUP BY event_time::date
+      ORDER BY event_time::date DESC
+      LIMIT 400`,
+    [sinceDays],
+  );
+  return rows.map((r) => ({
+    date: r.date,
+    pageViews: Number(r.page_views),
+    uniqueVisitors: Number(r.unique_visitors),
+    loggedIn: Number(r.logged_in),
+    anonymous: Number(r.anonymous),
+    bots: Number(r.bots),
+    humanPageViews: Number(r.human_page_views),
+  }));
+}
+
+/** Most-viewed paths (PAGE_VIEW analytics_events) in the same range as dailyTraffic(). */
+export async function topPages(sinceDays: number | null): Promise<TopPageRow[]> {
+  const rows = await query<{ path: string; views: number | string; unique_visitors: number | string }>(
+    `SELECT details->>'path' AS path,
+            COUNT(*)::int AS views,
+            COUNT(DISTINCT details->>'visitorId')::int AS unique_visitors
+       FROM analytics_events
+      WHERE event_type = 'PAGE_VIEW'
+        AND ($1::int IS NULL OR event_time::date >= (CURRENT_DATE - ($1::int - 1)))
+      GROUP BY details->>'path'
+      ORDER BY views DESC
+      LIMIT 20`,
+    [sinceDays],
+  );
+  return rows.map((r) => ({
+    path: r.path,
+    views: Number(r.views),
+    uniqueVisitors: Number(r.unique_visitors),
+  }));
 }
