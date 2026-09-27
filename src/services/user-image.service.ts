@@ -10,6 +10,7 @@
 // leaves exactly one orphan, which scripts/cleanup-user-uploads.mjs exists to collect.
 
 import type { Request } from "express";
+import { isProfileImageKey } from "../config/profile-images.js";
 import { findPreset } from "../config/user-image-presets.js";
 import type { UserImageKind } from "../config/user-images.js";
 import type { User } from "../db/types.js";
@@ -73,6 +74,36 @@ export async function setPreset(
     entity: "user",
     entityId: userId,
     meta: { source: "preset", presetId },
+  });
+  return updated;
+}
+
+/**
+ * Choose a picture from the operator-managed profile-image gallery (config/profile-images.ts).
+ * Avatar-only in V1, deliberately not parameterised by `kind` like setPreset — there is no
+ * cover write path for this source. `galleryKey` is checked against the LIVE directory
+ * listing, not a compiled registry: a filename that was valid a minute ago but has since been
+ * deleted is rejected here exactly the same as one that never existed.
+ */
+export async function setGalleryImage(
+  req: Request,
+  userId: number,
+  galleryKey: string,
+): Promise<User> {
+  if (!(await isProfileImageKey(galleryKey))) {
+    throw new ApiError(400, `There is no profile image called "${galleryKey}"`);
+  }
+
+  const previous = await loadUser(userId);
+  const updated = await updateUserImage(userId, "avatar", "gallery", galleryKey);
+  if (!updated) throw new ApiError(401, "This account no longer exists");
+
+  await discardPreviousUpload(previous, "avatar");
+
+  audit(req, CHANGED_ACTION.avatar, {
+    entity: "user",
+    entityId: userId,
+    meta: { source: "gallery", galleryKey },
   });
   return updated;
 }

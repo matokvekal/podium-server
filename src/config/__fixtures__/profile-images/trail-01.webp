@@ -1,0 +1,1 @@
+fixture-only bytes — the gallery never inspects image content, only the filename and its extension (see config/profile-images.ts). Real artwork lives in the operator-managed PROFILE_IMAGES_DIR, never in git.

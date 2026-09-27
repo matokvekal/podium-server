@@ -1,5 +1,6 @@
 import pg from "pg";
 import { env } from "../config/env.js";
+import { logger } from "../lib/logger.js";
 
 // BIGINT (oid 20) arrives as a string by default, because it can exceed Number's safe
 // range. Our ids never will, and `participantId` is a JSON number in the frozen Android
@@ -35,6 +36,15 @@ export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   options: "-c timezone=UTC",
   ssl: isLocalDatabaseUrl(env.DATABASE_URL) ? false : { rejectUnauthorized: false },
+});
+
+// A pool client can die in the background (network blip, remote host resetting an idle
+// connection) with no query in flight. `pg` surfaces that as an 'error' event on the pool
+// itself, and an EventEmitter with no listener for 'error' throws and takes the whole
+// process down. Logging it here lets `pg` quietly drop the dead client and open a new one
+// on the next checkout instead of crashing the server.
+pool.on("error", (err) => {
+  logger.error({ err }, "idle database client error");
 });
 
 export type QueryParams = readonly unknown[];
