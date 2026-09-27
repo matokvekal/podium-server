@@ -11,8 +11,8 @@
 // "gallery" value is only ever written by the avatar write path (services/user-image.service.ts).
 
 import { readdir } from "node:fs/promises";
-import { env } from "./env.js";
 import { logger } from "../lib/logger.js";
+import { env } from "./env.js";
 
 /** Deliberately narrower than upload's IMAGE_FORMATS (config/user-images.ts) — curated photos
  *  only, no GIF, no SVG. Matches the security requirement: an explicit allow-list, not "whatever
@@ -45,13 +45,17 @@ const CACHE_TTL_MS = 30_000;
 let cache: { keys: Set<string>; expiresAt: number } | null = null;
 
 async function scan(): Promise<Set<string>> {
+  // Not configured at all (config/env.ts already warned once, at startup) — nothing to scan,
+  // and no reason to keep attempting + re-logging a readdir we know cannot succeed.
+  if (!env.PROFILE_IMAGES_DIR) return new Set();
+
   try {
     const names = await readdir(env.PROFILE_IMAGES_DIR);
     return new Set(names.filter((name) => !name.startsWith(".") && hasAllowedExtension(name)));
   } catch (err) {
-    // A missing or unreadable folder is an operator setup problem (see PROFILE_IMAGES_DIR in
-    // config/env.ts), not a reason to fail every catalog request — an empty gallery is a valid,
-    // if unhelpful, answer.
+    // A configured folder that turns out missing or unreadable is a live operator problem (see
+    // PROFILE_IMAGES_DIR in config/env.ts), not a reason to fail every catalog request — an
+    // empty gallery is a valid, if unhelpful, answer.
     logger.warn(
       { err: (err as Error).message, dir: env.PROFILE_IMAGES_DIR },
       "could not read PROFILE_IMAGES_DIR — the profile-image gallery is empty",

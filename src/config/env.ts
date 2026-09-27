@@ -196,23 +196,34 @@ function resolveUploadsDir(value: string | undefined, nodeEnv: (typeof data)["NO
 /**
  * The profile-image gallery root. Unset is fine in development — it resolves to the
  * repo-adjacent images/PUBLIC-APP-IMAGES folder this monorepo already keeps outside every
- * package's own git history. In production it is required and must be absolute, for the same
- * reason as UPLOADS_DIR: a directory a routine deploy can reach or replace is not safe for
- * files an operator manages by hand.
+ * package's own git history.
+ *
+ * In production, unlike UPLOADS_DIR, an unset value is NOT fatal: this is an optional,
+ * operator-curated extra (an avatar gallery), not core data, and config/profile-images.ts
+ * already degrades a missing/unreadable folder to "empty catalog" at read time. Exiting here
+ * on top of that was strictly worse — it took auth, rides, events and every other endpoint down
+ * with it over one optional feature's env var, which is exactly the outage this replaced.
+ * `null` means "gallery disabled"; every consumer (app.ts, config/profile-images.ts) already
+ * has to handle a folder that isn't there, so handling "no folder configured" the same way
+ * costs nothing extra and needed no other code to change.
  */
-function resolveProfileImagesDir(
+/** Exported for env.test.ts — a plain function of its two inputs, so the fatal-vs-not behavior
+ *  for every combination of NODE_ENV and PROFILE_IMAGES_DIR is directly testable without
+ *  reloading this module under different process.env values. */
+export function resolveProfileImagesDir(
   value: string | undefined,
   nodeEnv: (typeof data)["NODE_ENV"],
-): string {
+): string | null {
   if (value && value.trim() !== "") return path.resolve(value.trim());
 
   if (nodeEnv === "production") {
-    console.error(
-      "PROFILE_IMAGES_DIR is required in production and must point OUTSIDE the deployment " +
-        "directory (e.g. /var/lib/podium/profile-images). A deploy replaces the app directory " +
-        "on every release and would take a path inside it with it.",
+    console.warn(
+      "PROFILE_IMAGES_DIR is not set — the profile-image gallery is disabled (everything else " +
+        "starts normally). Set it to an absolute path OUTSIDE the deployment directory (e.g. " +
+        "/var/lib/podium/profile-images) to enable it: a deploy replaces the app directory on " +
+        "every release and would take a path inside it with it.",
     );
-    process.exit(1);
+    return null;
   }
 
   return path.resolve(process.cwd(), "../images/PUBLIC-APP-IMAGES");

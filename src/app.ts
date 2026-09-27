@@ -148,7 +148,12 @@ export function createApp(): Express {
   app.use(UPLOADS_URL_PREFIX, express.static(env.UPLOADS_DIR, imageStatic));
   // The operator-managed profile-image gallery (config/profile-images.ts). Same dev-only
   // fallback as the two mounts above — nginx serves this directly from disk in production.
-  app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
+  // PROFILE_IMAGES_DIR is optional (config/env.ts) — null means the gallery is disabled, and
+  // there is then nothing to mount: the /api/v1/profile-images route still answers (an empty
+  // catalog), it just has nothing to point a URL at.
+  if (env.PROFILE_IMAGES_DIR) {
+    app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
+  }
 
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
