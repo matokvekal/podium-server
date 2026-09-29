@@ -215,6 +215,11 @@ export interface Event {
    * owner. false on every existing event and on a database without the column.
    */
   promoteOnly: boolean;
+  /**
+   * Text a PROMOTE event shows instead of Join (sql/055). null = use the default message.
+   * Kept while PROMOTE is off. null on every existing event and on a database without the column.
+   */
+  promoteRegistrationMessage: string | null;
 
   /**
    * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,

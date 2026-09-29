@@ -143,3 +143,21 @@ describe("toEventSummary — PROMOTE (sql/053)", () => {
     expect("description" in row).toBe(false);
   });
 });
+
+describe("toEventSummary — PROMOTE message + Organizer display name", () => {
+  it("promoteRegistrationMessage is null on an existing event and echoed when set (even with PROMOTE off)", () => {
+    expect(toEventSummary(event as never).promoteRegistrationMessage).toBeNull();
+    const row = toEventSummary({
+      ...event,
+      promoteOnly: false,
+      promoteRegistrationMessage: "See https://example.com",
+    } as never);
+    expect(row.promoteRegistrationMessage).toBe("See https://example.com");
+  });
+
+  it("organizerGroup is the saved display name; ownerId stays the real owner", () => {
+    const row = toEventSummary({ ...event, organizerGroup: "Petah Tikva Municipality" } as never);
+    expect(row.organizerGroup).toBe("Petah Tikva Municipality");
+    expect(row.ownerId).toBe(OWNER_ID);
+  });
+});

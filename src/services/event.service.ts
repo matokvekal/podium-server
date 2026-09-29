@@ -54,6 +54,7 @@ import {
   updateEventCountryRegion,
   updateEventElevationGain,
   updateEventMeetingPoint,
+  updateEventPromoteMessage,
   updateEventPromoteOnly,
   updateEventPaused,
   updateEventRideImage,
@@ -250,8 +251,12 @@ function isActiveForStatus(status: EventStatus): boolean {
  * PROMOTE is the System Admin's switch. ANY value from anyone else is refused — `false` too —
  * so a client can neither turn it on nor probe or flip it. undefined = the field was not sent.
  */
-async function assertMayChangePromote(userId: number, promoteOnly: boolean | undefined) {
-  if (promoteOnly === undefined) return;
+async function assertMayChangePromote(
+  userId: number,
+  promoteOnly: boolean | undefined,
+  promoteRegistrationMessage?: string | null,
+) {
+  if (promoteOnly === undefined && promoteRegistrationMessage === undefined) return;
   if (!(await canManagePromote(userId))) {
     throw new ApiError(403, "Only the System Admin can change PROMOTE");
   }
@@ -288,7 +293,7 @@ export async function createEvent(
     showResults?: boolean;
     activityType?: ActivityType;
     level?: RiderLevel;
-    organizerGroup?: string;
+    organizerGroup?: string | null;
     /** Organizer's elevation-gain value (metres), imported from a GPX or typed. undefined =
      *  none set; null is treated the same on create. Stored in events.elevation_gain_m. */
     elevationGainM?: number | null;
@@ -318,9 +323,11 @@ export async function createEvent(
     rideImageKey?: string | null;
     /** PROMOTE (sql/053) — System Admin only; anyone else who sends it gets a 403. */
     promoteOnly?: boolean;
+    /** PROMOTE registration text (sql/055) — System Admin only, same gate as promoteOnly. */
+    promoteRegistrationMessage?: string | null;
   },
 ): Promise<Event> {
-  await assertMayChangePromote(ownerId, input.promoteOnly);
+  await assertMayChangePromote(ownerId, input.promoteOnly, input.promoteRegistrationMessage);
   const actor = await buildActor(ownerId);
 
   // "May this account create rides at all" — opened deliberately per account (a paid organizer
@@ -396,6 +403,10 @@ export async function createEvent(
   // defaults to false, so a create that says false has nothing to do.
   if (input.promoteOnly === true) {
     await updateEventPromoteOnly(event.id, true);
+  }
+  // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
+  if (input.promoteRegistrationMessage) {
+    await updateEventPromoteMessage(event.id, input.promoteRegistrationMessage);
   }
 
   // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
@@ -605,7 +616,7 @@ export async function updateEventDetails(
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
   assertOwner(event, userId);
-  await assertMayChangePromote(userId, input.promoteOnly);
+  await assertMayChangePromote(userId, input.promoteOnly, input.promoteRegistrationMessage);
   // Once live, the ride's DETAILS are locked — name, date, place, description. Moving those
   // out from under riders who are already on the road is the thing this guard exists to stop.
   //
@@ -644,9 +655,13 @@ export async function updateEventDetails(
   }
 
   // PROMOTE (sql/053) — already authorised above (System Admin only).
-  const wrotePromote = input.promoteOnly !== undefined;
+  const wrotePromote =
+    input.promoteOnly !== undefined || input.promoteRegistrationMessage !== undefined;
   if (input.promoteOnly !== undefined) {
     await updateEventPromoteOnly(eventId, input.promoteOnly);
+  }
+  if (input.promoteRegistrationMessage !== undefined) {
+    await updateEventPromoteMessage(eventId, input.promoteRegistrationMessage);
   }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.

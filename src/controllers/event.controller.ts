@@ -89,6 +89,9 @@ export function toEventSummary(event: Event | EventListItem) {
     // PROMOTE (sql/053): a normal, viewable ride whose registration is handled by the
     // organizers — the client swaps Join for a notice. Joining is refused server-side.
     promoteOnly: event.promoteOnly ?? false,
+    // The text shown instead of Join (sql/055), or null = the client's default. Sent even while
+    // PROMOTE is off, so the edit form can prefill it for switching PROMOTE back on.
+    promoteRegistrationMessage: event.promoteRegistrationMessage ?? null,
     // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
     // "Browse tracks" picker filters on both; a card shows the region label. `region` null
     // means the organiser has not set one.

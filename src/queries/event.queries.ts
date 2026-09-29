@@ -59,6 +59,8 @@ interface EventRow {
   meeting_lon?: number | null;
   /** sql/053 — absent (undefined) on a database without it. */
   promote_only?: boolean;
+  /** sql/055 — absent (undefined) on a database without it. */
+  promote_registration_message?: string | null;
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
@@ -171,6 +173,7 @@ function mapEvent(row: EventRow): Event {
     meetingLat: row.meeting_lat ?? null,
     meetingLon: row.meeting_lon ?? null,
     promoteOnly: row.promote_only ?? false,
+    promoteRegistrationMessage: row.promote_registration_message ?? null,
     // undefined on a database without sql/022 — duration/stops read as "not stated", the
     // accessibility marker as false (the safe default the column also backfills to).
     durationMin: row.duration_min ?? null,
@@ -1107,7 +1110,8 @@ export interface UpdateEventInput {
   requiresApproval?: boolean;
   activityType?: ActivityType;
   level?: RiderLevel;
-  organizerGroup?: string;
+  /** undefined = keep; null = clear (back to showing the creator's own name); a string sets it. */
+  organizerGroup?: string | null;
   /** Handled by updateEventCountryRegion, NOT the updateEvent SQL below. undefined = leave
    *  alone; a value sets it; region null clears it. */
   country?: string;
@@ -1122,6 +1126,8 @@ export interface UpdateEventInput {
   meetingPoint?: { lat: number; lon: number } | null;
   /** PROMOTE (sql/053) — written by the service via updateEventPromoteOnly, not by updateEvent. */
   promoteOnly?: boolean;
+  /** PROMOTE message (sql/055) — written via updateEventPromoteMessage. undefined = keep; null = clear. */
+  promoteRegistrationMessage?: string | null;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
    *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
@@ -1159,9 +1165,9 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             visibility = COALESCE($8, visibility),
             -- NOT COALESCE, unlike every other column here. COALESCE reads null as "the
             -- caller left this out", which makes clearing a description impossible: the old
-            -- text is restored and comes back on the next load. $22 carries whether the key was
+            -- text is restored and comes back on the next load. $23 carries whether the key was
             -- present at all, so an explicit null means clear and an absent key means keep.
-            description = CASE WHEN $22::boolean THEN $9 ELSE description END,
+            description = CASE WHEN $23::boolean THEN $9 ELSE description END,
             location = COALESCE($10, location),
             area = COALESCE($11, area),
             show_event_info = COALESCE($12, show_event_info),
@@ -1173,7 +1179,8 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
             requires_approval = COALESCE($18, requires_approval),
             activity_type = COALESCE($19, activity_type),
             level = COALESCE($20, level),
-            organizer_group = COALESCE($21, organizer_group),
+            -- Clearable like description: null must be able to mean "back to the creator's name".
+            organizer_group = CASE WHEN $22::boolean THEN $21 ELSE organizer_group END,
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
@@ -1199,6 +1206,7 @@ export async function updateEvent(eventId: string, input: UpdateEventInput): Pro
       input.activityType ?? null,
       input.level ?? null,
       input.organizerGroup ?? null,
+      input.organizerGroup !== undefined,
       input.description !== undefined,
     ],
   );
@@ -1273,6 +1281,31 @@ export async function updateEventPromoteOnly(
   } catch (err) {
     if (isMissingColumnError(err)) {
       logger.warn({ err }, "events.promote_only missing — run sql/053-events-promote-only.sql");
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.promote_registration_message on its own, guarded against a database without
+ * sql/055-events-promote-registration-message.sql. null clears it (the default message shows).
+ */
+export async function updateEventPromoteMessage(
+  eventId: string,
+  message: string | null,
+): Promise<void> {
+  try {
+    await execute(
+      "UPDATE events SET promote_registration_message = $2, updated_at = NOW() WHERE id = $1",
+      [eventId, message],
+    );
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn(
+        { err },
+        "events.promote_registration_message missing — run sql/055-events-promote-registration-message.sql",
+      );
       return;
     }
     throw err;

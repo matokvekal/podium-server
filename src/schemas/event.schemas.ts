@@ -54,6 +54,17 @@ const description = z
  * it (fall back to the attached route's start point); an object sets it; omitted leaves the
  * stored value alone. Always both coordinates together — there is no "just one".
  */
+/** Free text that may be cleared: blank or whitespace-only becomes null (= use the default). */
+const blankToNull = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .nullable()
+    .optional()
+    .transform((value) => (value == null ? value : value.trim() || null));
+const organizerDisplayName = blankToNull(200);
+const promoteRegistrationMessage = blankToNull(1000);
+
 const meetingPoint = z
   .object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180) })
   .nullable()
@@ -190,7 +201,9 @@ export const createEventSchema = z.object({
   // sql/010-event-profile.sql.
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
-  organizerGroup: z.string().max(200).optional(),
+  // Display name only — never an owner (events.owner_id is untouched). Blank/whitespace = null =
+  // "show the creator's own name".
+  organizerGroup: organizerDisplayName,
 
   // The organizer's elevation-gain value (metres). Imported from a GPX by the client, or typed
   // by hand — either way this is the number they chose to publish. `null` clears it (fall back
@@ -202,6 +215,9 @@ export const createEventSchema = z.object({
 
   // PROMOTE (sql/053). System Admin only — the service rejects anyone else, even for `false`.
   promoteOnly: z.boolean().optional(),
+  // Text shown instead of Join on a PROMOTE event (sql/055). System Admin only, like promoteOnly.
+  // Blank = null = the default message.
+  promoteRegistrationMessage,
 
   // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
   // means "not stated / leave alone", a value sets it. duration in whole minutes.
@@ -266,7 +282,9 @@ export const updateEventSchema = z.object({
   requiresApproval: z.boolean().optional(),
   activityType: z.enum(ACTIVITY_TYPES).optional(),
   level: z.enum(RIDER_LEVELS).optional(),
-  organizerGroup: z.string().max(200).optional(),
+  // Display name only — never an owner (events.owner_id is untouched). Blank/whitespace = null =
+  // "show the creator's own name".
+  organizerGroup: organizerDisplayName,
 
   // See createEventSchema. `null` clears the organizer's value; omitted leaves it untouched.
   elevationGainM: z.number().nonnegative().max(100000).nullable().optional(),
@@ -275,6 +293,9 @@ export const updateEventSchema = z.object({
 
   // PROMOTE (sql/053). System Admin only — the service rejects anyone else, even for `false`.
   promoteOnly: z.boolean().optional(),
+  // Text shown instead of Join on a PROMOTE event (sql/055). System Admin only, like promoteOnly.
+  // Blank = null = the default message.
+  promoteRegistrationMessage,
 
   // See createEventSchema. `null` clears the field; omitted leaves it untouched.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
