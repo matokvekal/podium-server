@@ -11,10 +11,11 @@ import { env } from "../config/env.js";
 import { ApiError } from "./api-error.js";
 import { logger } from "./logger.js";
 
-/** URL prefix uploaded ride covers are served under — express.static in dev, nginx in
- *  production (see gilad/deployment.md's UPLOADS_DIR/PROFILE_IMAGES_DIR entries; this follows
- *  the same pattern). */
-export const RIDE_IMAGE_UPLOADS_URL_PREFIX = "/ride-image-uploads";
+/** URL prefix uploaded ride covers are served under. Deliberately under /api/: production nginx
+ *  already proxies /api/ to this server, so no nginx change is needed (a bare /ride-image-uploads
+ *  path is answered by the SPA's index.html there — measured 2026-09-29). Served by express.static
+ *  in app.ts, mounted BEFORE the rate limiter so a page of cards is not counted against it. */
+export const RIDE_IMAGE_UPLOADS_URL_PREFIX = "/api/v1/ride-image-files";
 
 /** Always a bare filename — never a path, never a URL. Stored in ride_images.file_name. */
 export type RideImageFileName = string;

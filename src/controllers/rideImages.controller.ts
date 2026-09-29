@@ -8,9 +8,11 @@ import {
   uploadRideImageQuerySchema,
 } from "../schemas/rideImages.schemas.js";
 import {
-  deleteRideImage,
+  archiveRideImage,
   listRideImages,
   listRideImagesForAdmin,
+  replaceRideImage,
+  resolveRideImageUrl,
   setRideImageSelectable,
   uploadRideImage,
 } from "../services/rideImages.service.js";
@@ -21,10 +23,15 @@ import {
 function toPublicDto(row: RideImageRow) {
   return {
     key: row.key,
-    url: row.url,
+    // Versioned once replaced (services/rideImages.service.ts resolveRideImageUrl), so a cached
+    // copy of the old picture is never reused.
+    url: resolveRideImageUrl(row),
     label: row.label,
     category: row.category,
-    selectable: row.selectable,
+    // What the picker offers. An archived or disabled key is still LISTED (an existing ride must
+    // resolve it) but is never `selectable`.
+    selectable: row.selectable && !row.archived,
+    version: row.version,
   };
 }
 
@@ -102,7 +109,29 @@ export async function adminSetSelectableController(
   }
 }
 
-// DELETE /api/v1/admin/ride-images/:key
+/** POST /api/v1/admin/ride-images/:key/replace — raw image bytes; the KEY stays the same. */
+export async function adminReplaceRideImageController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  traceLog("rideImages.controller.adminReplaceRideImageController");
+  try {
+    const key = rideImageKeyParamSchema.parse(req.params.key);
+    if (!Buffer.isBuffer(req.body)) {
+      throw new ApiError(
+        415,
+        "Send the image as JPEG, PNG or WebP bytes with a matching Content-Type",
+      );
+    }
+    const row = await replaceRideImage(req, key, req.body);
+    res.status(200).json({ data: toAdminDto(row) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/v1/admin/ride-images/:key — an ARCHIVE, never a physical delete.
 export async function adminDeleteRideImageController(
   req: Request,
   res: Response,
@@ -111,7 +140,7 @@ export async function adminDeleteRideImageController(
   traceLog("rideImages.controller.adminDeleteRideImageController");
   try {
     const key = rideImageKeyParamSchema.parse(req.params.key);
-    await deleteRideImage(req, key);
+    await archiveRideImage(req, key);
     res.status(204).send();
   } catch (err) {
     next(err);
