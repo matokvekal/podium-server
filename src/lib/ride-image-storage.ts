@@ -41,11 +41,13 @@ export function resolveRideImagePath(fileName: RideImageFileName): string {
   return resolved;
 }
 
-/** The absolute URL a client fetches an uploaded ride cover from. Always absolute (unlike the
- *  static entries' client-relative `/ride-images/<key>.webp`) because this file lives on the
- *  SERVER, which may be a different origin than the client in development. */
+/** The URL an uploaded ride cover is fetched from, as a path on the API's own origin
+ *  (`/api/v1/ride-image-files/<file>`). Deliberately NOT prefixed with PUBLIC_BASE_URL: in
+ *  production the site and API share one origin, so a bare path always works, whereas a
+ *  misconfigured/http/localhost PUBLIC_BASE_URL made uploaded covers silently fail to load.
+ *  The client prefixes the API origin itself when it is served from a different one (dev). */
 export function rideImagePublicUrl(fileName: RideImageFileName): string {
-  return `${env.PUBLIC_BASE_URL}${RIDE_IMAGE_UPLOADS_URL_PREFIX}/${fileName}`;
+  return `${RIDE_IMAGE_UPLOADS_URL_PREFIX}/${fileName}`;
 }
 
 /**
