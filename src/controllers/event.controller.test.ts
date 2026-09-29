@@ -18,7 +18,7 @@ vi.mock("../db/pool.js", () => ({
   withTransaction: vi.fn(),
 }));
 
-const { toEventDetail } = await import("./event.controller.js");
+const { toEventDetail, toEventSummary } = await import("./event.controller.js");
 
 const OWNER_ID = 7;
 const STRANGER_ID = 99;
@@ -115,9 +115,38 @@ describe("toEventDetail — meetingPoint follows the same redaction as location"
   });
 
   it("nulls it for a viewer who may not see the ride's details, same as location", () => {
-    const redacted = toEventDetail(event, STRANGER_ID, null, "owner", null, null, null, false, capacity);
+    const redacted = toEventDetail(
+      event,
+      STRANGER_ID,
+      null,
+      "owner",
+      null,
+      null,
+      null,
+      false,
+      capacity,
+    );
 
     expect(redacted.location).toBeNull();
     expect(redacted.meetingPoint).toBeNull();
+  });
+});
+
+describe("toEventSummary — PROMOTE (sql/053)", () => {
+  const withDescription = { ...event, description: "Register: https://example.org/reg" };
+
+  it("a normal event's list row is unchanged: promoteOnly false and NO description key", () => {
+    const row = toEventSummary(withDescription as never);
+    expect(row.promoteOnly).toBe(false);
+    expect("description" in row).toBe(false);
+  });
+
+  it("a promoted event's list row carries the description its locked card must show", () => {
+    const row = toEventSummary({ ...withDescription, promoteOnly: true } as never) as {
+      promoteOnly: boolean;
+      description: string | null;
+    };
+    expect(row.promoteOnly).toBe(true);
+    expect(row.description).toBe("Register: https://example.org/reg");
   });
 });

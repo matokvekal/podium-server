@@ -7,17 +7,21 @@ import helmet from "helmet";
 import { pinoHttp } from "pino-http";
 import { env } from "./config/env.js";
 import { PROFILE_IMAGES_URL_PREFIX } from "./config/profile-images.js";
+import { RIDE_IMAGE_UPLOAD_MAX_BYTES, RIDE_IMAGE_UPLOAD_MIME_TYPES } from "./config/ride-image-uploads.js";
 import { UPLOAD_MIME_TYPES, USER_IMAGE_RULES } from "./config/user-images.js";
 import { logger } from "./lib/logger.js";
+import { RIDE_IMAGE_UPLOADS_URL_PREFIX } from "./lib/ride-image-storage.js";
 import { UPLOADS_URL_PREFIX } from "./lib/user-image-storage.js";
 import { PRESET_URL_PREFIX } from "./lib/user-images.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFound } from "./middleware/not-found.js";
 import { adminAnalyticsRouter } from "./routes/adminAnalytics.routes.js";
+import { adminRideImagesRouter } from "./routes/adminRideImages.routes.js";
 import { analyticsRouter } from "./routes/analytics.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { eventRouter } from "./routes/event.routes.js";
 import { profileImagesRouter } from "./routes/profileImages.routes.js";
+import { rideImagesRouter } from "./routes/rideImages.routes.js";
 import { routeLibraryRouter } from "./routes/routeLibrary.routes.js";
 import { teamRouter } from "./routes/team.routes.js";
 import { userRouter } from "./routes/user.routes.js";
@@ -98,6 +102,16 @@ export function createApp(): Express {
     "/api/v1/users/me/cover",
     express.raw({ type: UPLOAD_MIME_TYPES, limit: USER_IMAGE_RULES.cover.maxBytes }),
   );
+  /**
+   * A System-Admin ride-cover upload (POST /api/v1/admin/ride-images) arrives the same way —
+   * raw image bytes, no filename in the request. GET/PATCH/DELETE on the same router send no
+   * body or a JSON body, so `type` here only ever intercepts the POST; everything else falls
+   * through to express.json below exactly like the avatar/cover routes above.
+   */
+  app.use(
+    "/api/v1/admin/ride-images",
+    express.raw({ type: [...RIDE_IMAGE_UPLOAD_MIME_TYPES], limit: RIDE_IMAGE_UPLOAD_MAX_BYTES }),
+  );
 
   app.use(express.json({ limit: "100kb" }));
 
@@ -155,14 +169,20 @@ export function createApp(): Express {
   if (env.PROFILE_IMAGES_DIR) {
     app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
   }
+  // Admin-uploaded ride covers (sql/052-ride-images-registry.sql). Unlike PROFILE_IMAGES_DIR
+  // this is required and always resolves to a real path (config/env.ts) — required in
+  // production, same as UPLOADS_DIR — so the mount is unconditional.
+  app.use(RIDE_IMAGE_UPLOADS_URL_PREFIX, express.static(env.RIDE_IMAGES_DIR, imageStatic));
 
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
   app.use("/api/v1/profile-images", profileImagesRouter);
+  app.use("/api/v1/ride-images", rideImagesRouter);
   app.use("/api/v1/events", eventRouter);
   app.use("/api/v1/routes", routeLibraryRouter);
   app.use("/api/v1/teams", teamRouter);
   app.use("/api/v1/admin", adminAnalyticsRouter);
+  app.use("/api/v1/admin/ride-images", adminRideImagesRouter);
   app.use("/api/v1/analytics", analyticsRouter);
   app.use("/api/v1/statistics", statisticsRouter);
 
