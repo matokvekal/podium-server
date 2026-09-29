@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { RIDE_IMAGE_KEYS } from "../config/ride-images.js";
 import {
   ACTIVITY_TYPES,
   DISPLAY_MODES,
@@ -66,6 +65,26 @@ const countryCode = z
   .length(2)
   .regex(/^[A-Za-z]{2}$/, "country must be two letters")
   .transform((value) => value.toUpperCase());
+
+/**
+ * The organizer's choice of a built-in ride cover photo — see sql/051-events-ride-image.sql and
+ * sql/052-ride-images-registry.sql. `null` (or omitted) means "no built-in image chosen" — the
+ * client falls back to its existing cover chain (owner's avatar/cover, then a generated
+ * placeholder).
+ *
+ * This is deliberately just a safe charset, not a `z.enum` of known keys: the registry is now a
+ * table an admin can grow at runtime (ride_images, /admin2026), not a compiled list, so "is this
+ * key one the server currently publishes" is an async DB check the schema layer cannot make.
+ * services/event.service.ts calls isKnownRideImageKey() before this ever reaches the database —
+ * exactly the same split as setPreset/setGalleryImage validating against their own registries in
+ * services/user-image.service.ts rather than in a Zod enum. What IS enforced here, synchronously,
+ * is that nothing resembling a path, a URL or a traversal attempt can even reach that check.
+ */
+const rideImageKey = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "not a valid ride-image key")
+  .nullable()
+  .optional();
 
 export const eventCodeParamSchema = z.object({
   code: z.string().min(1).max(32),
@@ -181,6 +200,9 @@ export const createEventSchema = z.object({
 
   meetingPoint,
 
+  // PROMOTE (sql/053). System Admin only — the service rejects anyone else, even for `false`.
+  promoteOnly: z.boolean().optional(),
+
   // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
   // means "not stated / leave alone", a value sets it. duration in whole minutes.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
@@ -218,11 +240,7 @@ export const createEventSchema = z.object({
   // is the real ceiling and is never sent to viewers.
   expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
 
-  // The organizer's choice of a built-in ride cover photo — see sql/051-events-ride-image.sql.
-  // A key into the registry the server publishes (src/config/ride-images.ts), never a URL or
-  // arbitrary string. `null` (or omitted) means "no built-in image chosen" — the client falls
-  // back to its existing cover chain (owner's avatar/cover, then a generated placeholder).
-  rideImageKey: z.enum(RIDE_IMAGE_KEYS).nullable().optional(),
+  rideImageKey,
 });
 
 export const updateEventSchema = z.object({
@@ -255,6 +273,9 @@ export const updateEventSchema = z.object({
 
   meetingPoint,
 
+  // PROMOTE (sql/053). System Admin only — the service rejects anyone else, even for `false`.
+  promoteOnly: z.boolean().optional(),
+
   // See createEventSchema. `null` clears the field; omitted leaves it untouched.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
   restStops: z.number().int().min(0).max(20).nullable().optional(),
@@ -285,9 +306,9 @@ export const updateEventSchema = z.object({
   // See createEventSchema. `null` clears it; omitted leaves it untouched.
   expectedParticipants: z.number().int().positive().max(100000).nullable().optional(),
 
-  // See createEventSchema. `null` clears the chosen image (falls back to the cover chain);
-  // omitted leaves it untouched.
-  rideImageKey: z.enum(RIDE_IMAGE_KEYS).nullable().optional(),
+  // See createEventSchema's rideImageKey. `null` clears the chosen image (falls back to the
+  // cover chain); omitted leaves it untouched.
+  rideImageKey,
 });
 
 export const changeEventStatusSchema = z.object({

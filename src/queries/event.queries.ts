@@ -57,6 +57,8 @@ interface EventRow {
   /** sql/050 — absent (undefined) on a database without it. */
   meeting_lat?: number | null;
   meeting_lon?: number | null;
+  /** sql/053 — absent (undefined) on a database without it. */
+  promote_only?: boolean;
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
@@ -168,6 +170,7 @@ function mapEvent(row: EventRow): Event {
     // use the route's start point", which is exactly today's behaviour on such a database.
     meetingLat: row.meeting_lat ?? null,
     meetingLon: row.meeting_lon ?? null,
+    promoteOnly: row.promote_only ?? false,
     // undefined on a database without sql/022 — duration/stops read as "not stated", the
     // accessibility marker as false (the safe default the column also backfills to).
     durationMin: row.duration_min ?? null,
@@ -1117,6 +1120,8 @@ export interface UpdateEventInput {
    *  null = clear the override (fall back to the route's start point); a value sets it. Never
    *  touches the route/GPX. */
   meetingPoint?: { lat: number; lon: number } | null;
+  /** PROMOTE (sql/053) — written by the service via updateEventPromoteOnly, not by updateEvent. */
+  promoteOnly?: boolean;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
    *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
@@ -1246,6 +1251,28 @@ export async function updateEventRideImage(
   } catch (err) {
     if (isMissingColumnError(err)) {
       logger.warn({ err }, "events.ride_image_key missing — run sql/051-events-ride-image.sql");
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.promote_only on its own, guarded against a database without
+ * sql/053-events-promote-only.sql so the core create/edit path never depends on the column.
+ */
+export async function updateEventPromoteOnly(
+  eventId: string,
+  promoteOnly: boolean,
+): Promise<void> {
+  try {
+    await execute("UPDATE events SET promote_only = $2, updated_at = NOW() WHERE id = $1", [
+      eventId,
+      promoteOnly,
+    ]);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events.promote_only missing — run sql/053-events-promote-only.sql");
       return;
     }
     throw err;

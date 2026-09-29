@@ -5,7 +5,7 @@
 
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveProfileImagesDir } from "./env.js";
+import { resolveProfileImagesDir, resolveRideImagesDir } from "./env.js";
 
 describe("resolveProfileImagesDir", () => {
   it("never throws and never calls process.exit, for any input", () => {
@@ -72,5 +72,59 @@ describe("resolveProfileImagesDir", () => {
   it("a configured value wins in every NODE_ENV, dev/test included", () => {
     expect(resolveProfileImagesDir("/custom/dir", "development")).toBe(path.resolve("/custom/dir"));
     expect(resolveProfileImagesDir("/custom/dir", "test")).toBe(path.resolve("/custom/dir"));
+  });
+});
+
+// resolveRideImagesDir originally called process.exit(1) in production when RIDE_IMAGES_DIR was
+// unset — exactly the mistake resolveProfileImagesDir's tests above exist to prevent a repeat
+// of, and exactly what happened on 2026-09-29: RIDE_IMAGES_DIR was not provisioned on the prod
+// host, and the whole API (auth included) went down with it, not just ride-image uploads. This
+// pins the fix the same way: never fatal, for any input.
+describe("resolveRideImagesDir", () => {
+  it("never throws and never calls process.exit, for any input", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit was called");
+    });
+    try {
+      expect(() => resolveRideImagesDir(undefined, "production")).not.toThrow();
+      expect(() => resolveRideImagesDir("", "production")).not.toThrow();
+      expect(() => resolveRideImagesDir("   ", "production")).not.toThrow();
+      expect(() => resolveRideImagesDir("/var/lib/podium/ride-images", "production")).not.toThrow();
+      expect(() => resolveRideImagesDir(undefined, "development")).not.toThrow();
+      expect(() => resolveRideImagesDir(undefined, "test")).not.toThrow();
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("production + unset → disabled (null), not fatal", () => {
+    expect(resolveRideImagesDir(undefined, "production")).toBeNull();
+    expect(resolveRideImagesDir("", "production")).toBeNull();
+    expect(resolveRideImagesDir("   ", "production")).toBeNull();
+  });
+
+  it("production + unset → logs one clear warning, not an error", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      resolveRideImagesDir(undefined, "production");
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain("RIDE_IMAGES_DIR");
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("production + a configured value → resolved, absolute, and used", () => {
+    const resolved = resolveRideImagesDir("/var/lib/podium/ride-images", "production");
+    expect(resolved).toBe(path.resolve("/var/lib/podium/ride-images"));
+  });
+
+  it("development + unset → the repo-local default (unchanged behavior)", () => {
+    const resolved = resolveRideImagesDir(undefined, "development");
+    expect(resolved).toBe(path.resolve(process.cwd(), "var/ride-images"));
   });
 });

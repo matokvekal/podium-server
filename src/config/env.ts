@@ -135,6 +135,13 @@ const envSchema = z.object({
   // in production, see resolveProfileImagesDir() below. The dev default points at the
   // repo-adjacent images/PUBLIC-APP-IMAGES folder this project already keeps out of git.
   PROFILE_IMAGES_DIR: z.string().optional(),
+
+  // Where a System-Admin-uploaded ride-cover image (processed to WebP) lives on disk — see
+  // sql/052-ride-images-registry.sql and lib/ride-image-storage.ts. Same rule as UPLOADS_DIR
+  // (this IS real persistent data, unlike the optional PROFILE_IMAGES_DIR gallery): must sit
+  // outside the directory a deployment replaces, and is required in production — see
+  // resolveRideImagesDir() below. The dev default is repo-local and gitignored.
+  RIDE_IMAGES_DIR: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -229,6 +236,35 @@ export function resolveProfileImagesDir(
   return path.resolve(process.cwd(), "../images/PUBLIC-APP-IMAGES");
 }
 
+/**
+ * The ride-image upload root. NOT fatal when unset in production — see
+ * resolveProfileImagesDir's comment just above for why an env var gating one optional feature
+ * must never be able to take the whole API down. (2026-09-29 incident: this function originally
+ * called process.exit(1) here, exactly like resolveProfileImagesDir used to; RIDE_IMAGES_DIR was
+ * not provisioned on the prod host, and every endpoint — auth included — went down with it.)
+ * `null` means "admin uploads disabled"; services/rideImages.service.ts's uploadRideImage()
+ * refuses cleanly with a 500 naming the missing env var, and app.ts only mounts the static
+ * route when this is non-null. Everything else — static ride images, PROMOTE, auth, rides —
+ * is completely unaffected by this being unset.
+ */
+export function resolveRideImagesDir(
+  value: string | undefined,
+  nodeEnv: (typeof data)["NODE_ENV"],
+): string | null {
+  if (value && value.trim() !== "") return path.resolve(value.trim());
+
+  if (nodeEnv === "production") {
+    console.warn(
+      "RIDE_IMAGES_DIR is not set — System Admin ride-image uploads are disabled (everything " +
+        "else starts normally). Set it to an absolute path OUTSIDE the deployment directory " +
+        "(e.g. /var/lib/podium/ride-images) to enable them.",
+    );
+    return null;
+  }
+
+  return path.resolve(process.cwd(), "var/ride-images");
+}
+
 export const env = {
   ...data,
   JWT_ACCESS_SECRET: resolveSecret(
@@ -239,6 +275,7 @@ export const env = {
   ),
   UPLOADS_DIR: resolveUploadsDir(data.UPLOADS_DIR, data.NODE_ENV),
   PROFILE_IMAGES_DIR: resolveProfileImagesDir(data.PROFILE_IMAGES_DIR, data.NODE_ENV),
+  RIDE_IMAGES_DIR: resolveRideImagesDir(data.RIDE_IMAGES_DIR, data.NODE_ENV),
   ASSETS_DIR: path.resolve(
     data.ASSETS_DIR && data.ASSETS_DIR.trim() !== ""
       ? data.ASSETS_DIR.trim()

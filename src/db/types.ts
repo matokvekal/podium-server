@@ -211,6 +211,12 @@ export interface Event {
   meetingLon: number | null;
 
   /**
+   * PROMOTE (sql/053): shown as a normal card, locked for everyone but the System Admin and the
+   * owner. false on every existing event and on a database without the column.
+   */
+  promoteOnly: boolean;
+
+  /**
    * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,
    * so they are stored, not computed.
    *   durationMin  expected ride time in whole minutes, or null when not stated
@@ -304,8 +310,8 @@ export interface Event {
   linkGroupId: string | null;
 
   /**
-   * The organizer's choice of a built-in ride cover photo — a key into the registry the server
-   * publishes (src/config/ride-images.ts), NEVER a URL or binary data. See
+   * The organizer's choice of a built-in ride cover photo — a key into the ride_images table
+   * (sql/052-ride-images-registry.sql), NEVER a URL or binary data. See
    * sql/051-events-ride-image.sql. `null` = no built-in image chosen; the client falls back to
    * its existing cover chain (owner's own avatar/cover, then a generated placeholder).
    *
