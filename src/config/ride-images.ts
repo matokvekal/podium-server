@@ -18,7 +18,7 @@
 
 /** V1: three curated Sukkot images. Append here (and on the client) to add more — never remove
  *  or reorder an existing entry, see header. */
-export const RIDE_IMAGE_KEYS = ["sukkot-01", "sukkot-02", "sukkot-03"] as const;
+export const RIDE_IMAGE_KEYS = ["sukkot-01", "sukkot-02", "sukkot-03", "tikva1"] as const;
 
 export type RideImageKey = (typeof RIDE_IMAGE_KEYS)[number];
 
