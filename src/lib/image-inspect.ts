@@ -36,7 +36,9 @@ export interface InspectedImage {
  *   GIF   "GIF87a" / "GIF89a"
  *   WebP  "RIFF" .... "WEBP"   (a RIFF container whose form type is WEBP)
  */
-function sniffFormat(bytes: Buffer): ImageFormat | null {
+/** Exported for lib/ride-image-process.ts, which validates a ride-cover upload the same way —
+ *  by the actual bytes, never the declared Content-Type or a filename. */
+export function sniffFormat(bytes: Buffer): ImageFormat | null {
   if (
     bytes.length >= 8 &&
     bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))

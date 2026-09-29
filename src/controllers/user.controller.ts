@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { isAdminEmail } from "../adminAnalytics/adminAnalytics.auth.js";
 import { buildActor } from "../authz/actor.js";
 import { ACCOUNT_CAPABILITIES } from "../authz/capabilities.js";
 import { redeemCoupon } from "../authz/coupons.js";
@@ -112,6 +113,8 @@ async function toAccount(user: User) {
      * real check (403 on POST /events).
      */
     canOrganize: capabilities.includes("event:create"),
+    /** PROMOTE switch visibility (UI only — the server refuses the write to anyone else). */
+    canManagePromote: isAdminEmail(statisticsEmails),
     /** See the STATISTICS_PREVIEW_EMAILS comment above — menu visibility only. */
     canSeeStatistics: canSeeStatistics(statisticsEmails),
     /** See the WIND_FORECAST_EMAILS comment above — UI gate for the wind pilot only. */
