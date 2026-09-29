@@ -219,6 +219,10 @@ export const createEventSchema = z.object({
   // Blank = null = the default message.
   promoteRegistrationMessage,
 
+  // Chat on/off for this ride (sql/056). Independent of PROMOTE. Omitted = leave alone (create:
+  // enabled). The owner sets it; turning it off keeps the messages.
+  chatEnabled: z.boolean().optional(),
+
   // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
   // means "not stated / leave alone", a value sets it. duration in whole minutes.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
@@ -296,6 +300,10 @@ export const updateEventSchema = z.object({
   // Text shown instead of Join on a PROMOTE event (sql/055). System Admin only, like promoteOnly.
   // Blank = null = the default message.
   promoteRegistrationMessage,
+
+  // Chat on/off for this ride (sql/056). Independent of PROMOTE. Omitted = leave alone (create:
+  // enabled). The owner sets it; turning it off keeps the messages.
+  chatEnabled: z.boolean().optional(),
 
   // See createEventSchema. `null` clears the field; omitted leaves it untouched.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),

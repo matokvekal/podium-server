@@ -6,6 +6,7 @@
 // in one statement and so applies the same rule in SQL (see its own comment).
 
 import { query, withTransaction } from "../db/pool.js";
+import { isMissingColumnError } from "./event.queries.js";
 
 export interface RideChatMessageRow {
   id: string; // BIGINT arrives as a string from pg
@@ -119,8 +120,23 @@ export async function selectUnreadSummary(
   cap: number,
 ): Promise<RideChatSummaryRow[]> {
   if (rides.length === 0) return [];
-  return query<RideChatSummaryRow>(
-    `SELECT r.ride_id::text AS ride_id, latest.latest_id, unread.unread
+  const params = [userId, rides.map((r) => r.rideId), rides.map((r) => r.lastReadId), cap];
+  try {
+    return await query<RideChatSummaryRow>(unreadSql(true), params);
+  } catch (err) {
+    // events.chat_enabled (sql/056) is not there yet: every ride has chat, exactly as before.
+    if (!isMissingColumnError(err)) throw err;
+    return query<RideChatSummaryRow>(unreadSql(false), params);
+  }
+}
+
+/**
+ * The unread statement. `chatEnabledOnly` adds the sql/056 rule: a ride whose owner switched chat
+ * off produces no row at all (so no badge, no icon, and nothing to probe).
+ */
+function unreadSql(chatEnabledOnly: boolean): string {
+  const where = chatEnabledOnly ? "WHERE e.chat_enabled AND (" : "WHERE (";
+  return `SELECT r.ride_id::text AS ride_id, latest.latest_id, unread.unread
        FROM unnest($2::uuid[], $3::bigint[]) AS r(ride_id, last_read)
        JOIN events e ON e.id = r.ride_id
        LEFT JOIN LATERAL (
@@ -133,13 +149,11 @@ export async function selectUnreadSummary(
             LIMIT $4
          ) newer
        ) unread ON TRUE
-      WHERE e.owner_id = $1
+      ${where} e.owner_id = $1
          OR EXISTS (SELECT 1 FROM event_members em
                      WHERE em.event_id = e.id AND em.user_id = $1
                        AND em.role IN ('owner', 'operator'))
          OR EXISTS (SELECT 1 FROM event_participants ep
                      WHERE ep.event_id = e.id AND ep.user_id = $1
-                       AND ep.registration_status IN ('registered', 'approved'))`,
-    [userId, rides.map((r) => r.rideId), rides.map((r) => r.lastReadId), cap],
-  );
+                       AND ep.registration_status IN ('registered', 'approved')))`;
 }

@@ -161,3 +161,17 @@ describe("toEventSummary — PROMOTE message + Organizer display name", () => {
     expect(row.ownerId).toBe(OWNER_ID);
   });
 });
+
+describe("toEventSummary — chatEnabled (sql/056)", () => {
+  it("existing events (no value) report chat enabled; an explicit false is echoed", () => {
+    expect(toEventSummary(event as never).chatEnabled).toBe(true);
+    expect(toEventSummary({ ...event, chatEnabled: false } as never).chatEnabled).toBe(false);
+    expect(toEventSummary({ ...event, chatEnabled: true } as never).chatEnabled).toBe(true);
+  });
+
+  it("chat and PROMOTE are reported independently", () => {
+    const row = toEventSummary({ ...event, chatEnabled: false, promoteOnly: true } as never);
+    expect(row.chatEnabled).toBe(false);
+    expect(row.promoteOnly).toBe(true);
+  });
+});

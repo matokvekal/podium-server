@@ -53,3 +53,18 @@ describe("selectUnreadSummary", () => {
     expect(params).toEqual([7, ["a", "b"], [3, 0], 100]);
   });
 });
+
+describe("selectUnreadSummary — chat switched off (sql/056)", () => {
+  it("leaves out rides whose owner turned chat off (no row => no icon, no badge)", async () => {
+    await selectUnreadSummary(7, [{ rideId: "r1", lastReadId: 0 }], 100);
+    const [sql] = query.mock.calls[0] as [string];
+    expect(sql).toMatch(/WHERE e\.chat_enabled AND \(/);
+  });
+
+  it("on a database without the column falls back to the old rule (every ride has chat)", async () => {
+    query.mockRejectedValueOnce({ code: "42703" });
+    await selectUnreadSummary(7, [{ rideId: "r1", lastReadId: 0 }], 100);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect((query.mock.calls[1] as [string])[0]).not.toContain("chat_enabled");
+  });
+});

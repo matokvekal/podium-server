@@ -92,6 +92,9 @@ export function toEventSummary(event: Event | EventListItem) {
     // The text shown instead of Join (sql/055), or null = the client's default. Sent even while
     // PROMOTE is off, so the edit form can prefill it for switching PROMOTE back on.
     promoteRegistrationMessage: event.promoteRegistrationMessage ?? null,
+    // Whether the ride has a chat (sql/056). true for every existing ride. The client hides the
+    // chat button, badge and polling when false; the server refuses chat calls regardless.
+    chatEnabled: event.chatEnabled ?? true,
     // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
     // "Browse tracks" picker filters on both; a card shows the region label. `region` null
     // means the organiser has not set one.
