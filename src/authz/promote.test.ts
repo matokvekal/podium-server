@@ -1,6 +1,4 @@
-// PROMOTE (sql/053) — who may switch it and who may go past the card.
-// The regression that matters most: a NORMAL event (promoteOnly false) must never cost a lookup
-// or be refused, whoever is asking.
+// PROMOTE (sql/053) — who may switch it, and that it closes registration (only) while on.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api-error.js";
@@ -13,7 +11,7 @@ vi.mock("../lib/logger.js", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
 
-const { assertCanEnterPromoteEvent, canManagePromote } = await import("./promote.js");
+const { assertRegistrationOpen, canManagePromote } = await import("./promote.js");
 
 const OWNER = 7;
 const promoted = { id: "e1", ownerId: OWNER, promoteOnly: true } as never;
@@ -35,25 +33,19 @@ describe("canManagePromote", () => {
   });
 });
 
-describe("assertCanEnterPromoteEvent", () => {
-  it("never touches a normal event — no lookup, no refusal, for anyone", async () => {
-    await expect(assertCanEnterPromoteEvent(normal, 99)).resolves.toBeUndefined();
-    await expect(assertCanEnterPromoteEvent(normal, null)).resolves.toBeUndefined();
-    expect(selectUserEmails).not.toHaveBeenCalled();
+describe("assertRegistrationOpen", () => {
+  it("never touches a normal event", () => {
+    expect(() => assertRegistrationOpen(normal)).not.toThrow();
   });
 
-  it("refuses a normal user and a guest on a promoted event with 403 PROMOTE_LOCKED", async () => {
-    selectUserEmails.mockResolvedValue(["rider@example.com"]);
-    const err = await assertCanEnterPromoteEvent(promoted, 99).catch((e) => e);
-    expect(err).toBeInstanceOf(ApiError);
-    expect((err as ApiError).status).toBe(403);
-    expect((err as ApiError).message).toContain("PROMOTE_LOCKED");
-    await expect(assertCanEnterPromoteEvent(promoted, null)).rejects.toBeInstanceOf(ApiError);
-  });
-
-  it("lets the System Admin and the owner through", async () => {
-    selectUserEmails.mockResolvedValue(["mictavim@gmail.com"]);
-    await expect(assertCanEnterPromoteEvent(promoted, 1)).resolves.toBeUndefined();
-    await expect(assertCanEnterPromoteEvent(promoted, OWNER)).resolves.toBeUndefined();
+  it("refuses registration on a promoted event with 403 PROMOTE_REGISTRATION", () => {
+    try {
+      assertRegistrationOpen(promoted);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(403);
+      expect((err as ApiError).message).toContain("PROMOTE_REGISTRATION");
+    }
   });
 });

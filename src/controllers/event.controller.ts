@@ -86,11 +86,9 @@ export function toEventSummary(event: Event | EventListItem) {
     // prefills it, the "Find Rides" list can sort by it, and a card can show it — the
     // client already sends it on create/PATCH and reads it back here.
     area: event.area,
-    // PROMOTE (sql/053): shown as a card but closed to riders. The description rides on the
-    // SUMMARY for these rows ONLY — a locked card has no detail page to read it on, and the
-    // organizer puts the external registration link there. Normal rows are unchanged (no key).
+    // PROMOTE (sql/053): a normal, viewable ride whose registration is handled by the
+    // organizers — the client swaps Join for a notice. Joining is refused server-side.
     promoteOnly: event.promoteOnly ?? false,
-    ...(event.promoteOnly ? { description: event.description ?? null } : {}),
     // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
     // "Browse tracks" picker filters on both; a card shows the region label. `region` null
     // means the organiser has not set one.

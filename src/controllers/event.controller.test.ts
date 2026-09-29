@@ -133,20 +133,13 @@ describe("toEventDetail — meetingPoint follows the same redaction as location"
 });
 
 describe("toEventSummary — PROMOTE (sql/053)", () => {
-  const withDescription = { ...event, description: "Register: https://example.org/reg" };
-
-  it("a normal event's list row is unchanged: promoteOnly false and NO description key", () => {
-    const row = toEventSummary(withDescription as never);
-    expect(row.promoteOnly).toBe(false);
-    expect("description" in row).toBe(false);
+  it("carries promoteOnly, false for a normal event and true for a promoted one", () => {
+    expect(toEventSummary(event as never).promoteOnly).toBe(false);
+    expect(toEventSummary({ ...event, promoteOnly: true } as never).promoteOnly).toBe(true);
   });
 
-  it("a promoted event's list row carries the description its locked card must show", () => {
-    const row = toEventSummary({ ...withDescription, promoteOnly: true } as never) as {
-      promoteOnly: boolean;
-      description: string | null;
-    };
-    expect(row.promoteOnly).toBe(true);
-    expect(row.description).toBe("Register: https://example.org/reg");
+  it("does not add a description key to list rows (only the detail carries it)", () => {
+    const row = toEventSummary({ ...event, description: "x", promoteOnly: true } as never);
+    expect("description" in row).toBe(false);
   });
 });
