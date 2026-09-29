@@ -68,7 +68,7 @@ import {
   selectParticipantsForEvent,
 } from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
-import { assertCanEnterPromoteEvent, canManagePromote } from "../authz/promote.js";
+import { assertRegistrationOpen, canManagePromote } from "../authz/promote.js";
 import { isKnownRideImageKey } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 
@@ -115,7 +115,7 @@ export async function joinEvent(
     logger.warn({ eventCode, userId }, "joinEvent: event not found");
     throw new ApiError(404, "Event not found");
   }
-  await assertCanEnterPromoteEvent(event, userId);
+  assertRegistrationOpen(event);
 
   if (event.requiresBib && !bib) {
     logger.warn({ eventId: event.id, userId }, "joinEvent: missing required bib");
@@ -567,9 +567,6 @@ export async function getEventForViewer(
   // One question, one place. 404 rather than 403 when the answer is no: a private ride's id
   // is shared as a link or QR and IS the secret, so confirming it exists leaks it.
   if (!canEvent(actor, "event:view", context)) throw new ApiError(404, "Event not found");
-
-  // PROMOTE (sql/053): the card is public, the ride is not. No-op for every normal event.
-  await assertCanEnterPromoteEvent(event, viewerId);
 
   return { event, tier: toLegacyTier(context, viewerId), actor, context };
 }

@@ -1,9 +1,8 @@
-// PROMOTE (sql/053): an event that is shown as a normal card but is closed to everyone except
-// the System Admin and its own owner, until the admin switches it off.
+// PROMOTE (sql/053): an otherwise normal, fully visible event whose REGISTRATION is handled by
+// the organizers outside El Nino, until the admin switches it off.
 //
-// The one place both questions are answered:
-//   canManagePromote  — who may switch PROMOTE on/off (today: the System Admin only)
-//   assertCanEnterPromoteEvent — who may go past the card (join, detail, participants, ...)
+//   canManagePromote     — who may switch PROMOTE on/off (today: the System Admin only)
+//   assertRegistrationOpen — refuses self-registration (join) while PROMOTE is on
 //
 // To let more admins use PROMOTE later, change canManagePromote and nothing else.
 
@@ -19,16 +18,12 @@ export async function canManagePromote(userId: number | null | undefined): Promi
 }
 
 /**
- * Throws 403 unless the event is open to this viewer. A normal event (promoteOnly false) returns
- * immediately with no lookup, so nothing about existing events changes. The owner keeps access
- * to their own ride; everyone else needs to be the System Admin.
+ * PROMOTE closes REGISTRATION only: the ride stays a normal, fully viewable event, but nobody
+ * may join it through El Nino while promoteOnly is true (registration happens with the
+ * organizers, off-platform). Applies to everyone who would self-register, System Admin included —
+ * to test joining, switch PROMOTE off. A normal event (promoteOnly false) is never affected.
  */
-export async function assertCanEnterPromoteEvent(
-  event: Event,
-  userId: number | null | undefined,
-): Promise<void> {
+export function assertRegistrationOpen(event: Event): void {
   if (!event.promoteOnly) return;
-  if (userId != null && event.ownerId === userId) return;
-  if (await canManagePromote(userId)) return;
-  throw new ApiError(403, "This ride is not open yet (PROMOTE_LOCKED)");
+  throw new ApiError(403, "Registration is through the organizers (PROMOTE_REGISTRATION)");
 }
