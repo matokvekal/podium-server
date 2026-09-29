@@ -61,6 +61,8 @@ interface EventRow {
   promote_only?: boolean;
   /** sql/055 — absent (undefined) on a database without it. */
   promote_registration_message?: string | null;
+  /** sql/056 — absent (undefined) on a database without it, which reads as enabled. */
+  chat_enabled?: boolean;
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
@@ -174,6 +176,7 @@ function mapEvent(row: EventRow): Event {
     meetingLon: row.meeting_lon ?? null,
     promoteOnly: row.promote_only ?? false,
     promoteRegistrationMessage: row.promote_registration_message ?? null,
+    chatEnabled: row.chat_enabled ?? true,
     // undefined on a database without sql/022 — duration/stops read as "not stated", the
     // accessibility marker as false (the safe default the column also backfills to).
     durationMin: row.duration_min ?? null,
@@ -1128,6 +1131,8 @@ export interface UpdateEventInput {
   promoteOnly?: boolean;
   /** PROMOTE message (sql/055) — written via updateEventPromoteMessage. undefined = keep; null = clear. */
   promoteRegistrationMessage?: string | null;
+  /** Chat on/off (sql/056) — written via updateEventChatEnabled. undefined = keep. */
+  chatEnabled?: boolean;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
    *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
@@ -1306,6 +1311,26 @@ export async function updateEventPromoteMessage(
         { err },
         "events.promote_registration_message missing — run sql/055-events-promote-registration-message.sql",
       );
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes events.chat_enabled on its own, guarded against a database without
+ * sql/056-events-chat-enabled.sql. Only flips the flag: ride_chat_messages is never touched, so
+ * turning chat off and on again keeps the history.
+ */
+export async function updateEventChatEnabled(eventId: string, chatEnabled: boolean): Promise<void> {
+  try {
+    await execute("UPDATE events SET chat_enabled = $2, updated_at = NOW() WHERE id = $1", [
+      eventId,
+      chatEnabled,
+    ]);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events.chat_enabled missing — run sql/056-events-chat-enabled.sql");
       return;
     }
     throw err;

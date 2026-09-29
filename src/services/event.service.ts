@@ -54,6 +54,7 @@ import {
   updateEventCountryRegion,
   updateEventElevationGain,
   updateEventMeetingPoint,
+  updateEventChatEnabled,
   updateEventPromoteMessage,
   updateEventPromoteOnly,
   updateEventPaused,
@@ -325,6 +326,8 @@ export async function createEvent(
     promoteOnly?: boolean;
     /** PROMOTE registration text (sql/055) — System Admin only, same gate as promoteOnly. */
     promoteRegistrationMessage?: string | null;
+    /** Chat on/off (sql/056). Omitted = enabled. */
+    chatEnabled?: boolean;
   },
 ): Promise<Event> {
   await assertMayChangePromote(ownerId, input.promoteOnly, input.promoteRegistrationMessage);
@@ -403,6 +406,10 @@ export async function createEvent(
   // defaults to false, so a create that says false has nothing to do.
   if (input.promoteOnly === true) {
     await updateEventPromoteOnly(event.id, true);
+  }
+  // Chat is written only when switched OFF: the column defaults to true (sql/056).
+  if (input.chatEnabled === false) {
+    await updateEventChatEnabled(event.id, false);
   }
   // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
   if (input.promoteRegistrationMessage) {
@@ -663,6 +670,11 @@ export async function updateEventDetails(
   if (input.promoteRegistrationMessage !== undefined) {
     await updateEventPromoteMessage(eventId, input.promoteRegistrationMessage);
   }
+  // Chat on/off (sql/056) - the owner's setting (assertOwner above). Messages are never touched.
+  const wroteChat = input.chatEnabled !== undefined;
+  if (input.chatEnabled !== undefined) {
+    await updateEventChatEnabled(eventId, input.chatEnabled);
+  }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
   const wroteRidePlan =
@@ -771,7 +783,7 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteMeetingPoint || wrotePromote || wroteRidePlan || wroteCountryRegion) {
+  if (wroteElevation || wroteMeetingPoint || wrotePromote || wroteChat || wroteRidePlan || wroteCountryRegion) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }

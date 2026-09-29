@@ -56,6 +56,11 @@ export function toRideChatMessage(row: RideChatMessageRow): RideChatMessage {
 /** 404 when the ride does not exist for the caller, 403 when it does but they are not on it. */
 async function assertCanChat(rideId: string, userId: number): Promise<void> {
   const view = await getEventForViewer(rideId, userId);
+  // The owner switched this ride's chat off (sql/056): no reads, no sends, whoever asks. The
+  // stored messages are left alone and come back when it is switched on again.
+  if (view.event.chatEnabled === false) {
+    throw new ApiError(403, "Chat is turned off for this ride (RIDE_CHAT_DISABLED)");
+  }
   if (!canEvent(view.actor, "event:chat", view.context)) {
     throw new ApiError(403, "Only riders on this ride can use its chat (RIDE_CHAT_NO_ACCESS)");
   }

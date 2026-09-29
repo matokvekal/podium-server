@@ -178,7 +178,9 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
       // Not a pending rider (not in yet) and not a stranger browsing a public ride. Not tied to
       // status, so a finished ride's chat stays readable from History.
       // rideChat.queries.ts selectUnreadSummary repeats this rule in SQL — change both.
-      return isStaff(ctx) || isRiding(ctx);
+      // A ride whose owner turned chat off (events.chat_enabled, sql/056) has no chat for
+      // anyone: this also empties the detail's `capabilities`, which is what hides the button.
+      return ctx.event.chatEnabled !== false && (isStaff(ctx) || isRiding(ctx));
 
     case "event:manage_stops":
       // The ride's creator only — asked for directly, so a co-organizer (operator) does not get

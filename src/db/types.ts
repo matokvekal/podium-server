@@ -220,6 +220,12 @@ export interface Event {
    * Kept while PROMOTE is off. null on every existing event and on a database without the column.
    */
   promoteRegistrationMessage: string | null;
+  /**
+   * Whether this ride has a chat (sql/056). true on every existing event, on a new event that
+   * says nothing, and on a database without the column. false closes the chat for everyone:
+   * the server refuses reads and sends, and no unread count is produced. The messages are kept.
+   */
+  chatEnabled: boolean;
 
   /**
    * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,
