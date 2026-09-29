@@ -54,7 +54,6 @@ import {
   updateEventCountryRegion,
   updateEventElevationGain,
   updateEventMeetingPoint,
-  updateEventPromoteOnly,
   updateEventPaused,
   updateEventRideImage,
   updateEventRidePlan,
@@ -68,8 +67,6 @@ import {
   selectParticipantsForEvent,
 } from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
-import { assertCanEnterPromoteEvent, canManagePromote } from "../authz/promote.js";
-import { isKnownRideImageKey } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 
 export async function findActiveEventByCode(code: string): Promise<Event | null> {
@@ -115,7 +112,6 @@ export async function joinEvent(
     logger.warn({ eventCode, userId }, "joinEvent: event not found");
     throw new ApiError(404, "Event not found");
   }
-  await assertCanEnterPromoteEvent(event, userId);
 
   if (event.requiresBib && !bib) {
     logger.warn({ eventId: event.id, userId }, "joinEvent: missing required bib");
@@ -246,17 +242,6 @@ function isActiveForStatus(status: EventStatus): boolean {
   return status !== "draft" && status !== "cancelled" && status !== "finished";
 }
 
-/**
- * PROMOTE is the System Admin's switch. ANY value from anyone else is refused — `false` too —
- * so a client can neither turn it on nor probe or flip it. undefined = the field was not sent.
- */
-async function assertMayChangePromote(userId: number, promoteOnly: boolean | undefined) {
-  if (promoteOnly === undefined) return;
-  if (!(await canManagePromote(userId))) {
-    throw new ApiError(403, "Only the System Admin can change PROMOTE");
-  }
-}
-
 export async function createEvent(
   ownerId: number,
   input: {
@@ -316,11 +301,8 @@ export async function createEvent(
      *  RIDE_IMAGE_KEYS by the schema. undefined = none chosen; null is treated the same on
      *  create. Stored in events.ride_image_key via updateEventRideImage. */
     rideImageKey?: string | null;
-    /** PROMOTE (sql/053) — System Admin only; anyone else who sends it gets a 403. */
-    promoteOnly?: boolean;
   },
 ): Promise<Event> {
-  await assertMayChangePromote(ownerId, input.promoteOnly);
   const actor = await buildActor(ownerId);
 
   // "May this account create rides at all" — opened deliberately per account (a paid organizer
@@ -392,12 +374,6 @@ export async function createEvent(
     await updateEventMeetingPoint(event.id, input.meetingPoint);
   }
 
-  // PROMOTE (sql/053) — own guarded statement. Only ever written when switched ON: the column
-  // defaults to false, so a create that says false has nothing to do.
-  if (input.promoteOnly === true) {
-    await updateEventPromoteOnly(event.id, true);
-  }
-
   // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
   // guarded statement, only touched for keys the create request actually carried.
   if (
@@ -434,14 +410,8 @@ export async function createEvent(
   });
 
   // Ride image — own column, own guarded statement (see updateEventRideImage). Nothing to
-  // clear on create, so only written when the organizer actually picked one. The schema only
-  // checked the CHARSET (schemas/event.schemas.ts) — whether this key is one the server
-  // currently publishes (static or admin-uploaded, ride_images table) is an async check that
-  // has to happen here, same split as setPreset/setGalleryImage in user-image.service.ts.
+  // clear on create, so only written when the organizer actually picked one.
   if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
-    if (!(await isKnownRideImageKey(input.rideImageKey))) {
-      throw new ApiError(400, `There is no ride image called "${input.rideImageKey}"`);
-    }
     await updateEventRideImage(event.id, input.rideImageKey);
   }
 
@@ -568,9 +538,6 @@ export async function getEventForViewer(
   // is shared as a link or QR and IS the secret, so confirming it exists leaks it.
   if (!canEvent(actor, "event:view", context)) throw new ApiError(404, "Event not found");
 
-  // PROMOTE (sql/053): the card is public, the ride is not. No-op for every normal event.
-  await assertCanEnterPromoteEvent(event, viewerId);
-
   return { event, tier: toLegacyTier(context, viewerId), actor, context };
 }
 
@@ -610,7 +577,6 @@ export async function updateEventDetails(
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
   assertOwner(event, userId);
-  await assertMayChangePromote(userId, input.promoteOnly);
   // Once live, the ride's DETAILS are locked — name, date, place, description. Moving those
   // out from under riders who are already on the road is the thing this guard exists to stop.
   //
@@ -646,12 +612,6 @@ export async function updateEventDetails(
   const wroteMeetingPoint = input.meetingPoint !== undefined;
   if (input.meetingPoint !== undefined) {
     await updateEventMeetingPoint(eventId, input.meetingPoint);
-  }
-
-  // PROMOTE (sql/053) — already authorised above (System Admin only).
-  const wrotePromote = input.promoteOnly !== undefined;
-  if (input.promoteOnly !== undefined) {
-    await updateEventPromoteOnly(eventId, input.promoteOnly);
   }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
@@ -692,13 +652,7 @@ export async function updateEventDetails(
   }
 
   // Ride image — same pattern. `undefined` means the caller left it out; `null` clears the
-  // chosen image (falls back to the cover chain). See createEvent's rideImageKey branch for why
-  // this existence check is async and lives here rather than in the schema.
-  if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
-    if (!(await isKnownRideImageKey(input.rideImageKey))) {
-      throw new ApiError(400, `There is no ride image called "${input.rideImageKey}"`);
-    }
-  }
+  // chosen image (falls back to the cover chain).
   if (input.rideImageKey !== undefined) {
     await updateEventRideImage(eventId, input.rideImageKey);
   }
@@ -761,7 +715,7 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteMeetingPoint || wrotePromote || wroteRidePlan || wroteCountryRegion) {
+  if (wroteElevation || wroteMeetingPoint || wroteRidePlan || wroteCountryRegion) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }
