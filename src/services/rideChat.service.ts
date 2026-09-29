@@ -54,7 +54,11 @@ export function toRideChatMessage(row: RideChatMessageRow): RideChatMessage {
 }
 
 /** 404 when the ride does not exist for the caller, 403 when it does but they are not on it. */
-async function assertCanChat(rideId: string, userId: number): Promise<void> {
+async function assertCanChat(
+  rideId: string,
+  userId: number,
+  opts: { forWrite?: boolean } = {},
+): Promise<void> {
   const view = await getEventForViewer(rideId, userId);
   // The owner switched this ride's chat off (sql/056): no reads, no sends, whoever asks. The
   // stored messages are left alone and come back when it is switched on again.
@@ -63,6 +67,10 @@ async function assertCanChat(rideId: string, userId: number): Promise<void> {
   }
   if (!canEvent(view.actor, "event:chat", view.context)) {
     throw new ApiError(403, "Only riders on this ride can use its chat (RIDE_CHAT_NO_ACCESS)");
+  }
+  // A rider who left keeps read access for now, but cannot post. Organizers are never "left".
+  if (opts.forWrite && view.context.role === null && view.context.hasLeft === true) {
+    throw new ApiError(403, "You left this ride, so you can no longer post in its chat (RIDE_CHAT_LEFT)");
   }
 }
 
@@ -92,7 +100,7 @@ export async function sendRideChat(
       `Message is longer than ${RIDE_CHAT_MAX_MESSAGE_LENGTH} characters (RIDE_CHAT_TOO_LONG)`,
     );
   }
-  await assertCanChat(rideId, userId);
+  await assertCanChat(rideId, userId, { forWrite: true });
 
   const result = await insertRideChatMessage(rideId, userId, text, RIDE_CHAT_MAX_MESSAGES_PER_RIDE);
   if (result.kind === "limit") {

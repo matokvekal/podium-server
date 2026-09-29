@@ -32,6 +32,11 @@ export interface EventContext {
   event: Event;
   role: EventRole;
   participation: Participation;
+  /**
+   * The caller's participant row is approved but stamped left_at. NOT read by canEvent: leaving
+   * does not change what the policy allows. Only the ride chat's send path uses it.
+   */
+  hasLeft?: boolean;
 }
 
 export interface TeamContext {

@@ -156,6 +156,43 @@ describe("sending", () => {
   });
 });
 
+describe("a rider who left the ride", () => {
+  const left = (role: EventRole = null) => ({
+    ...view(role, "approved"),
+    context: { ...view(role, "approved").context, hasLeft: true },
+  });
+
+  it("cannot post (403, nothing stored)", async () => {
+    getEventForViewer.mockResolvedValue(left());
+    await expectStatus(sendRideChat(RIDE, 7, "still here?"), 403);
+    expect(insertRideChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("can still read the history (read access unchanged)", async () => {
+    getEventForViewer.mockResolvedValue(left());
+    selectRideChatMessages.mockResolvedValue([row(1)]);
+    await expect(listRideChat(RIDE, 7, null)).resolves.toHaveLength(1);
+  });
+
+  it("an organizer flagged hasLeft can still post", async () => {
+    getEventForViewer.mockResolvedValue(left("owner"));
+    insertRideChatMessage.mockResolvedValue({ kind: "ok", row: row(9) });
+    await expect(sendRideChat(RIDE, 7, "hello")).resolves.toMatchObject({ id: 9 });
+  });
+});
+
+describe("afterId validation", () => {
+  it("accepts a safe integer and rejects anything above MAX_SAFE_INTEGER", async () => {
+    const { rideChatListQuerySchema } = await import("../schemas/rideChat.schemas.js");
+    expect(rideChatListQuerySchema.safeParse({ afterId: "42" }).success).toBe(true);
+    expect(
+      rideChatListQuerySchema.safeParse({ afterId: String(Number.MAX_SAFE_INTEGER) }).success,
+    ).toBe(true);
+    expect(rideChatListQuerySchema.safeParse({ afterId: "1e30" }).success).toBe(false);
+    expect(rideChatListQuerySchema.safeParse({ afterId: "9007199254740993" }).success).toBe(false);
+  });
+});
+
 describe("unread summary", () => {
   it("parses rideId:lastReadId pairs and drops malformed ones", () => {
     const { rides } = rideChatUnreadQuerySchema.parse({

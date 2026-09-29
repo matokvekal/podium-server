@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** GET /events/:eventId/chat?afterId=N — only messages newer than N (the polling read). */
 export const rideChatListQuerySchema = z.object({
-  afterId: z.coerce.number().int().nonnegative().optional(),
+  afterId: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 /**
