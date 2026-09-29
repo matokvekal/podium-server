@@ -73,10 +73,6 @@ export function createApp(): Express {
    * no-ops on an already-parsed request, so everything else still gets the tight limit.
    */
 
-  app.use((req, _res, next) => {
-    console.log(">>> INCOMING", req.method, req.url);
-    next();
-  });
   app.use("/api/v1/routes", express.json({ limit: "15mb" }));
   app.use("/api/v1/events/:eventId/route", express.json({ limit: "15mb" }));
 

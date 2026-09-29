@@ -47,8 +47,8 @@ export async function buildEventContext(
       "SELECT role FROM event_members WHERE event_id = $1 AND user_id = $2",
       [event.id, userId],
     ),
-    queryOne<{ registration_status: string }>(
-      `SELECT registration_status
+    queryOne<{ registration_status: string; left_at: Date | null }>(
+      `SELECT registration_status, left_at
          FROM event_participants
         WHERE event_id = $1 AND user_id = $2
         ORDER BY
@@ -73,7 +73,13 @@ export async function buildEventContext(
   const role: EventRole =
     memberRow?.role ?? (event.ownerId !== null && event.ownerId === userId ? "owner" : null);
 
-  return { event, role, participation: toParticipation(participantRow?.registration_status) };
+  const participation = toParticipation(participantRow?.registration_status);
+  return {
+    event,
+    role,
+    participation,
+    hasLeft: participation === "approved" && participantRow?.left_at != null,
+  };
 }
 
 function toParticipation(status: string | undefined): Participation {
