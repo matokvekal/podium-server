@@ -15,6 +15,7 @@ describe("the System Admin ride-image API requires the same gate on every method
   it.each([
     ["GET", "/api/v1/admin/ride-images"],
     ["POST", "/api/v1/admin/ride-images"],
+    ["POST", "/api/v1/admin/ride-images/sukkot-01/replace"],
     ["PATCH", "/api/v1/admin/ride-images/sukkot-01"],
     ["DELETE", "/api/v1/admin/ride-images/sukkot-01"],
   ] as const)("%s %s 401s with no token", async (method, path) => {
@@ -28,6 +29,7 @@ describe("the System Admin ride-image API requires the same gate on every method
   it.each([
     ["GET", "/api/v1/admin/ride-images"],
     ["POST", "/api/v1/admin/ride-images"],
+    ["POST", "/api/v1/admin/ride-images/sukkot-01/replace"],
     ["PATCH", "/api/v1/admin/ride-images/sukkot-01"],
     ["DELETE", "/api/v1/admin/ride-images/sukkot-01"],
   ] as const)("%s %s 401s a forged token before any query runs", async (method, path) => {

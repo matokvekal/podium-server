@@ -113,6 +113,28 @@ export function createApp(): Express {
     express.raw({ type: [...RIDE_IMAGE_UPLOAD_MIME_TYPES], limit: RIDE_IMAGE_UPLOAD_MAX_BYTES }),
   );
 
+  // Admin-uploaded ride covers (sql/052). RIDE_IMAGES_DIR is optional in production
+  // (config/env.ts, 2026-09-29 incident) — null means uploads are disabled and there is nothing
+  // to mount. Mounted here, before the rate limiter below: these are static image loads (a list
+  // of cards fetches many) and must not eat the per-IP API budget. Every file name is a random
+  // token and a replace always writes a NEW file, so the long immutable cache is safe.
+  if (env.RIDE_IMAGES_DIR) {
+    app.use(
+      RIDE_IMAGE_UPLOADS_URL_PREFIX,
+      express.static(env.RIDE_IMAGES_DIR, {
+        index: false,
+        redirect: false,
+        dotfiles: "deny",
+        immutable: true,
+        maxAge: "1y",
+        setHeaders: (res) => {
+          res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+          res.setHeader("X-Content-Type-Options", "nosniff");
+        },
+      }),
+    );
+  }
+
   app.use(express.json({ limit: "100kb" }));
 
   app.use(
@@ -168,12 +190,6 @@ export function createApp(): Express {
   // catalog), it just has nothing to point a URL at.
   if (env.PROFILE_IMAGES_DIR) {
     app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
-  }
-  // Admin-uploaded ride covers (sql/052-ride-images-registry.sql). RIDE_IMAGES_DIR is optional
-  // in production (config/env.ts, 2026-09-29 incident) — null means uploads are disabled and
-  // there is nothing to mount, same as PROFILE_IMAGES_DIR just above.
-  if (env.RIDE_IMAGES_DIR) {
-    app.use(RIDE_IMAGE_UPLOADS_URL_PREFIX, express.static(env.RIDE_IMAGES_DIR, imageStatic));
   }
 
   app.use("/api/v1/auth", authRouter);

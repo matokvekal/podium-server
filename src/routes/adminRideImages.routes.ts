@@ -10,6 +10,7 @@ import { requireAdminAnalytics } from "../adminAnalytics/adminAnalytics.auth.js"
 import {
   adminDeleteRideImageController,
   adminListRideImagesController,
+  adminReplaceRideImageController,
   adminSetSelectableController,
   adminUploadRideImageController,
 } from "../controllers/rideImages.controller.js";
@@ -21,5 +22,6 @@ adminRideImagesRouter.use(requireAuth, requireAdminAnalytics);
 
 adminRideImagesRouter.get("/", adminListRideImagesController);
 adminRideImagesRouter.post("/", adminUploadRideImageController);
+adminRideImagesRouter.post("/:key/replace", adminReplaceRideImageController);
 adminRideImagesRouter.patch("/:key", adminSetSelectableController);
 adminRideImagesRouter.delete("/:key", adminDeleteRideImageController);

@@ -69,7 +69,7 @@ import {
 } from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
 import { assertRegistrationOpen, canManagePromote } from "../authz/promote.js";
-import { isKnownRideImageKey } from "./rideImages.service.js";
+import { assertRideImageAssignable } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 
 export async function findActiveEventByCode(code: string): Promise<Event | null> {
@@ -439,9 +439,7 @@ export async function createEvent(
   // currently publishes (static or admin-uploaded, ride_images table) is an async check that
   // has to happen here, same split as setPreset/setGalleryImage in user-image.service.ts.
   if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
-    if (!(await isKnownRideImageKey(input.rideImageKey))) {
-      throw new ApiError(400, `There is no ride image called "${input.rideImageKey}"`);
-    }
+    await assertRideImageAssignable(input.rideImageKey, null);
     await updateEventRideImage(event.id, input.rideImageKey);
   }
 
@@ -692,9 +690,9 @@ export async function updateEventDetails(
   // chosen image (falls back to the cover chain). See createEvent's rideImageKey branch for why
   // this existence check is async and lives here rather than in the schema.
   if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
-    if (!(await isKnownRideImageKey(input.rideImageKey))) {
-      throw new ApiError(400, `There is no ride image called "${input.rideImageKey}"`);
-    }
+    // Keeping the key the ride already has is always fine, even if it has since been disabled or
+    // archived; only a NEW choice must be one the picker still offers.
+    await assertRideImageAssignable(input.rideImageKey, event.rideImageKey);
   }
   if (input.rideImageKey !== undefined) {
     await updateEventRideImage(eventId, input.rideImageKey);

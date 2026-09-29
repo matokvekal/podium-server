@@ -1,13 +1,20 @@
-// Business logic for the ride-image registry (sql/052-ride-images-registry.sql): the System
-// Admin's upload/enable/disable/delete actions, and the one read every other caller needs —
-// "is this key one this server currently knows about at all" — used to validate
-// events.ride_image_key on create/update (services/event.service.ts).
+// Business logic for the ride-image registry (sql/052, sql/054): the System Admin's upload /
+// replace / enable / disable / archive actions, and the reads every other caller needs.
+//
+// THE LIFECYCLE, in one place:
+//   ACTIVE + selectable      shown in admin, offered in Create/Edit Ride
+//   ACTIVE + not selectable  shown in admin, not offered for NEW selections
+//   ARCHIVED                 hidden from admin, not offered — but still RESOLVES, so every ride
+//                            that already stores the key keeps showing its picture
+// A key is permanent and never physically removed. Selectable/archived only ever decide whether a
+// key can be CHOSEN; they never decide whether an existing ride can DISPLAY it.
 
 import { randomBytes } from "node:crypto";
 import type { Request } from "express";
 import { isRideImageCategory } from "../config/ride-image-uploads.js";
 import { ApiError } from "../lib/api-error.js";
 import { AUDIT_ACTIONS, audit } from "../lib/audit.js";
+import { logger } from "../lib/logger.js";
 import { processRideImageUpload } from "../lib/ride-image-process.js";
 import {
   deleteRideImageUpload,
@@ -15,10 +22,11 @@ import {
   storeRideImageUpload,
 } from "../lib/ride-image-storage.js";
 import {
-  countEventsUsingRideImage,
-  deleteRideImageRow,
+  archiveRideImageRow,
   insertRideImage,
+  RideImageLifecycleUnavailableError,
   type RideImageRow,
+  replaceRideImageRow,
   selectAllRideImages,
   selectRideImageByKey,
   updateRideImageSelectable,
@@ -26,9 +34,8 @@ import {
 
 /**
  * Short cache so a busy Create/Edit Ride page (every rider, not just the admin) does not turn
- * "read the ride-image catalog" into a query per open — same reasoning and the same TTL as
- * config/profile-images.ts's directory-scan cache. An admin's add/disable/delete goes through
- * this module and invalidates it directly, so an admin action is never delayed by its own cache.
+ * "read the ride-image catalog" into a query per open. Every admin action goes through this
+ * module and invalidates it directly, so an admin action is never delayed by its own cache.
  */
 const CACHE_TTL_MS = 30_000;
 let cache: { rows: RideImageRow[]; expiresAt: number } | null = null;
@@ -45,29 +52,52 @@ async function allRideImagesCached(): Promise<RideImageRow[]> {
   return rows;
 }
 
-/** GET /api/v1/ride-images — every authenticated rider gets the full catalog (selectable or
- *  not): the Create/Edit picker filters to `selectable`, and every other render site needs the
- *  REST of it too, to resolve a ride that already wears a since-disabled key. Nothing here is
- *  sensitive — these are public image URLs — so there is no reason to shape two responses. */
+/**
+ * The URL a client should load this image from. An uploaded image is always resolved from its
+ * file name (so it is served by this API, wherever the file lives), a built-in one keeps its
+ * client-relative path. Once an image has been replaced (version > 1) the version is appended:
+ * a device that cached the old picture under the old URL sees a different URL and downloads the
+ * new one — the key, and every ride that stores it, is untouched.
+ */
+export function resolveRideImageUrl(row: RideImageRow): string {
+  const base = row.source === "upload" && row.fileName ? rideImagePublicUrl(row.fileName) : row.url;
+  return row.version > 1 ? `${base}?v=${row.version}` : base;
+}
+
+/** GET /api/v1/ride-images — every authenticated rider gets the full catalog, archived and
+ *  disabled included, because every render site must be able to resolve a ride's existing key.
+ *  Callers offering a CHOICE filter with `isPickable`. */
 export async function listRideImages(): Promise<RideImageRow[]> {
   return allRideImagesCached();
 }
 
-/** The admin table — same rows, uncached, so a just-uploaded image always shows immediately to
- *  the admin who uploaded it. */
+/** Can this image be chosen for a NEW selection (the picker)? */
+export function isPickable(row: RideImageRow): boolean {
+  return row.selectable && !row.archived;
+}
+
+/** The admin table: active images only — archived ones are hidden. Uncached, so a just-uploaded
+ *  or just-replaced image shows immediately. */
 export async function listRideImagesForAdmin(): Promise<RideImageRow[]> {
-  return selectAllRideImages();
+  const rows = await selectAllRideImages();
+  return rows.filter((row) => !row.archived);
 }
 
 /**
- * Is this a key the server currently recognises — static or uploaded, selectable or not?
- * Selectable is deliberately NOT part of this check: an existing ride keeps its stored key
- * forever (sql/051/sql/052 headers), so validating a create/update must accept a disabled key
- * exactly like a selectable one — only the PICKER cares about `selectable`.
+ * May a ride store this key? Used when a ride is created or edited.
+ *   - a key the server does not know: no
+ *   - a key that is selectable and not archived: yes
+ *   - a disabled/archived key: only if the ride ALREADY stores exactly that key (an edit that
+ *     leaves the picture alone resends it; that must keep working). It cannot be newly chosen.
  */
-export async function isKnownRideImageKey(key: string): Promise<boolean> {
-  const rows = await allRideImagesCached();
-  return rows.some((row) => row.key === key);
+export async function assertRideImageAssignable(
+  key: string,
+  currentKey: string | null | undefined,
+): Promise<void> {
+  const row = (await allRideImagesCached()).find((r) => r.key === key);
+  if (!row) throw new ApiError(400, `There is no ride image called "${key}"`);
+  if (isPickable(row) || key === currentKey) return;
+  throw new ApiError(400, `The ride image "${key}" is no longer available`);
 }
 
 function randomUploadKey(): string {
@@ -82,8 +112,7 @@ export interface UploadRideImageInput {
 
 /**
  * Validate, resize/crop to the fixed ride-cover shape, convert to WebP, store it, and register
- * it as selectable. The generated key is random and permanent from this point on (sql/051's
- * rule) — it is never reused even if the row is later deleted.
+ * it as selectable. The generated key is random and permanent from this point on.
  */
 export async function uploadRideImage(
   req: Request,
@@ -125,13 +154,50 @@ export async function uploadRideImage(
   }
 }
 
+/**
+ * Replace the picture behind an existing key. The key does not change, so no ride is touched;
+ * the row's version goes up, which changes the URL the API resolves (resolveRideImageUrl) and
+ * so busts every browser/PWA cache. Works for a built-in key too: it becomes upload-backed.
+ * The previous file is kept (nothing is physically deleted).
+ */
+export async function replaceRideImage(
+  req: Request,
+  key: string,
+  bytes: Buffer,
+): Promise<RideImageRow> {
+  const existing = await selectRideImageByKey(key);
+  if (!existing || existing.archived) {
+    throw new ApiError(404, `There is no ride image called "${key}"`);
+  }
+
+  const processed = await processRideImageUpload(bytes);
+  const fileName = await storeRideImageUpload(processed.webp);
+
+  try {
+    const row = await replaceRideImageRow(key, { fileName, url: rideImagePublicUrl(fileName) });
+    if (!row) throw new ApiError(404, `There is no ride image called "${key}"`);
+    invalidateCache();
+
+    audit(req, AUDIT_ACTIONS.RIDE_IMAGE_REPLACED, {
+      entity: "ride_image",
+      entityId: key,
+      meta: { version: row.version, width: processed.width, height: processed.height },
+    });
+    return row;
+  } catch (err) {
+    await deleteRideImageUpload(fileName);
+    throw toLifecycleError(err);
+  }
+}
+
 export async function setRideImageSelectable(
   req: Request,
   key: string,
   selectable: boolean,
 ): Promise<RideImageRow> {
   const updated = await updateRideImageSelectable(key, selectable);
-  if (!updated) throw new ApiError(404, `There is no ride image called "${key}"`);
+  if (!updated || updated.archived)
+    throw new ApiError(404, `There is no ride image called "${key}"`);
   invalidateCache();
 
   audit(req, AUDIT_ACTIONS.RIDE_IMAGE_SELECTABLE_CHANGED, {
@@ -143,33 +209,30 @@ export async function setRideImageSelectable(
 }
 
 /**
- * Physical deletion is only ever offered for an unused upload — never for a static (build-
- * shipped) key, and never for a key any ride currently references (see sql/052's header). The
- * safe way to retire an image any ride might already be wearing is setRideImageSelectable(false).
+ * "Delete" is an ARCHIVE. The row and file stay; the key stops being offered and disappears from
+ * the admin list, and every ride that already stores it keeps displaying it.
  */
-export async function deleteRideImage(req: Request, key: string): Promise<void> {
-  const existing = await selectRideImageByKey(key);
-  if (!existing) throw new ApiError(404, `There is no ride image called "${key}"`);
-
-  if (existing.source === "static") {
-    throw new ApiError(400, "A built-in image cannot be deleted — disable it instead");
+export async function archiveRideImage(req: Request, key: string): Promise<void> {
+  try {
+    const row = await archiveRideImageRow(key);
+    if (!row) throw new ApiError(404, `There is no ride image called "${key}"`);
+  } catch (err) {
+    throw toLifecycleError(err);
   }
-
-  const usageCount = await countEventsUsingRideImage(key);
-  if (usageCount > 0) {
-    throw new ApiError(
-      409,
-      `${usageCount} ride${usageCount === 1 ? "" : "s"} currently use this image — disable it instead of deleting`,
-    );
-  }
-
-  await deleteRideImageRow(key);
   invalidateCache();
-
-  if (existing.fileName) await deleteRideImageUpload(existing.fileName);
 
   audit(req, AUDIT_ACTIONS.RIDE_IMAGE_DELETED, {
     entity: "ride_image",
     entityId: key,
+    meta: { archived: true },
   });
+}
+
+/** sql/054 not applied yet: a clean 503 on the two actions that need it, never a crash. */
+function toLifecycleError(err: unknown): unknown {
+  if (err instanceof RideImageLifecycleUnavailableError) {
+    logger.warn({ err: err.message }, "ride image lifecycle needs sql/054");
+    return new ApiError(503, "Replace/Archive are not available until sql/054 is applied");
+  }
+  return err;
 }

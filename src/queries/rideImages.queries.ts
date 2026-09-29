@@ -1,7 +1,7 @@
-// SQL for the ride_images table (sql/052-ride-images-registry.sql). No SQL for this table lives
-// anywhere else.
+// SQL for the ride_images table (sql/052-ride-images-registry.sql, sql/054-ride-images-lifecycle.sql).
+// No SQL for this table lives anywhere else.
 
-import { execute, query, queryOne } from "../db/pool.js";
+import { query, queryOne } from "../db/pool.js";
 import { isMissingColumnError } from "./event.queries.js";
 
 export type RideImageSource = "static" | "upload";
@@ -15,6 +15,10 @@ export interface RideImageRow {
   url: string;
   fileName: string | null;
   createdAt: Date;
+  /** sql/054 — 1 on a database without it. Bumped by every Replace. */
+  version: number;
+  /** sql/054 — false on a database without it. An archived key still resolves for existing rides. */
+  archived: boolean;
 }
 
 interface RideImageDbRow {
@@ -26,6 +30,9 @@ interface RideImageDbRow {
   url: string;
   file_name: string | null;
   created_at: Date;
+  /** sql/054 — absent on a database without it. */
+  version?: number;
+  archived?: boolean;
 }
 
 function mapRow(row: RideImageDbRow): RideImageRow {
@@ -38,35 +45,59 @@ function mapRow(row: RideImageDbRow): RideImageRow {
     url: row.url,
     fileName: row.file_name,
     createdAt: row.created_at,
+    version: row.version ?? 1,
+    archived: row.archived ?? false,
   };
 }
 
-const SELECT_COLUMNS = "key, source, selectable, label, category, url, file_name, created_at";
+const LEGACY_COLUMNS = "key, source, selectable, label, category, url, file_name, created_at";
+const SELECT_COLUMNS = `${LEGACY_COLUMNS}, version, archived`;
 
-/** Every row, static and uploaded, selectable or not — what GET /api/v1/ride-images (any
- *  authenticated user) and the admin table both start from. Ordered so the picker's grouping
- *  reads stably: oldest first within a category is not guaranteed by this alone, callers group
- *  client-side. */
+/**
+ * Runs a statement with the sql/054 columns and, if the database does not have them yet, once
+ * falls back to the pre-054 column list. The catalog is read on every ride create/edit and every
+ * card, so deploying this code before the migration must not break any of that.
+ */
+let lifecycleColumns: boolean | null = null;
+async function withColumns<T>(run: (columns: string) => Promise<T>): Promise<T> {
+  if (lifecycleColumns === false) return run(LEGACY_COLUMNS);
+  try {
+    const result = await run(SELECT_COLUMNS);
+    lifecycleColumns = true;
+    return result;
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    lifecycleColumns = false;
+    return run(LEGACY_COLUMNS);
+  }
+}
+
+/** Replace / Archive need the sql/054 columns; thrown when the migration has not run. */
+export class RideImageLifecycleUnavailableError extends Error {
+  constructor() {
+    super("ride_images.version/archived missing — run sql/054-ride-images-lifecycle.sql");
+  }
+}
+
+/** Every row, static and uploaded, selectable or not, archived or not — what GET
+ *  /api/v1/ride-images starts from (a ride wearing an archived key must still resolve it). */
 export async function selectAllRideImages(): Promise<RideImageRow[]> {
-  const rows = await query<RideImageDbRow>(
-    `SELECT ${SELECT_COLUMNS} FROM ride_images ORDER BY created_at ASC`,
-  );
-  return rows.map(mapRow);
+  return withColumns(async (columns) => {
+    const rows = await query<RideImageDbRow>(
+      `SELECT ${columns} FROM ride_images ORDER BY created_at ASC`,
+    );
+    return rows.map(mapRow);
+  });
 }
 
 export async function selectRideImageByKey(key: string): Promise<RideImageRow | null> {
-  const row = await queryOne<RideImageDbRow>(
-    `SELECT ${SELECT_COLUMNS} FROM ride_images WHERE key = $1`,
-    [key],
-  );
-  return row ? mapRow(row) : null;
-}
-
-export async function rideImageKeyExists(key: string): Promise<boolean> {
-  const row = await queryOne<{ one: number }>("SELECT 1 AS one FROM ride_images WHERE key = $1", [
-    key,
-  ]);
-  return row !== null;
+  return withColumns(async (columns) => {
+    const row = await queryOne<RideImageDbRow>(
+      `SELECT ${columns} FROM ride_images WHERE key = $1`,
+      [key],
+    );
+    return row ? mapRow(row) : null;
+  });
 }
 
 export interface InsertRideImageInput {
@@ -80,54 +111,76 @@ export interface InsertRideImageInput {
 }
 
 export async function insertRideImage(input: InsertRideImageInput): Promise<RideImageRow> {
-  const row = await queryOne<RideImageDbRow>(
-    `INSERT INTO ride_images (key, source, selectable, label, category, url, file_name)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING ${SELECT_COLUMNS}`,
-    [
-      input.key,
-      input.source,
-      input.selectable,
-      input.label,
-      input.category,
-      input.url,
-      input.fileName,
-    ],
-  );
-  // INSERT ... RETURNING on a fresh insert always yields exactly one row; a null here would
-  // mean the statement itself failed, which throws before this line is reached.
-  return mapRow(row as RideImageDbRow);
+  return withColumns(async (columns) => {
+    const row = await queryOne<RideImageDbRow>(
+      `INSERT INTO ride_images (key, source, selectable, label, category, url, file_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${columns}`,
+      [
+        input.key,
+        input.source,
+        input.selectable,
+        input.label,
+        input.category,
+        input.url,
+        input.fileName,
+      ],
+    );
+    // INSERT ... RETURNING on a fresh insert always yields exactly one row; a null here would
+    // mean the statement itself failed, which throws before this line is reached.
+    return mapRow(row as RideImageDbRow);
+  });
 }
 
 export async function updateRideImageSelectable(
   key: string,
   selectable: boolean,
 ): Promise<RideImageRow | null> {
-  const row = await queryOne<RideImageDbRow>(
-    `UPDATE ride_images SET selectable = $2 WHERE key = $1 RETURNING ${SELECT_COLUMNS}`,
-    [key, selectable],
-  );
-  return row ? mapRow(row) : null;
+  return withColumns(async (columns) => {
+    const row = await queryOne<RideImageDbRow>(
+      `UPDATE ride_images SET selectable = $2 WHERE key = $1 RETURNING ${columns}`,
+      [key, selectable],
+    );
+    return row ? mapRow(row) : null;
+  });
 }
 
-export async function deleteRideImageRow(key: string): Promise<boolean> {
-  const affected = await execute("DELETE FROM ride_images WHERE key = $1", [key]);
-  return affected > 0;
-}
-
-/** How many events currently reference this key — the gate that keeps DELETE from ever
- *  orphaning a ride's cover. Guarded against a database predating sql/051 the same way
- *  updateEventRideImage is: a missing column reads as "nothing references it" rather than a
- *  500, since a database without the column cannot have any ride using this key either. */
-export async function countEventsUsingRideImage(key: string): Promise<number> {
+/** Hides the key from the admin list and the picker; the row (and its file) stay, so every ride
+ *  already using it keeps resolving it. sql/054. */
+export async function archiveRideImageRow(key: string): Promise<RideImageRow | null> {
   try {
-    const row = await queryOne<{ count: string }>(
-      "SELECT count(*)::text AS count FROM events WHERE ride_image_key = $1",
+    const row = await queryOne<RideImageDbRow>(
+      `UPDATE ride_images SET archived = true, selectable = false, updated_at = now()
+        WHERE key = $1 RETURNING ${SELECT_COLUMNS}`,
       [key],
     );
-    return row ? Number(row.count) : 0;
+    return row ? mapRow(row) : null;
   } catch (err) {
-    if (isMissingColumnError(err)) return 0;
+    if (isMissingColumnError(err)) throw new RideImageLifecycleUnavailableError();
+    throw err;
+  }
+}
+
+/**
+ * Points an EXISTING key at a new image and bumps its version. The key never changes. A
+ * built-in ('static') key becomes upload-backed here — its build-shipped file is simply no
+ * longer referenced. sql/054.
+ */
+export async function replaceRideImageRow(
+  key: string,
+  input: { fileName: string; url: string },
+): Promise<RideImageRow | null> {
+  try {
+    const row = await queryOne<RideImageDbRow>(
+      `UPDATE ride_images
+          SET source = 'upload', file_name = $2, url = $3, version = version + 1, updated_at = now()
+        WHERE key = $1 AND archived = false
+        RETURNING ${SELECT_COLUMNS}`,
+      [key, input.fileName, input.url],
+    );
+    return row ? mapRow(row) : null;
+  } catch (err) {
+    if (isMissingColumnError(err)) throw new RideImageLifecycleUnavailableError();
     throw err;
   }
 }
