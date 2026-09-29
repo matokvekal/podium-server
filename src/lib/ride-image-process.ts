@@ -47,8 +47,8 @@ export async function processRideImageUpload(bytes: Buffer): Promise<ProcessedRi
   if (bytes.length > RIDE_IMAGE_UPLOAD_MAX_BYTES) {
     throw new ApiError(
       413,
-      `That image is ${(bytes.length / (1024 * 1024)).toFixed(1)} MB. The limit is ` +
-        `${(RIDE_IMAGE_UPLOAD_MAX_BYTES / (1024 * 1024)).toFixed(1)} MB.`,
+      `That image is ${Math.round(bytes.length / 1024)} KB. The limit is ` +
+        `${Math.round(RIDE_IMAGE_UPLOAD_MAX_BYTES / 1024)} KB.`,
     );
   }
 

@@ -8,7 +8,9 @@
 export const RIDE_IMAGE_UPLOAD_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 
 /** Hard server-side ceiling, checked against the raw upload before it is ever decoded. */
-export const RIDE_IMAGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+/** The admin panel shrinks any picture (up to 4 MB) to fit this before sending; anything larger
+ *  that still arrives is refused outright, so an upload can never tie the server up. */
+export const RIDE_IMAGE_UPLOAD_MAX_BYTES = 250 * 1024; // 250 KB
 
 /** Every ride cover is resized/cropped to exactly this shape server-side, whatever the admin
  *  uploaded — matches the aspect ratio the picker's existing artwork already uses (roughly
