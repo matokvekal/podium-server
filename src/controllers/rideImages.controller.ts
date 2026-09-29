@@ -39,7 +39,7 @@ function toAdminDto(row: RideImageRow) {
   return { ...toPublicDto(row), source: row.source, createdAt: row.createdAt.toISOString() };
 }
 
-// GET /api/v1/ride-images — any authenticated rider.
+// GET /api/v1/ride-images — public (anonymous visitors resolve public rides' covers).
 export async function listRideImagesController(_req: Request, res: Response, next: NextFunction) {
   traceLog("rideImages.controller.listRideImagesController");
   try {
