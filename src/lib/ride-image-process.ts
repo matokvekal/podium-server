@@ -9,8 +9,14 @@
 // transcode (an animated GIF must stay animated). A ride cover has the opposite requirement —
 // every upload, whatever its original size or shape, becomes the exact same WebP rectangle — so
 // this is the one place in the server that runs images through sharp.
+//
+// sharp is loaded lazily (dynamic import, inside the function) rather than at module load.
+// It ships a native binary per platform, and a static top-level `import sharp from "sharp"`
+// would mean ANY failure to load that binary on the host — wrong platform in the lockfile,
+// a missing system library, whatever — throws at server BOOT and takes the entire API down
+// with it, not just ride-image uploads. Loading it only when an upload actually happens
+// confines that failure to a single 500 on this one endpoint (see the catch below).
 
-import sharp from "sharp";
 import {
   RIDE_COVER_HEIGHT,
   RIDE_COVER_WIDTH,
@@ -19,6 +25,7 @@ import {
 } from "../config/ride-image-uploads.js";
 import { ApiError } from "./api-error.js";
 import { sniffFormat } from "./image-inspect.js";
+import { logger } from "./logger.js";
 
 const ALLOWED_MIME_SET = new Set<string>(RIDE_IMAGE_UPLOAD_MIME_TYPES);
 
@@ -52,6 +59,16 @@ export async function processRideImageUpload(bytes: Buffer): Promise<ProcessedRi
   const mime = format ? { jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" }[format] : null;
   if (!format || !mime || !ALLOWED_MIME_SET.has(mime)) {
     throw new ApiError(415, "That file is not a JPEG, PNG or WebP image, whatever it is named or declared as");
+  }
+
+  let sharp: typeof import("sharp").default;
+  try {
+    ({ default: sharp } = await import("sharp"));
+  } catch (err) {
+    // The native binary failed to load. This is an environment problem (see the header), not a
+    // bad upload — loud in the logs, but a 500 confined to this one request, not a boot crash.
+    logger.error({ err }, "sharp failed to load — ride-image processing is unavailable");
+    throw new ApiError(500, "Image processing is unavailable on this server");
   }
 
   try {

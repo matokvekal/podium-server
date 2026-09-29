@@ -237,23 +237,29 @@ export function resolveProfileImagesDir(
 }
 
 /**
- * The ride-image upload root. Same shape as resolveUploadsDir: required and must be absolute
- * in production (a deploy replaces the app directory on every release and would erase an
- * upload root underneath it), repo-local and gitignored in development.
+ * The ride-image upload root. NOT fatal when unset in production — see
+ * resolveProfileImagesDir's comment just above for why an env var gating one optional feature
+ * must never be able to take the whole API down. (2026-09-29 incident: this function originally
+ * called process.exit(1) here, exactly like resolveProfileImagesDir used to; RIDE_IMAGES_DIR was
+ * not provisioned on the prod host, and every endpoint — auth included — went down with it.)
+ * `null` means "admin uploads disabled"; services/rideImages.service.ts's uploadRideImage()
+ * refuses cleanly with a 500 naming the missing env var, and app.ts only mounts the static
+ * route when this is non-null. Everything else — static ride images, PROMOTE, auth, rides —
+ * is completely unaffected by this being unset.
  */
-function resolveRideImagesDir(
+export function resolveRideImagesDir(
   value: string | undefined,
   nodeEnv: (typeof data)["NODE_ENV"],
-): string {
+): string | null {
   if (value && value.trim() !== "") return path.resolve(value.trim());
 
   if (nodeEnv === "production") {
-    console.error(
-      "RIDE_IMAGES_DIR is required in production and must point OUTSIDE the deployment " +
-        "directory (e.g. /var/lib/podium/ride-images). Uploads written inside the app " +
-        "directory are destroyed by the next deploy.",
+    console.warn(
+      "RIDE_IMAGES_DIR is not set — System Admin ride-image uploads are disabled (everything " +
+        "else starts normally). Set it to an absolute path OUTSIDE the deployment directory " +
+        "(e.g. /var/lib/podium/ride-images) to enable them.",
     );
-    process.exit(1);
+    return null;
   }
 
   return path.resolve(process.cwd(), "var/ride-images");

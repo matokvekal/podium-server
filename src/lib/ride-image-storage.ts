@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { env } from "../config/env.js";
+import { ApiError } from "./api-error.js";
 import { logger } from "./logger.js";
 
 /** URL prefix uploaded ride covers are served under — express.static in dev, nginx in
@@ -24,9 +25,13 @@ export type RideImageFileName = string;
  * supplied string reaches this today (the filename is generated here, never accepted from a
  * request), but a stored value that somehow drifted must still fail closed rather than read or
  * delete outside the tree.
+ *
+ * Only ever reached once a file has actually been stored (storeUpload's own null check is the
+ * one gate — see below), so RIDE_IMAGES_DIR being configured is already guaranteed here.
  */
 export function resolveRideImagePath(fileName: RideImageFileName): string {
   const root = env.RIDE_IMAGES_DIR;
+  if (!root) throw new Error("RIDE_IMAGES_DIR is not configured");
   const resolved = path.resolve(root, fileName);
   const rel = path.relative(root, resolved);
   if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
@@ -49,6 +54,12 @@ export function rideImagePublicUrl(fileName: RideImageFileName): string {
  * on this prefix is safe: a re-upload is always a new URL.
  */
 export async function storeRideImageUpload(webpBytes: Buffer): Promise<RideImageFileName> {
+  if (!env.RIDE_IMAGES_DIR) {
+    throw new ApiError(
+      500,
+      "Ride-image uploads are not configured on this server (RIDE_IMAGES_DIR is not set)",
+    );
+  }
   await mkdir(env.RIDE_IMAGES_DIR, { recursive: true });
   const fileName = `${randomBytes(8).toString("hex")}.webp`;
   await writeFile(resolveRideImagePath(fileName), webpBytes);
@@ -76,7 +87,8 @@ export async function deleteRideImageUpload(fileName: RideImageFileName): Promis
 }
 
 /** Ensures the upload root exists at boot — same reasoning as ensureUploadRoot in
- *  user-image-storage.ts. */
+ *  user-image-storage.ts. No-op when RIDE_IMAGES_DIR is not configured. */
 export async function ensureRideImagesRoot(): Promise<void> {
+  if (!env.RIDE_IMAGES_DIR) return;
   await mkdir(env.RIDE_IMAGES_DIR, { recursive: true });
 }

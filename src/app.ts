@@ -169,10 +169,12 @@ export function createApp(): Express {
   if (env.PROFILE_IMAGES_DIR) {
     app.use(PROFILE_IMAGES_URL_PREFIX, express.static(env.PROFILE_IMAGES_DIR, imageStatic));
   }
-  // Admin-uploaded ride covers (sql/052-ride-images-registry.sql). Unlike PROFILE_IMAGES_DIR
-  // this is required and always resolves to a real path (config/env.ts) — required in
-  // production, same as UPLOADS_DIR — so the mount is unconditional.
-  app.use(RIDE_IMAGE_UPLOADS_URL_PREFIX, express.static(env.RIDE_IMAGES_DIR, imageStatic));
+  // Admin-uploaded ride covers (sql/052-ride-images-registry.sql). RIDE_IMAGES_DIR is optional
+  // in production (config/env.ts, 2026-09-29 incident) — null means uploads are disabled and
+  // there is nothing to mount, same as PROFILE_IMAGES_DIR just above.
+  if (env.RIDE_IMAGES_DIR) {
+    app.use(RIDE_IMAGE_UPLOADS_URL_PREFIX, express.static(env.RIDE_IMAGES_DIR, imageStatic));
+  }
 
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/users", userRouter);
