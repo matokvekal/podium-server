@@ -24,7 +24,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "stats:backfill": "tsx src/statistics/statistics.backfill.cli.ts",
-    "routes:thumbs": "tsx src/scripts/backfillRouteThumbs.ts"
+    "routes:thumbs": "tsx src/scripts/backfillRouteThumbs.ts",
+    "routes:search-text": "tsx src/scripts/backfillRouteSearchText.ts"
   },
   "author": "Gilad Dolev",
   "license": "ISC",

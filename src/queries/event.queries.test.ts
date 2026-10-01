@@ -240,7 +240,9 @@ describe("selectPublicEvents — Browse tracks filters and sort", () => {
     const [sql] = query.mock.calls[0] as [string];
     expect(sql).toMatch(/e\.code ILIKE \$1/);
     expect(sql).toMatch(/e\.id::text = \$1/);
-    expect(sql).toMatch(/e\.area ILIKE '%' \|\| \$1 \|\| '%'/);
+    // The words of q are searched across the ride's text, area included (lib/track-search.ts).
+    expect(sql).toMatch(/CONCAT_WS\(' ', e\.name, e\.location, e\.area/);
+    expect(sql).toMatch(/strpos\(search_summary\.doc, alt\.tok\) > 0/);
   });
 
   it("whitelists every new sort with NULLS LAST and a stable tie-break on e.id", async () => {

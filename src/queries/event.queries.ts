@@ -22,6 +22,13 @@ import type {
 } from "../db/types.js";
 import { logger } from "../lib/logger.js";
 import { isMissingThumbColumn, previewFromStored, type RoutePreview } from "../lib/route-thumb.js";
+import {
+  buildTrackSearch,
+  FUZZY_MIN_CHARS,
+  MAX_ROUTE_BOOSTS,
+  type TrackSearch,
+  WORD_START,
+} from "../lib/track-search.js";
 import { resolveImageUrl } from "../lib/user-images.js";
 
 interface EventRow {
@@ -643,6 +650,10 @@ export interface PublicEventFilters {
   nearLat?: number;
   nearLon?: number;
   nearRadiusKm?: number;
+  /** A search already prepared by services/trackSearch.service.ts (lexical groups plus any
+   *  optional ranking boosts). When absent, `q` is tokenized here — same lexical search, no
+   *  boosts. `q` itself is still what the code / id lookup matches. */
+  search?: TrackSearch | null;
   sort: PublicEventSort;
   limit: number;
   offset: number;
@@ -658,6 +669,117 @@ function isMissingRelationError(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "42P01";
 }
 
+// ─── free-text search (lib/track-search.ts) ─────────────────────────────────────────────────
+//
+// The searchable text of one row: the ride's own words plus its attached route's name, place and
+// routes.ai_search_text (sql/057 — the knowledge every ride on that track contributed). Lower-
+// cased once here so every test below is a plain strpos. `names` and `places` are the narrower
+// columns the ranking weighs higher. Joined only when the request actually searches.
+const TRACK_SEARCH_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT lower(COALESCE(rs.name, '')) AS route_name,
+           lower(e.name) AS event_name,
+           lower(CONCAT_WS(' ', e.name, rs.name)) AS names,
+           lower(CONCAT_WS(' ', rs.place_name, e.location, e.area, replace(e.region, '_', ' '))) AS places,
+           lower(CONCAT_WS(' ', e.name, e.location, e.area, replace(e.region, '_', ' '), e.description,
+                           rs.name, rs.place_name, rs.ai_search_text)) AS doc
+      FROM (SELECT 1) AS one
+      LEFT JOIN routes rs ON rs.id = route_summary.route_id
+  ) search_summary ON TRUE`;
+
+/** word_similarity at or above this counts a word as a typo of one in the text. Measured on the
+ *  production text: a one-letter slip in a 4-letter Hebrew place name scores 0.6. */
+export const TRACK_SEARCH_FUZZY_THRESHOLD = 0.55;
+
+/** Weight of an optional ranking boost (0..1 → 0..40). Sized to reorder within the lexical
+ *  matches — a strong boost outweighs one extra word found in the names (20) — without beating
+ *  an exact name match (100). */
+export const TRACK_SEARCH_BOOST_WEIGHT = 40;
+
+/** Is the alternative `alt.tok` in `column`? Anywhere for a plain word; at the start of a word
+ *  for one marked WORD_START (a Hebrew word with its prefix letter removed). Tokens hold only
+ *  letters and digits, so neither strpos nor the regex can be fed a wildcard or a pattern. */
+function tokenFoundIn(column: string): string {
+  return `CASE WHEN starts_with(alt.tok, '${WORD_START}')
+                 THEN ${column} ~ ('(^|[^[:alnum:]])' || substr(alt.tok, 2))
+                 ELSE strpos(${column}, alt.tok) > 0 END`;
+}
+
+/** How many of the search's groups have an alternative inside `column`. */
+function groupsFoundIn(groups: string, column: string): string {
+  return `(SELECT count(*) FROM jsonb_array_elements(${groups}) AS grp(alts)
+             WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(grp.alts) AS alt(tok)
+                            WHERE ${tokenFoundIn(column)}))`;
+}
+
+/**
+ * The WHERE test and the ORDER BY score for a search.
+ *
+ *   match — EVERY group (word) is found in the row's text, as a substring of any alternative or,
+ *           with `fuzzy`, as a close trigram match of a word in it (words of 4+ letters only).
+ *   rank  — strongest first: the whole query IS the route's / ride's name (100) or starts it (60);
+ *           then per word: found in the names (20), in the place / area / region (10), anywhere in
+ *           the text (5); then overall trigram similarity of the query to the text (0..10).
+ */
+function trackSearchSql(
+  search: TrackSearch,
+  bind: (value: unknown) => string,
+  fuzzy: boolean,
+): { match: string; rank: string } {
+  // ONE parameter for both: the COUNT query reads only the WHERE (groups), and a bound parameter
+  // no statement uses has no type Postgres can infer (42P18).
+  const boosts = (search.boosts ?? []).slice(0, MAX_ROUTE_BOOSTS);
+  const spec = bind(
+    JSON.stringify({
+      phrase: search.phrase,
+      groups: search.groups,
+      ...(boosts.length > 0 ? { boosts } : {}),
+    }),
+  );
+  const groups = `(${spec}::jsonb -> 'groups')`;
+  const phrase = `(${spec}::jsonb ->> 'phrase')`;
+  const threshold = fuzzy ? bind(TRACK_SEARCH_FUZZY_THRESHOLD) : null;
+  const fuzzyTest = threshold
+    ? `
+                  OR (char_length(alt.tok) >= ${FUZZY_MIN_CHARS}
+                      AND NOT starts_with(alt.tok, '${WORD_START}')
+                      AND word_similarity(alt.tok, search_summary.doc) >= ${threshold}::float8)`
+    : "";
+  const match = `NOT EXISTS (
+               SELECT 1 FROM jsonb_array_elements(${groups}) AS grp(alts)
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM jsonb_array_elements_text(grp.alts) AS alt(tok)
+                   WHERE ${tokenFoundIn("search_summary.doc")}${fuzzyTest}))`;
+  const rank = `(CASE
+        WHEN search_summary.route_name = ${phrase} OR search_summary.event_name = ${phrase} THEN 100
+        WHEN starts_with(search_summary.route_name, ${phrase})
+          OR starts_with(search_summary.event_name, ${phrase}) THEN 60
+        ELSE 0 END
+      + 20 * ${groupsFoundIn(groups, "search_summary.names")}
+      + 10 * ${groupsFoundIn(groups, "search_summary.places")}
+      + 5 * ${groupsFoundIn(groups, "search_summary.doc")}${
+        fuzzy ? `\n      + 10 * word_similarity(${phrase}, search_summary.doc)` : ""
+      }${
+        // Only when a ranking layer supplied boosts: a search without them is the same SQL.
+        boosts.length > 0
+          ? `
+      + ${TRACK_SEARCH_BOOST_WEIGHT} * COALESCE((
+          SELECT LEAST(GREATEST((b->>'score')::float8, 0), 1)
+            FROM jsonb_array_elements(${spec}::jsonb -> 'boosts') AS b
+           WHERE (b->>'routeId')::bigint = route_summary.route_id
+           LIMIT 1), 0)`
+          : ""
+      })`;
+  return { match, rank };
+}
+
+/** Postgres 42883 undefined_function naming a pg_trgm function — the extension is not installed. */
+function isMissingTrigramFunction(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const { code, message } = err as { code?: unknown; message?: unknown };
+  return code === "42883" && typeof message === "string" && /word_similarity/.test(message);
+}
+
 /**
  * Same "$n IS NULL OR <test>" shape as selectPublicRoutes: one constant statement rather than
  * SQL assembled at runtime, so the fake DB and a reader can both check it and Postgres can
@@ -670,6 +792,8 @@ function isMissingRelationError(err: unknown): boolean {
 export async function selectPublicEvents(
   filters: PublicEventFilters,
 ): Promise<{ events: EventListItem[]; total: number }> {
+  const search = filters.search !== undefined ? filters.search : buildTrackSearch(filters.q);
+
   // Everything is qualified (e.*, route_summary.*, copy_summary.*) and every filter param is
   // always bound — NULL when the caller left it out, and `$n IS NULL OR <test>` short-circuits
   // it — so this is one constant statement Postgres can cache a plan for, not SQL assembled per
@@ -691,14 +815,25 @@ export async function selectPublicEvents(
   // from a query string; keep the two in step if either changes.
   const NEAR_ME_DISTANCE_EXPR =
     "(2 * 6371 * ASIN(SQRT(POWER(SIN(RADIANS(route_summary.start_lat - $17::float8) / 2), 2) + COS(RADIANS($17::float8)) * COS(RADIANS(route_summary.start_lat)) * POWER(SIN(RADIANS(route_summary.start_lon - $18::float8) / 2), 2))))";
-  const where = `e.visibility = 'public'
+  // Everything below is built per attempt: `fuzzy` is dropped only for a database without
+  // pg_trgm (see the retry at the bottom), and that changes which parameters are bound.
+  const build = (fuzzy: boolean) => {
+    // Parameters past $19 are bound in order of use; `bind` returns the placeholder.
+    const extraParams: unknown[] = [];
+    const bind = (value: unknown) => `$${19 + extraParams.push(value)}`;
+    const searchSql = search ? trackSearchSql(search, bind, fuzzy) : null;
+    const qMatch = searchSql
+      ? searchSql.match
+      : `e.name ILIKE '%' || $1 || '%'
+             OR e.location ILIKE '%' || $1 || '%'
+             OR e.area ILIKE '%' || $1 || '%'`;
+
+    const where = `e.visibility = 'public'
         AND e.status NOT IN ('cancelled', 'draft')
         AND ($1::text IS NULL
-             OR e.name ILIKE '%' || $1 || '%'
-             OR e.location ILIKE '%' || $1 || '%'
-             OR e.area ILIKE '%' || $1 || '%'
              OR e.code ILIKE $1
-             OR e.id::text = $1)
+             OR e.id::text = $1
+             OR ${qMatch})
         AND ($2::text IS NULL OR e.type = $2)
         AND ($3::text[] IS NULL OR e.activity_type = ANY($3::text[]))
         AND ($4::text[] IS NULL OR e.level = ANY($4::text[]))
@@ -749,62 +884,59 @@ export async function selectPublicEvents(
         AND ($19::float8 IS NULL OR $17::float8 IS NULL OR $18::float8 IS NULL
              OR ${NEAR_ME_DISTANCE_EXPR} <= $19)`;
 
-  // sql/041 filters: appended as $20.. only when the caller sent them, so the statement does not
-  // reference columns a database without sql/041 lacks unless a rider actually filters on them.
-  const trailFilters: [string, string[] | undefined][] = [
-    ["route_difficulty", filters.routeDifficulty],
-    ["season", filters.season],
-    ["shade", filters.shade],
-  ];
-  const trailParams: (string[] | number)[] = [];
-  let trailWhere = "";
-  for (const [column, values] of trailFilters) {
-    if (!values || values.length === 0) continue;
-    trailParams.push(values);
-    trailWhere += `
-        AND e.${column} = ANY($${19 + trailParams.length}::text[])`;
-  }
-  // One track by id — the share link. Same append-only-when-sent rule as the trail filters.
-  if (filters.routeId !== undefined) {
-    trailParams.push(filters.routeId);
-    trailWhere += `
-        AND route_summary.route_id = $${19 + trailParams.length}::bigint`;
-  }
-  const limitParam = 20 + trailParams.length;
-  const offsetParam = limitParam + 1;
+    // sql/041 filters: appended as $20.. only when the caller sent them, so the statement does not
+    // reference columns a database without sql/041 lacks unless a rider actually filters on them.
+    const trailFilters: [string, string[] | undefined][] = [
+      ["route_difficulty", filters.routeDifficulty],
+      ["season", filters.season],
+      ["shade", filters.shade],
+    ];
+    let trailWhere = "";
+    for (const [column, values] of trailFilters) {
+      if (!values || values.length === 0) continue;
+      trailWhere += `
+        AND e.${column} = ANY(${bind(values)}::text[])`;
+    }
+    // One track by id — the share link. Same append-only-when-sent rule as the trail filters.
+    if (filters.routeId !== undefined) {
+      trailWhere += `
+        AND route_summary.route_id = ${bind(filters.routeId)}::bigint`;
+    }
+    const limitParam = 20 + extraParams.length;
+    const offsetParam = limitParam + 1;
 
-  const params = [
-    filters.q ?? null,
-    filters.type ?? null,
-    filters.activityType ?? null,
-    filters.level ?? null,
-    filters.bucket ?? null,
-    filters.areas ?? null,
-    filters.minDistanceKm ?? null,
-    filters.maxDistanceKm ?? null,
-    filters.minClimbM ?? null,
-    filters.maxClimbM ?? null,
-    filters.durationBuckets ?? null,
-    filters.country ?? null,
-    filters.region ?? null,
-    filters.uniqueTracks ?? null,
-    filters.viewerId ?? null,
-    filters.favoritesOnly ?? null,
-    filters.nearLat ?? null,
-    filters.nearLon ?? null,
-    filters.nearRadiusKm ?? null,
-    ...trailParams,
-  ];
+    const params = [
+      filters.q ?? null,
+      filters.type ?? null,
+      filters.activityType ?? null,
+      filters.level ?? null,
+      filters.bucket ?? null,
+      filters.areas ?? null,
+      filters.minDistanceKm ?? null,
+      filters.maxDistanceKm ?? null,
+      filters.minClimbM ?? null,
+      filters.maxClimbM ?? null,
+      filters.durationBuckets ?? null,
+      filters.country ?? null,
+      filters.region ?? null,
+      filters.uniqueTracks ?? null,
+      filters.viewerId ?? null,
+      filters.favoritesOnly ?? null,
+      filters.nearLat ?? null,
+      filters.nearLon ?? null,
+      filters.nearRadiusKm ?? null,
+      ...extraParams,
+    ];
 
-  // Likes on the TRACK, and whether this viewer has already liked / bookmarked it. Its own
-  // lateral for exactly the reason copy_summary has one: route_likes / route_favorites (sql/036)
-  // may be absent on a dev DB, and a 42P01 here must fall to the legacy path below rather than
-  // break every other list query that shares EVENT_SUMMARY_JOINS.
-  //
-  // The viewer flags are NULL rather than false for a guest. "Nobody is signed in" and "signed
-  // in and has not liked this" are different answers, and the card renders the button inert for
-  // the first and unpressed for the second.
-  const likeSummaryJoin = (withSeeds: boolean) => `
+    // Likes on the TRACK, and whether this viewer has already liked / bookmarked it. Its own
+    // lateral for exactly the reason copy_summary has one: route_likes / route_favorites (sql/036)
+    // may be absent on a dev DB, and a 42P01 here must fall to the legacy path below rather than
+    // break every other list query that shares EVENT_SUMMARY_JOINS.
+    //
+    // The viewer flags are NULL rather than false for a guest. "Nobody is signed in" and "signed
+    // in and has not liked this" are different answers, and the card renders the button inert for
+    // the first and unpressed for the second.
+    const likeSummaryJoin = (withSeeds: boolean) => `
     LEFT JOIN LATERAL (
       SELECT (COUNT(*)${
         withSeeds
@@ -827,46 +959,58 @@ export async function selectPublicEvents(
         ) END AS viewer_favorited
     ) viewer_summary ON TRUE`;
 
-  // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream. Each
-  // non-date order sinks a missing metric to the bottom (NULLS LAST) and tie-breaks on
-  // created_at DESC, id so a track cannot shuffle between pages while the rider scrolls.
-  const orderBy = {
-    soonest: "e.starts_at ASC NULLS LAST, e.id",
-    latest: "e.starts_at DESC NULLS LAST, e.id",
-    newest: "e.created_at DESC, e.id",
-    oldest: "e.created_at ASC, e.id",
-    distance_asc: "route_summary.distance_km ASC NULLS LAST, e.created_at DESC, e.id",
-    distance_desc: "route_summary.distance_km DESC NULLS LAST, e.created_at DESC, e.id",
-    elevation_asc:
-      "COALESCE(e.elevation_gain_m, route_summary.elevation_m) ASC NULLS LAST, e.created_at DESC, e.id",
-    elevation_desc:
-      "COALESCE(e.elevation_gain_m, route_summary.elevation_m) DESC NULLS LAST, e.created_at DESC, e.id",
-    duration_asc: "e.duration_min ASC NULLS LAST, e.created_at DESC, e.id",
-    duration_desc: "e.duration_min DESC NULLS LAST, e.created_at DESC, e.id",
-    downloads_asc: "copy_summary.download_count ASC NULLS LAST, e.created_at DESC, e.id",
-    downloads_desc: "copy_summary.download_count DESC NULLS LAST, e.created_at DESC, e.id",
-    likes_asc: "like_summary.like_count ASC NULLS LAST, e.created_at DESC, e.id",
-    likes_desc: "like_summary.like_count DESC NULLS LAST, e.created_at DESC, e.id",
-    name_asc: "e.name ASC, e.id",
-    // NULLS LAST here means "no route start point" sinks to the bottom, same as every other
-    // metric sort — never mistaken for "0 km away".
-    near_me: `${NEAR_ME_DISTANCE_EXPR} ASC NULLS LAST, e.created_at DESC, e.id`,
-  }[filters.sort];
+    // Whitelisted, never interpolated from user input — `sort` is a zod enum upstream. Each
+    // non-date order sinks a missing metric to the bottom (NULLS LAST) and tie-breaks on
+    // created_at DESC, id so a track cannot shuffle between pages while the rider scrolls.
+    const sortOrder = {
+      soonest: "e.starts_at ASC NULLS LAST, e.id",
+      latest: "e.starts_at DESC NULLS LAST, e.id",
+      newest: "e.created_at DESC, e.id",
+      oldest: "e.created_at ASC, e.id",
+      distance_asc: "route_summary.distance_km ASC NULLS LAST, e.created_at DESC, e.id",
+      distance_desc: "route_summary.distance_km DESC NULLS LAST, e.created_at DESC, e.id",
+      elevation_asc:
+        "COALESCE(e.elevation_gain_m, route_summary.elevation_m) ASC NULLS LAST, e.created_at DESC, e.id",
+      elevation_desc:
+        "COALESCE(e.elevation_gain_m, route_summary.elevation_m) DESC NULLS LAST, e.created_at DESC, e.id",
+      duration_asc: "e.duration_min ASC NULLS LAST, e.created_at DESC, e.id",
+      duration_desc: "e.duration_min DESC NULLS LAST, e.created_at DESC, e.id",
+      downloads_asc: "copy_summary.download_count ASC NULLS LAST, e.created_at DESC, e.id",
+      downloads_desc: "copy_summary.download_count DESC NULLS LAST, e.created_at DESC, e.id",
+      likes_asc: "like_summary.like_count ASC NULLS LAST, e.created_at DESC, e.id",
+      likes_desc: "like_summary.like_count DESC NULLS LAST, e.created_at DESC, e.id",
+      name_asc: "e.name ASC, e.id",
+      // NULLS LAST here means "no route start point" sinks to the bottom, same as every other
+      // metric sort — never mistaken for "0 km away".
+      near_me: `${NEAR_ME_DISTANCE_EXPR} ASC NULLS LAST, e.created_at DESC, e.id`,
+    }[filters.sort];
+    // A search under the default order is ranked by relevance instead: "newest first" is what the
+    // client sends when the rider has not picked an order, and for a search the best match is the
+    // answer they want. Any order the rider did pick is kept as-is.
+    const orderBy =
+      searchSql && filters.sort === "newest"
+        ? `${searchSql.rank} DESC, e.created_at DESC, e.id`
+        : sortOrder;
+    const searchJoin = searchSql ? TRACK_SEARCH_JOIN : "";
 
-  const runList = (withSeeds: boolean, withThumb: boolean) =>
-    query<EventSummaryRow>(
-      `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
+    const runList = (withSeeds: boolean, withThumb: boolean) =>
+      query<EventSummaryRow>(
+        `SELECT e.*, ${eventSummaryColumns(withThumb)}, copy_summary.download_count,
               like_summary.like_count, viewer_summary.viewer_liked, viewer_summary.viewer_favorited,
               ${NEAR_ME_DISTANCE_EXPR} AS distance_from_me_km
          FROM events e
          ${eventSummaryJoins(withThumb)}
+         ${searchJoin}
          ${copySummaryJoin(withSeeds)}
          ${likeSummaryJoin(withSeeds)}
         WHERE ${where}${trailWhere} ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`,
-      [...params, filters.limit, filters.offset],
-    );
+        [...params, filters.limit, filters.offset],
+      );
+    return { where: `${where}${trailWhere}`, params, searchJoin, runList };
+  };
 
-  try {
+  const runModern = async (fuzzy: boolean) => {
+    const { where, params, searchJoin, runList } = build(fuzzy);
     // Two independent, optional migrations are tolerated here — sql/043 (seeded counts) and
     // sql/046 (the card preview). Each degrades ONLY its own feature instead of dropping every
     // filter (the legacy path below), which is what any other missing column would do.
@@ -874,10 +1018,16 @@ export async function selectPublicEvents(
       try {
         return await runList(true, withThumb);
       } catch (err) {
-        if (!isMissingColumnError(err) || !/imported_(download|like)_count/.test(err.message ?? "")) {
+        if (
+          !isMissingColumnError(err) ||
+          !/imported_(download|like)_count/.test(err.message ?? "")
+        ) {
           throw err;
         }
-        logger.warn({ err }, "routes.imported_*_count missing — run sql/043-route-imported-counts.sql");
+        logger.warn(
+          { err },
+          "routes.imported_*_count missing — run sql/043-route-imported-counts.sql",
+        );
         return runList(false, withThumb);
       }
     });
@@ -891,10 +1041,23 @@ export async function selectPublicEvents(
       `SELECT COUNT(*)::text AS count
          FROM events e
          ${EVENT_SUMMARY_JOINS}
-        WHERE ${where}${trailWhere}`,
+         ${searchJoin}
+        WHERE ${where}`,
       params,
     );
     return { events: rows.map(mapEventListItem), total: Number(countRow?.count ?? 0) };
+  };
+
+  try {
+    try {
+      return await runModern(true);
+    } catch (err) {
+      // A database without pg_trgm (sql/057a): search still works — every word, any order,
+      // partial words — just without typo tolerance. Every other error goes on as before.
+      if (!search || !isMissingTrigramFunction(err)) throw err;
+      logger.warn({ err }, "pg_trgm missing — searching without typo tolerance (sql/057a)");
+      return await runModern(false);
+    }
   } catch (err) {
     if (!isMissingColumnError(err) && !isMissingRelationError(err)) throw err;
 
