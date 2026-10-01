@@ -39,6 +39,10 @@ import {
 } from "../queries/eventRoute.queries.js";
 import { insertRouteCopy, selectRouteCopyCount } from "../queries/routeCopy.queries.js";
 import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
+import {
+  applyEventToRouteSearchText,
+  markEventRouteInfoPending,
+} from "../queries/routeSearch.queries.js";
 import type { SetEventRouteInput } from "../schemas/eventRoute.schemas.js";
 import { assertOwner, getEventForViewer } from "./event.service.js";
 import { getRouteForViewer } from "./routeLibrary.service.js";
@@ -75,6 +79,7 @@ export async function setEventRouteFromPoints(
   );
   await attachRouteToEvent(eventId, stored.id);
   logger.info({ eventId, userId, routeId: stored.id }, "event route set");
+  await initRouteSearchText(eventId, stored.id);
   // Analytics — a genuinely new route, not a reuse. This endpoint (POST /events/:id/route) has
   // no source field, so insertDrawnRouteRow always stores routes.source = 'drawn' — that is the
   // real stored value, reported as-is. Non-fatal.
@@ -91,6 +96,43 @@ export async function setEventRouteFromPoints(
     elevationM: stored.elevationM,
     ...(stored.elevations ? { elevations: stored.elevations } : {}),
   };
+}
+
+/**
+ * A genuinely NEW route was just created from this ride: seed its search text (sql/057) from
+ * the route and the ride right away, and mark the ride processed. A ride that is not publicly
+ * listed contributes nothing and stays unprocessed (see lib/route-search-text.ts).
+ *
+ * The flag is reset first: a ride that was processed against the route it had BEFORE this
+ * re-save must not keep reading as processed for the new one.
+ *
+ * NON-FATAL, like recordRouteCopy: the route is saved and attached by now, and search text is
+ * derived data. On any failure the ride is left unprocessed and the backfill
+ * (npm run routes:search-text) picks it up.
+ */
+async function initRouteSearchText(eventId: string, routeId: number): Promise<void> {
+  try {
+    await markEventRouteInfoPending(eventId);
+    const { outcome } = await applyEventToRouteSearchText(eventId);
+    logger.debug({ eventId, routeId, outcome }, "route search text initialized");
+  } catch (err) {
+    logger.warn(
+      { err, eventId, routeId },
+      "could not initialize the route's search text — the ride is left unprocessed",
+    );
+  }
+}
+
+/**
+ * The ride now runs on a route it did not create. Its details are for the later enrichment step,
+ * so the route's text is left alone and the ride must read as unprocessed. Non-fatal.
+ */
+async function leaveRouteInfoPending(eventId: string): Promise<void> {
+  try {
+    await markEventRouteInfoPending(eventId);
+  } catch (err) {
+    logger.warn({ err, eventId }, "could not mark the ride's route info as pending");
+  }
 }
 
 /**
@@ -177,6 +219,7 @@ export async function attachLibraryRouteToEvent(
   await attachRouteToEvent(eventId, route.id);
   logger.info({ eventId, routeId, userId }, "route attached to event");
   await recordRouteCopy(route.id, route, userId, eventId, null);
+  await leaveRouteInfoPending(eventId);
   return route;
 }
 
@@ -227,6 +270,7 @@ export async function copyTrackFromEvent(
   await attachRouteToEvent(eventId, routeId);
   logger.info({ eventId, sourceEventId, routeId, userId }, "track copied from another ride");
   await recordRouteCopy(routeId, route, userId, eventId, sourceEventId);
+  await leaveRouteInfoPending(eventId);
   return route;
 }
 

@@ -26,6 +26,8 @@ const insertRouteCopy = vi.fn();
 const selectRouteCopyCount = vi.fn();
 const getEventForViewer = vi.fn();
 const getRouteForViewer = vi.fn();
+const applyEventToRouteSearchText = vi.fn();
+const markEventRouteInfoPending = vi.fn();
 
 // Analytics is fire-and-forget and self-contained; its own behaviour is covered in
 // src/audit/audit.service.test.ts. Stub it here so these tests never touch the DB pool.
@@ -46,6 +48,10 @@ vi.mock("../queries/routeCopy.queries.js", () => ({
   insertRouteCopy: (...a: unknown[]) => insertRouteCopy(...a),
   selectRouteCopyCount: (...a: unknown[]) => selectRouteCopyCount(...a),
 }));
+vi.mock("../queries/routeSearch.queries.js", () => ({
+  applyEventToRouteSearchText: (...a: unknown[]) => applyEventToRouteSearchText(...a),
+  markEventRouteInfoPending: (...a: unknown[]) => markEventRouteInfoPending(...a),
+}));
 vi.mock("./event.service.js", () => ({
   assertOwner: (event: { ownerId: number }, userId: number) => {
     if (event.ownerId !== userId) throw new Error("not owner");
@@ -56,9 +62,12 @@ vi.mock("./routeLibrary.service.js", () => ({
   getRouteForViewer: (...a: unknown[]) => getRouteForViewer(...a),
 }));
 
-const { attachLibraryRouteToEvent, copyTrackFromEvent, getEventRouteWithUsage } = await import(
-  "./eventRoute.service.js"
-);
+const {
+  attachLibraryRouteToEvent,
+  copyTrackFromEvent,
+  getEventRouteWithUsage,
+  setEventRouteFromPoints,
+} = await import("./eventRoute.service.js");
 
 const TARGET = "11111111-1111-1111-1111-111111111111";
 const SOURCE = "22222222-2222-2222-2222-222222222222";
@@ -83,9 +92,13 @@ beforeEach(() => {
     selectRouteCopyCount,
     getEventForViewer,
     getRouteForViewer,
+    applyEventToRouteSearchText,
+    markEventRouteInfoPending,
   ]) {
     fn.mockReset();
   }
+  applyEventToRouteSearchText.mockResolvedValue({ outcome: "merged", routeId: 42 });
+  markEventRouteInfoPending.mockResolvedValue(undefined);
   selectEventById.mockResolvedValue({ id: TARGET, ownerId: COPIER, status: "published" });
   getEventForViewer.mockResolvedValue({ id: SOURCE });
   selectEventRouteSummary.mockResolvedValue(route());
@@ -216,5 +229,82 @@ describe("getEventRouteWithUsage", () => {
   it("still answers null for a ride with no track", async () => {
     selectEventRouteGeometry.mockResolvedValue(null);
     expect(await getEventRouteWithUsage(TARGET, COPIER)).toBeNull();
+  });
+});
+
+// Route search text (sql/057). A NEW route is seeded from the ride straight away; a REUSED one is
+// left alone and the ride reads as unprocessed, for the later enrichment step. Either way it is
+// derived data, so a failure here may never cost the organizer their saved track.
+describe("route search text", () => {
+  const points = {
+    points: [
+      [32.1, 34.8],
+      [32.2, 34.9],
+    ],
+    distanceKm: 12,
+  };
+
+  beforeEach(() => {
+    selectEventById.mockResolvedValue({
+      id: TARGET,
+      ownerId: COPIER,
+      status: "published",
+      visibility: "public",
+    });
+    insertDrawnRouteRow.mockResolvedValue({
+      id: 77,
+      points: points.points,
+      distanceKm: 12,
+      elevationM: null,
+      elevations: null,
+    });
+  });
+
+  it("a new route: resets the flag, then seeds the text — after the route is attached", async () => {
+    await setEventRouteFromPoints(TARGET, COPIER, points as never);
+
+    expect(attachRouteToEvent).toHaveBeenCalledWith(TARGET, 77);
+    expect(markEventRouteInfoPending).toHaveBeenCalledWith(TARGET);
+    expect(applyEventToRouteSearchText).toHaveBeenCalledWith(TARGET);
+    const attachOrder = attachRouteToEvent.mock.invocationCallOrder[0];
+    const resetOrder = markEventRouteInfoPending.mock.invocationCallOrder[0];
+    const applyOrder = applyEventToRouteSearchText.mock.invocationCallOrder[0];
+    expect(attachOrder).toBeLessThan(resetOrder);
+    expect(resetOrder).toBeLessThan(applyOrder);
+  });
+
+  it("a new route still saves when seeding the text fails", async () => {
+    applyEventToRouteSearchText.mockRejectedValue(new Error("connection reset"));
+
+    const saved = await setEventRouteFromPoints(TARGET, COPIER, points as never);
+
+    expect(saved.distanceKm).toBe(12);
+    expect(attachRouteToEvent).toHaveBeenCalledWith(TARGET, 77);
+  });
+
+  it("a Find Tracks pick leaves the ride unprocessed and never writes the route's text", async () => {
+    getRouteForViewer.mockResolvedValue(route());
+
+    await attachLibraryRouteToEvent(TARGET, COPIER, 42);
+
+    expect(markEventRouteInfoPending).toHaveBeenCalledWith(TARGET);
+    expect(applyEventToRouteSearchText).not.toHaveBeenCalled();
+  });
+
+  it("copying another ride's track leaves the ride unprocessed and never writes the route's text", async () => {
+    await copyTrackFromEvent(TARGET, COPIER, SOURCE);
+
+    expect(markEventRouteInfoPending).toHaveBeenCalledWith(TARGET);
+    expect(applyEventToRouteSearchText).not.toHaveBeenCalled();
+  });
+
+  it("a reuse still attaches when the flag reset fails", async () => {
+    markEventRouteInfoPending.mockRejectedValue(
+      new Error('column "route_info_processed" does not exist'),
+    );
+
+    await copyTrackFromEvent(TARGET, COPIER, SOURCE);
+
+    expect(attachRouteToEvent).toHaveBeenCalledWith(TARGET, 42);
   });
 });
