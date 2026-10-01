@@ -73,6 +73,7 @@ import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.j
 import { assertRegistrationOpen, canManagePromote } from "../authz/promote.js";
 import { assertRideImageAssignable } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
+import { prepareTrackSearch } from "./trackSearch.service.js";
 
 export async function findActiveEventByCode(code: string): Promise<Event | null> {
   return selectActiveEventByCode(code);
@@ -527,11 +528,14 @@ export async function listMyEvents(
  * The old unconditional `starts_at ASC` put the oldest ride in the database at the top of a
  * discovery list.
  */
-export function listPublicEvents(
-  filters: Omit<PublicEventFilters, "sort"> & { sort?: PublicEventFilters["sort"] },
+export async function listPublicEvents(
+  filters: Omit<PublicEventFilters, "sort" | "search"> & { sort?: PublicEventFilters["sort"] },
 ): Promise<{ events: EventListItem[]; total: number }> {
   const sort = filters.sort ?? (filters.bucket === "finished" ? "latest" : "soonest");
-  return selectPublicEvents({ ...filters, sort });
+  // The free-text part, prepared once: lexical always, plus any optional ranking layer
+  // (trackSearch.service.ts). Never changes what is returned — only the order of a search.
+  const search = await prepareTrackSearch(filters.q);
+  return selectPublicEvents({ ...filters, sort, search });
 }
 
 /** The distinct areas that appear on public rides — feeds the "Browse tracks" Area filter. */
