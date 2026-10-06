@@ -142,6 +142,12 @@ const envSchema = z.object({
   // outside the directory a deployment replaces, and is required in production — see
   // resolveRideImagesDir() below. The dev default is repo-local and gitignored.
   RIDE_IMAGES_DIR: z.string().optional(),
+
+  // Where a track owner's "flyover" video lives on disk, as "{routeId}.{ext}" — see
+  // sql/058-route-videos.sql and lib/route-video-storage.ts. Optional exactly like
+  // RIDE_IMAGES_DIR (resolveRouteVideosDir below): unset in production disables the feature,
+  // nothing else. Must sit outside the deployment directory; the dev default is gitignored.
+  ROUTE_VIDEOS_DIR: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -265,6 +271,26 @@ export function resolveRideImagesDir(
   return path.resolve(process.cwd(), "var/ride-images");
 }
 
+/** The track-video root. Same non-fatal rule as resolveRideImagesDir: `null` in production when
+ *  unset means "track videos disabled" — uploads 503, reads report no video, nothing else moves. */
+export function resolveRouteVideosDir(
+  value: string | undefined,
+  nodeEnv: (typeof data)["NODE_ENV"],
+): string | null {
+  if (value && value.trim() !== "") return path.resolve(value.trim());
+
+  if (nodeEnv === "production") {
+    console.warn(
+      "ROUTE_VIDEOS_DIR is not set — track video uploads are disabled (everything else starts " +
+        "normally). Set it to an absolute path OUTSIDE the deployment directory (e.g. " +
+        "/var/lib/podium/route-videos) to enable them.",
+    );
+    return null;
+  }
+
+  return path.resolve(process.cwd(), "var/route-videos");
+}
+
 export const env = {
   ...data,
   JWT_ACCESS_SECRET: resolveSecret(
@@ -276,6 +302,7 @@ export const env = {
   UPLOADS_DIR: resolveUploadsDir(data.UPLOADS_DIR, data.NODE_ENV),
   PROFILE_IMAGES_DIR: resolveProfileImagesDir(data.PROFILE_IMAGES_DIR, data.NODE_ENV),
   RIDE_IMAGES_DIR: resolveRideImagesDir(data.RIDE_IMAGES_DIR, data.NODE_ENV),
+  ROUTE_VIDEOS_DIR: resolveRouteVideosDir(data.ROUTE_VIDEOS_DIR, data.NODE_ENV),
   ASSETS_DIR: path.resolve(
     data.ASSETS_DIR && data.ASSETS_DIR.trim() !== ""
       ? data.ASSETS_DIR.trim()

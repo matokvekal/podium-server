@@ -18,6 +18,7 @@ import {
   copyTrackFromEvent,
   detachRouteFromEvent,
   getEventRouteGeometry,
+  getEventRouteVideo,
   getEventRouteWithUsage,
   setEventRouteFromPoints,
 } from "../services/eventRoute.service.js";
@@ -42,6 +43,24 @@ export async function getEventRouteController(req: Request, res: Response, next:
       ? await getEventRouteWithUsage(eventId, viewerId)
       : await getEventRouteGeometry(eventId, viewerId);
     res.status(200).json({ data: route });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/v1/events/:eventId/route/video
+// { routeId, ownerId, video: { durationS, updatedAt } | null } | null — the ride's track and its
+// flyover video metadata. Never the file; that is GET /routes/:routeId/video.
+export async function getEventRouteVideoController(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { eventId } = eventIdParamSchema.parse(req.params);
+    const viewerId = req.auth!.userId;
+    traceLog("eventRoute.controller.getEventRouteVideoController", { eventId, viewerId });
+    res.status(200).json({ data: await getEventRouteVideo(eventId, viewerId) });
   } catch (err) {
     next(err);
   }

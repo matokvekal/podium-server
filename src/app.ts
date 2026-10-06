@@ -8,6 +8,7 @@ import { pinoHttp } from "pino-http";
 import { env } from "./config/env.js";
 import { PROFILE_IMAGES_URL_PREFIX } from "./config/profile-images.js";
 import { RIDE_IMAGE_UPLOAD_MAX_BYTES, RIDE_IMAGE_UPLOAD_MIME_TYPES } from "./config/ride-image-uploads.js";
+import { ROUTE_VIDEO_MAX_BYTES, ROUTE_VIDEO_MIME_TYPES } from "./config/route-videos.js";
 import { UPLOAD_MIME_TYPES, USER_IMAGE_RULES } from "./config/user-images.js";
 import { logger } from "./lib/logger.js";
 import { RIDE_IMAGE_UPLOADS_URL_PREFIX } from "./lib/ride-image-storage.js";
@@ -107,6 +108,15 @@ export function createApp(): Express {
   app.use(
     "/api/v1/admin/ride-images",
     express.raw({ type: [...RIDE_IMAGE_UPLOAD_MIME_TYPES], limit: RIDE_IMAGE_UPLOAD_MAX_BYTES }),
+  );
+  /**
+   * A track owner's flyover video (PUT /api/v1/routes/:routeId/video, sql/058) — raw bytes like
+   * the uploads above. Mounted on the whole /routes prefix, but `type` only matches video
+   * Content-Types, so every JSON request on the route library falls through to express.json.
+   */
+  app.use(
+    "/api/v1/routes",
+    express.raw({ type: [...ROUTE_VIDEO_MIME_TYPES], limit: ROUTE_VIDEO_MAX_BYTES }),
   );
 
   // Admin-uploaded ride covers (sql/052). RIDE_IMAGES_DIR is optional in production

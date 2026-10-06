@@ -5,6 +5,12 @@
 
 import type { NextFunction, Request, Response } from "express";
 import { traceLog } from "../lib/trace-log.js";
+import {
+  getRouteVideoForViewer,
+  getRouteVideoSummary,
+  removeRouteVideo,
+  uploadRouteVideo,
+} from "../services/routeVideo.service.js";
 import type { RouteWithOwner } from "../queries/routeLibrary.queries.js";
 import {
   createRouteSchema,
@@ -191,7 +197,9 @@ export async function getRouteController(req: Request, res: Response, next: Next
     const viewerId = req.auth?.userId ?? null;
     traceLog("routeLibrary.controller.getRouteController", { routeId, viewerId });
     const route = await getRouteForViewer(routeId, viewerId);
-    res.status(200).json({ data: toRouteDetail(route) });
+    // `video` is additive: null when the track has none (sql/058), so older clients ignore it.
+    const video = await getRouteVideoSummary(routeId);
+    res.status(200).json({ data: { ...toRouteDetail(route), video } });
   } catch (err) {
     next(err);
   }
@@ -226,6 +234,65 @@ export async function getRouteGpxController(req: Request, res: Response, next: N
         "X-Content-SHA256": file.sha256,
         "Cache-Control": "public, max-age=3600",
       })
+      .send(file.content);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/v1/routes/:routeId/video?durationS=42
+//
+// The track's flyover video, as the raw request body (app.ts mounts express.raw for the video
+// Content-Types). Owner only; replaces any existing video. 200 with { durationS, updatedAt }.
+export async function putRouteVideoController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    const userId = req.auth!.userId;
+    traceLog("routeLibrary.controller.putRouteVideoController", { routeId, userId });
+    const video = await uploadRouteVideo(routeId, userId, req.body, req.query.durationS);
+    res.status(200).json({ data: video });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/v1/routes/:routeId/video — owner only. 204 whether or not a video existed.
+export async function deleteRouteVideoController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    const userId = req.auth!.userId;
+    traceLog("routeLibrary.controller.deleteRouteVideoController", { routeId, userId });
+    await removeRouteVideo(routeId, userId);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/v1/routes/:routeId/video — logged-in riders only. The URL is stable across a replace
+// ("{routeId}.{ext}" on disk), so this revalidates by ETag instead of a long cache.
+export async function getRouteVideoController(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { routeId } = routeIdParamSchema.parse(req.params);
+    const viewerId = req.auth!.userId;
+    traceLog("routeLibrary.controller.getRouteVideoController", { routeId, viewerId });
+    const file = await getRouteVideoForViewer(routeId, viewerId);
+    if (!file) {
+      res.status(404).json({ error: "No video", message: "This track has no video" });
+      return;
+    }
+    res.set({
+      "Cache-Control": "private, no-cache",
+      ETag: file.etag,
+      "X-Content-Type-Options": "nosniff",
+    });
+    if (req.headers["if-none-match"] === file.etag) {
+      res.status(304).end();
+      return;
+    }
+    res
+      .status(200)
+      .set({ "Content-Type": file.contentType, "Content-Length": String(file.content.length) })
       .send(file.content);
   } catch (err) {
     next(err);

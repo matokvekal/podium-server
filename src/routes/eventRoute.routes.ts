@@ -11,6 +11,7 @@ import { Router } from "express";
 import {
   deleteEventRouteController,
   getEventRouteController,
+  getEventRouteVideoController,
   setEventRouteController,
 } from "../controllers/eventRoute.controller.js";
 import { deduplicateClientAction } from "../middleware/clientActions.js";
@@ -23,6 +24,10 @@ export const eventRouteRouter = Router({ mergeParams: true });
 // Optional auth, same as GET /:eventId: a public event's route is visible to a stranger;
 // getEventRouteGeometry still 403s a private event for anyone but its owner.
 eventRouteRouter.get("/", optionalAuth, getEventRouteController);
+
+// GET /api/v1/events/:eventId/route/video
+// Logged-in riders only — the track video is a members' feature (routeVideo.service.ts).
+eventRouteRouter.get("/video", requireAuth, getEventRouteVideoController);
 
 // POST /api/v1/events/:eventId/route
 eventRouteRouter.post("/", requireAuth, deduplicateClientAction, setEventRouteController);

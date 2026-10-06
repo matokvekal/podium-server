@@ -46,6 +46,8 @@ import {
 import type { SetEventRouteInput } from "../schemas/eventRoute.schemas.js";
 import { assertOwner, getEventForViewer } from "./event.service.js";
 import { getRouteForViewer } from "./routeLibrary.service.js";
+import { getRouteVideoSummary, type RouteVideoSummary } from "./routeVideo.service.js";
+import { selectRouteAccess } from "../queries/routeGpx.queries.js";
 
 /**
  * Owner-only. Stores the posted geometry as a new library row, then attaches it — replacing
@@ -296,6 +298,24 @@ export async function getEventRouteGeometry(
 ): Promise<EventRoute | null> {
   await getEventForViewer(eventId, viewerId); // 403s a private event for a stranger
   return selectEventRouteGeometry(eventId);
+}
+
+/**
+ * The track behind this ride and its flyover video (sql/058), for the ride page's "▶ Video"
+ * button and the Manage Ride form. A separate read on purpose — GET /events/:eventId/route is a
+ * frozen PWA contract (see getEventRouteWithUsage below) and stays byte-identical.
+ * `ownerId` lets the form decide whether this rider may change the video (track owner only).
+ * Null when the ride has no route.
+ */
+export async function getEventRouteVideo(
+  eventId: string,
+  viewerId: number | null,
+): Promise<{ routeId: number; ownerId: number | null; video: RouteVideoSummary | null } | null> {
+  await getEventForViewer(eventId, viewerId); // same visibility as the route itself
+  const routeId = await selectEventRouteId(eventId);
+  if (routeId === null) return null;
+  const access = await selectRouteAccess(routeId);
+  return { routeId, ownerId: access?.ownerId ?? null, video: await getRouteVideoSummary(routeId) };
 }
 
 /**

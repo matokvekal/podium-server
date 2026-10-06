@@ -58,3 +58,7 @@ TODO.md
 # (/var/lib/podium/uploads) OUTSIDE the deployment tree; this is only the
 # repo-local default a dev machine falls back to.
 /var/uploads
+
+# Track flyover videos (ROUTE_VIDEOS_DIR) — dev default; production keeps them
+# outside the deployment tree. Videos never go into git.
+/var/route-videos
