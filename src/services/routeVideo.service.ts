@@ -1,6 +1,11 @@
 // A track's flyover video (sql/058-route-videos.sql) — one per route, stored as
 // "{routeId}.{ext}" under ROUTE_VIDEOS_DIR (lib/route-video-storage.ts).
 //
+// FAIL-SAFE BY DESIGN: the video is an optional extra. Nothing here may break a ride, a track,
+// GPX or the ride page. No ROUTE_VIDEOS_DIR, no route_videos table (sql/058 not run), a row whose
+// file is gone, a DB error while looking — every read path answers "no video" and logs; only the
+// video's own upload/delete endpoints ever return an error, and only for that operation.
+//
 // Who may do what:
 //   upload / replace / delete — the track's owner only (routes.owner_id). A creator whose ride
 //                               reuses someone else's track sees the video but cannot change it.
@@ -16,6 +21,7 @@ import { logger } from "../lib/logger.js";
 import {
   deleteRouteVideoFiles,
   resolveRouteVideoPath,
+  routeVideoFileExists,
   storeRouteVideo,
 } from "../lib/route-video-storage.js";
 import { inspectVideo } from "../lib/video-inspect.js";
@@ -24,6 +30,7 @@ import {
   deleteRouteVideoRow,
   isRouteAttachedToEvent,
   type RouteVideoMeta,
+  routeVideosTableExists,
   selectRouteVideo,
   upsertRouteVideo,
 } from "../queries/routeVideo.queries.js";
@@ -38,11 +45,33 @@ export function toRouteVideoSummary(meta: RouteVideoMeta | null): RouteVideoSumm
   return meta ? { durationS: meta.durationS, updatedAt: meta.updatedAt.toISOString() } : null;
 }
 
-/** Metadata for a route's video, or null. Null too when the feature is off on this server, so the
- *  client never shows a button for a file it could not fetch. */
+/**
+ * Metadata for a route's video, or null. NEVER throws: it rides along on reads that existed
+ * before this feature (GET /routes/:id) and on the ride page's lookup, so any problem here —
+ * feature off, table missing, DB error, a row whose file is gone — is "no video", logged.
+ * A row is only reported when its file is actually on disk, so the client never shows a button
+ * for a video it could not play.
+ */
 export async function getRouteVideoSummary(routeId: number): Promise<RouteVideoSummary | null> {
   if (!env.ROUTE_VIDEOS_DIR) return null;
-  return toRouteVideoSummary(await selectRouteVideo(routeId));
+  try {
+    const meta = await selectRouteVideo(routeId);
+    if (!meta) return null;
+    if (!(await routeVideoFileExists(routeId, meta.ext))) {
+      logger.warn(
+        { routeId, ext: meta.ext },
+        "route video row has no file on disk — showing no video",
+      );
+      return null;
+    }
+    return toRouteVideoSummary(meta);
+  } catch (err) {
+    logger.warn(
+      { routeId, err: (err as Error).message },
+      "route video lookup failed — showing no video",
+    );
+    return null;
+  }
 }
 
 /** Browser-measured duration, display only: anything not a sane whole number of seconds is null. */
@@ -70,6 +99,11 @@ export async function uploadRouteVideo(
   if (!env.ROUTE_VIDEOS_DIR) throw new ApiError(503, "Track videos are not enabled on this server");
   await assertTrackOwner(routeId, userId);
   const video = inspectVideo(body);
+  // Before touching disk: a database without sql/058 cannot record the video, so refuse cleanly
+  // instead of writing a file nothing points at and answering 500.
+  if (!(await routeVideosTableExists())) {
+    throw new ApiError(503, "Track videos are not available yet on this server");
+  }
   await storeRouteVideo(routeId, video.ext, body as Buffer);
   const meta = await upsertRouteVideo(routeId, {
     ext: video.ext,
@@ -88,15 +122,24 @@ export async function removeRouteVideo(routeId: number, userId: number): Promise
   await deleteRouteVideoFiles(routeId);
 }
 
-/** Called when a track itself is deleted. Best-effort — never blocks the route delete. */
+/** Called when a track itself is deleted. NEVER throws — the track delete must go ahead whatever
+ *  happens here. The row and the file are cleaned independently, so one failing does not leave
+ *  the other behind; each problem is logged. */
 export async function cleanupRouteVideo(routeId: number): Promise<void> {
   try {
     await deleteRouteVideoRow(routeId);
+  } catch (err) {
+    logger.warn(
+      { routeId, err: (err as Error).message },
+      "could not delete a deleted route's video row",
+    );
+  }
+  try {
     await deleteRouteVideoFiles(routeId);
   } catch (err) {
     logger.warn(
       { routeId, err: (err as Error).message },
-      "could not clean up a deleted route's video",
+      "could not delete a deleted route's video file",
     );
   }
 }

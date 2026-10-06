@@ -60,8 +60,22 @@ export async function upsertRouteVideo(
   return { ...input, updatedAt: row.updated_at };
 }
 
+/** No table (sql/058 not run) means there is no row to delete — not an error. */
 export async function deleteRouteVideoRow(routeId: number): Promise<void> {
-  await execute("DELETE FROM route_videos WHERE route_id = $1", [routeId]);
+  try {
+    await execute("DELETE FROM route_videos WHERE route_id = $1", [routeId]);
+  } catch (err) {
+    if (isMissingTable(err)) return;
+    throw err;
+  }
+}
+
+/** Whether sql/058 has run — checked before an upload writes anything to disk. */
+export async function routeVideosTableExists(): Promise<boolean> {
+  const row = await queryOne<{ exists: boolean }>(
+    "SELECT to_regclass('public.route_videos') IS NOT NULL AS exists",
+  );
+  return row?.exists === true;
 }
 
 /** True when some ride uses this route — a ride's viewers may watch its track video even when the

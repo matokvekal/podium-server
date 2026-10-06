@@ -8,7 +8,8 @@
 // change on replace, the read endpoint sends an ETag, never the long immutable cache the
 // ride-image files get.
 
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { env } from "../config/env.js";
 import type { RouteVideoExt } from "../config/route-videos.js";
@@ -62,6 +63,20 @@ export async function storeRouteVideo(
   }
 }
 
+/** True only for a real, non-empty file. Never throws — a bad reference is simply "no file". */
+export async function routeVideoFileExists(
+  routeId: number,
+  ext: RouteVideoExt,
+  root: string | null = env.ROUTE_VIDEOS_DIR,
+): Promise<boolean> {
+  try {
+    const s = await stat(resolveRouteVideoPath(routeId, ext, root));
+    return s.isFile() && s.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Best-effort delete of every extension for this route — called after the DB row is gone. */
 export async function deleteRouteVideoFiles(
   routeId: number,
@@ -79,9 +94,25 @@ async function removeQuietly(file: string): Promise<void> {
   }
 }
 
-/** Creates the root at boot so a misconfigured path is a loud log line, not a rider's failed
- *  upload. No-op when ROUTE_VIDEOS_DIR is not configured. */
-export async function ensureRouteVideosRoot(): Promise<void> {
-  if (!env.ROUTE_VIDEOS_DIR) return;
-  await mkdir(env.ROUTE_VIDEOS_DIR, { recursive: true });
+/**
+ * Checks the root at boot so a misconfigured path is a loud log line, not a rider's failed
+ * upload. NEVER throws — a missing or unwritable folder must not stop the server; it only means
+ * video uploads will fail (each with its own error) until the folder is fixed. Returns whether
+ * the folder is usable, for the log and for tests. No-op (false) when ROUTE_VIDEOS_DIR is unset.
+ */
+export async function ensureRouteVideosRoot(
+  root: string | null = env.ROUTE_VIDEOS_DIR,
+): Promise<boolean> {
+  if (!root) return false;
+  try {
+    await mkdir(root, { recursive: true });
+    await access(root, constants.W_OK);
+    return true;
+  } catch (err) {
+    logger.warn(
+      { root, err: (err as Error).message },
+      "ROUTE_VIDEOS_DIR is missing or not writable — track video uploads will fail; everything else is unaffected",
+    );
+    return false;
+  }
 }

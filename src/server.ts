@@ -20,9 +20,8 @@ void ensureUploadRoot().catch((err: Error) => {
 // address() === null), so it cannot be trusted as proof of a successful start. Without
 // the `error` handler below, a port clash printed "listening on port N" and then exited 0
 // as the event loop drained — a dead server that looked like a healthy one.
-void ensureRouteVideosRoot().catch((err: Error) => {
-  logger.error({ err: err.message }, "could not create the track video directory (ROUTE_VIDEOS_DIR)");
-});
+// Optional feature: never throws, only warns (lib/route-video-storage.ts).
+void ensureRouteVideosRoot();
 
 const server = app.listen(env.PORT, () => {
   if (!server.listening) return;
