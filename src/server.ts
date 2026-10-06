@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { closePool } from "./db/pool.js";
 import { logger } from "./lib/logger.js";
+import { ensureRouteVideosRoot } from "./lib/route-video-storage.js";
 import { ensureUploadRoot } from "./lib/user-image-storage.js";
 import { startAutoFinishSweeper } from "./services/autoFinish.service.js";
 
@@ -19,6 +20,10 @@ void ensureUploadRoot().catch((err: Error) => {
 // address() === null), so it cannot be trusted as proof of a successful start. Without
 // the `error` handler below, a port clash printed "listening on port N" and then exited 0
 // as the event loop drained — a dead server that looked like a healthy one.
+void ensureRouteVideosRoot().catch((err: Error) => {
+  logger.error({ err: err.message }, "could not create the track video directory (ROUTE_VIDEOS_DIR)");
+});
+
 const server = app.listen(env.PORT, () => {
   if (!server.listening) return;
   logger.info(`El nino server listening on port ${env.PORT} (${env.NODE_ENV})`);

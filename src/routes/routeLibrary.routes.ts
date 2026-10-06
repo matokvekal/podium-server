@@ -8,11 +8,14 @@ import {
   addRouteFavoriteController,
   createRouteController,
   deleteRouteController,
+  deleteRouteVideoController,
   getRouteController,
   getRouteGpxController,
+  getRouteVideoController,
   likeRouteController,
   listMyRoutesController,
   listPublicRoutesController,
+  putRouteVideoController,
   removeRouteFavoriteController,
   updateRouteController,
 } from "../controllers/routeLibrary.controller.js";
@@ -59,6 +62,14 @@ routeLibraryRouter.delete("/:routeId/favorite", requireAuth, removeRouteFavorite
 // The original file, unmodified. Optional auth, same visibility as the route (published, or its
 // owner). Two segments, so it cannot be swallowed by "/:routeId" below.
 routeLibraryRouter.get("/:routeId/gpx", optionalAuth, getRouteGpxController);
+
+// GET    /api/v1/routes/:routeId/video   logged-in riders (routeVideo.service.ts says who)
+// PUT    /api/v1/routes/:routeId/video   track owner — raw video body, ?durationS=
+// DELETE /api/v1/routes/:routeId/video   track owner
+// The track's flyover video (sql/058). Two segments, so registered before "/:routeId".
+routeLibraryRouter.get("/:routeId/video", requireAuth, getRouteVideoController);
+routeLibraryRouter.put("/:routeId/video", requireAuth, putRouteVideoController);
+routeLibraryRouter.delete("/:routeId/video", requireAuth, deleteRouteVideoController);
 
 // GET /api/v1/routes/:routeId
 // Optional auth: a published route opens for a guest; getRouteForViewer still 404s an

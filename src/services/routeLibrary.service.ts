@@ -35,6 +35,7 @@ import {
   selectRouteLikeCount,
 } from "../queries/routeLike.queries.js";
 import { assertOwner } from "./event.service.js";
+import { cleanupRouteVideo } from "./routeVideo.service.js";
 
 /**
  * How many points a preview line keeps. A route card is a thumbnail a few hundred pixels
@@ -174,6 +175,8 @@ export async function deleteRoute(routeId: number, userId: number): Promise<void
   await assertRouteOwner(routeId, userId);
   await deleteEventRoutesForRoute(routeId);
   await deleteRouteRow(routeId);
+  // The track's flyover video (sql/058) goes with it — best-effort, never blocks the delete.
+  await cleanupRouteVideo(routeId);
   logger.info({ routeId, userId }, "route deleted");
 }
 
