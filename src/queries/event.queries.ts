@@ -264,6 +264,10 @@ export interface EventListItem extends Event {
    *  unpaginated, so a caller that draws no maps must not pay ~1.4 KB per ride for them. Null
    *  when the ride has no route or the route has no drawable line. Never on the detail payload. */
   preview?: RoutePreview | null;
+  /** The caller's role on the ride — 'owner' (creator), 'operator' (a manager the creator
+   *  appointed) or null for a ride they only joined. Only on GET /events (the caller's own
+   *  list); absent everywhere else. */
+  myRole?: "owner" | "operator" | "viewer" | null;
 }
 
 /**
@@ -372,6 +376,8 @@ interface EventSummaryRow extends EventRow {
   /** Only selected by selectPublicEvents's runList, computed from nearLat/nearLon — see
    *  NEAR_ME_DISTANCE_EXPR. Absent on every other query. */
   distance_from_me_km?: number | null;
+  /** Only selected by selectEventsForUser: the caller's event_members role on the ride. */
+  my_role?: "owner" | "operator" | "viewer" | null;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -396,6 +402,8 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     // Only when the query selected the preview column at all; a list that did not ask for it
     // keeps exactly the payload it always had (no `preview` key, not even a null).
     ...(row.thumb_source !== undefined ? { preview: previewFromStored(row.thumb_source) } : {}),
+    // Only on the caller's own list (selectEventsForUser).
+    ...(row.my_role !== undefined ? { myRole: row.my_role } : {}),
   };
 }
 
@@ -483,12 +491,14 @@ export async function selectEventsForUser(
       // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
       // events this user OWNS but was rejected from, which cannot happen today but is exactly
       // the kind of thing that starts happening once co-organizers land.
-      `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
+      `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}, em_me.role AS my_role
          FROM events e
          LEFT JOIN event_participants ep
                 ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+         LEFT JOIN event_members em_me ON em_me.event_id = e.id AND em_me.user_id = $1
          ${EVENT_SUMMARY_JOINS}
-        WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+        WHERE (e.owner_id = $1 OR ep.user_id = $1 OR em_me.role IN ('owner', 'operator'))
+          AND e.status != 'cancelled'
         ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
       [userId],
     );
@@ -505,13 +515,15 @@ export async function selectEventsForUser(
       const rows = await query<EventSummaryRow>(
         `SELECT DISTINCT e.*, ${eventSummaryColumns(features.thumb)}${
           features.downloads ? ", copy_summary.download_count" : ""
-        }
+        }, em_me.role AS my_role
            FROM events e
            LEFT JOIN event_participants ep
                   ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+           LEFT JOIN event_members em_me ON em_me.event_id = e.id AND em_me.user_id = $1
            ${eventSummaryJoins(features.thumb)}
            ${features.downloads ? copySummaryJoin(features.seeds) : ""}
-          WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+          WHERE (e.owner_id = $1 OR ep.user_id = $1 OR em_me.role IN ('owner', 'operator'))
+            AND e.status != 'cancelled'
           ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
         [userId],
       );

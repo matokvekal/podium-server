@@ -53,7 +53,7 @@ vi.mock("../queries/routeSearch.queries.js", () => ({
   markEventRouteInfoPending: (...a: unknown[]) => markEventRouteInfoPending(...a),
 }));
 vi.mock("./event.service.js", () => ({
-  assertOwner: (event: { ownerId: number }, userId: number) => {
+  assertOrganizer: (event: { ownerId: number }, userId: number) => {
     if (event.ownerId !== userId) throw new Error("not owner");
   },
   getEventForViewer: (...a: unknown[]) => getEventForViewer(...a),

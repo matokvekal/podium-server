@@ -4,7 +4,7 @@
 // Access is the ride's own authorization: getEventForViewer answers "does this ride exist for
 // you" (404 if not), policy.ts "event:view_route" decides who may SEE the stops (same people who
 // may see the route they sit on), and "event:manage_stops" decides who may change them — the
-// ride's creator only.
+// ride's organizers (its creator and the managers they appointed).
 //
 // FAIL-SOFT READ: until sql/049 has run, the table does not exist (Postgres 42P01). A read then
 // answers "no stops" instead of an error, so a server deployed ahead of its migration leaves
@@ -98,7 +98,10 @@ function cleanLabel(raw: string): string {
 async function assertCanManage(rideId: string, userId: number): Promise<void> {
   const view = await getEventForViewer(rideId, userId);
   if (!canEvent(view.actor, "event:manage_stops", view.context)) {
-    throw new ApiError(403, "Only the ride's creator can change its stops (RIDE_STOPS_NO_ACCESS)");
+    throw new ApiError(
+      403,
+      "Only the ride's organizers can change its stops (RIDE_STOPS_NO_ACCESS)",
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import { ApiError } from "../lib/api-error.js";
 import { verifyGoogleIdToken } from "../lib/google-auth.js";
 import { signAccessToken } from "../lib/jwt.js";
 import { logger } from "../lib/logger.js";
+import { claimManagerInvites } from "./eventManagers.service.js";
 import { requestOtp, verifyOtp } from "./otp.service.js";
 import {
   findSessionByRefreshToken,
@@ -181,6 +182,9 @@ export async function authenticateWithGoogle(
     lastName: fitColumn(identity.lastName, 200),
     avatarUrl: fitColumn(identity.picture, 500),
   });
+  // Rides that named this (Google-verified) email as a manager before the account existed, or
+  // before this identity was linked. Never throws — see claimManagerInvites.
+  await claimManagerInvites(user.id, identity.email);
   return buildAuthResult(user, context);
 }
 

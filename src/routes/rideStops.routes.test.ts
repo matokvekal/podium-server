@@ -273,10 +273,9 @@ describe("everyone else is refused by the SERVER, not just a hidden button", () 
     expect(db.stops[0]).toMatchObject({ label: "existing", lat: 32 });
   });
 
-  it("a co-organizer (operator) is refused — the rule is creator-only", async () => {
+  it("a ride manager (operator) is offered the editor, same as the creator", async () => {
     const read = await request(app).get(stopsUrl(PUBLIC_RIDE)).set("Authorization", await auth(OPERATOR));
-    expect(read.body.data.canManage).toBe(false);
-    expect(await writes(OPERATOR)).toEqual([403, 403, 403, 403]);
+    expect(read.body.data.canManage).toBe(true);
   });
 
   it("a signed-in stranger on a public ride can read, cannot write", async () => {

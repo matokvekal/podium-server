@@ -26,7 +26,7 @@ import {
   updateResult,
 } from "../queries/participant.queries.js";
 import { refreshStatsAfterAttendanceChange } from "../statistics/statistics.service.js";
-import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
+import { assertOrganizer, getEventForViewer, type ViewerTier } from "./event.service.js";
 
 /**
  * Owner sees everyone. Otherwise: a rider who is on the list may look — approved/registered
@@ -87,9 +87,10 @@ async function assertRoomForRiders(
   }
 }
 
+/** The creator or one of the ride's managers (event.service.ts assertOrganizer). */
 async function assertOwnerOf(eventId: string, userId: number) {
   const { event } = await getEventForViewer(eventId, userId);
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   return event;
 }
 
@@ -106,8 +107,9 @@ export async function addParticipant(
     countryCode?: string;
   },
 ): Promise<EventParticipant> {
-  await assertOwnerOf(eventId, userId);
-  await assertRoomForRiders(eventId, userId, 1);
+  const event = await assertOwnerOf(eventId, userId);
+  // The rider cap is the creator's entitlement, also when a manager is the one adding.
+  await assertRoomForRiders(eventId, event.ownerId ?? userId, 1);
   const participant = await insertManualParticipant(eventId, {
     name: input.name,
     email: input.email ?? null,
@@ -135,10 +137,10 @@ export async function addParticipants(
     countryCode?: string;
   }[],
 ): Promise<EventParticipant[]> {
-  await assertOwnerOf(eventId, userId);
+  const event = await assertOwnerOf(eventId, userId);
   // Checked for the whole file at once: importing the first 30 rows of a 60-row spreadsheet
   // and refusing the rest leaves the organizer worse off than refusing outright.
-  await assertRoomForRiders(eventId, userId, rows.length);
+  await assertRoomForRiders(eventId, event.ownerId ?? userId, rows.length);
   const created = await insertManualParticipants(
     eventId,
     rows.map((input) => ({

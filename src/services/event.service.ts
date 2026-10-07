@@ -64,6 +64,7 @@ import {
   upsertParticipant,
   upsertParticipantLastLocation,
 } from "../queries/event.queries.js";
+import { selectEventMemberRole } from "../queries/eventManagers.queries.js";
 import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
 import {
   approveAllWaitingParticipants,
@@ -222,10 +223,16 @@ export async function saveLocationBatch(
 // Ownership, CRUD and the status workflow — milestone 2.
 // ---------------------------------------------------------------------------------------
 
-export function assertOwner(event: Event, userId: number): void {
-  if (event.ownerId !== userId) {
-    throw new ApiError(403, "Only the event owner may do this");
-  }
+/**
+ * The ride's organizers: its creator (events.owner_id) or a manager the creator appointed
+ * (event_members role 'operator', eventManagers.service.ts). Both may do every owner action;
+ * the creator check runs first so the common case costs no query.
+ */
+export async function assertOrganizer(event: Event, userId: number): Promise<void> {
+  if (event.ownerId !== null && event.ownerId === userId) return;
+  const role = await selectEventMemberRole(event.id, userId);
+  if (role === "owner" || role === "operator") return;
+  throw new ApiError(403, "Only the ride's organizers may do this");
 }
 
 /** draft -> published -> registration_open -> ready -> live -> finished. Any non-terminal
@@ -490,6 +497,10 @@ export async function createEvent(
   return event;
 }
 
+function isMyOrganizedRide(event: EventListItem, userId: number): boolean {
+  return event.ownerId === userId || event.myRole === "owner" || event.myRole === "operator";
+}
+
 export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "following";
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
@@ -507,10 +518,11 @@ export async function listMyEvents(
 
   const events = await selectEventsForUser(userId, options);
   switch (filter) {
+    // "mine" = rides I organize: the ones I created and the ones I was made a manager of.
     case "mine":
-      return events.filter((event) => event.ownerId === userId);
+      return events.filter((event) => isMyOrganizedRide(event, userId));
     case "joined":
-      return events.filter((event) => event.ownerId !== userId);
+      return events.filter((event) => !isMyOrganizedRide(event, userId));
     case "upcoming":
       return events.filter((event) => UPCOMING_STATUSES.includes(event.status));
     case "live":
@@ -626,7 +638,7 @@ export async function updateEventDetails(
 ): Promise<Event> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   await assertMayChangePromote(userId, input.promoteOnly, input.promoteRegistrationMessage);
   // Once live, the ride's DETAILS are locked — name, date, place, description. Moving those
   // out from under riders who are already on the road is the thing this guard exists to stop.
@@ -674,7 +686,7 @@ export async function updateEventDetails(
   if (input.promoteRegistrationMessage !== undefined) {
     await updateEventPromoteMessage(eventId, input.promoteRegistrationMessage);
   }
-  // Chat on/off (sql/056) - the owner's setting (assertOwner above). Messages are never touched.
+  // Chat on/off (sql/056) - the organizers' setting (assertOrganizer above). Messages are never touched.
   const wroteChat = input.chatEnabled !== undefined;
   if (input.chatEnabled !== undefined) {
     await updateEventChatEnabled(eventId, input.chatEnabled);
@@ -806,7 +818,7 @@ export async function changeEventStatus(
 ): Promise<Event> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
 
   // Asking for the state it is already in is a no-op, not an error. Now that POST /events
   // creates a published event, the client's old create-then-publish pair would otherwise 400
@@ -823,8 +835,10 @@ export async function changeEventStatus(
   }
 
   if (nextStatus === "live") {
-    const actor = await buildActor(userId);
-    assertWithinConcurrentLiveEvents(actor, await countLiveEventsForOwner(userId, eventId));
+    // The creator's ceiling, also when one of the ride's managers presses START.
+    const ownerId = event.ownerId ?? userId;
+    const actor = await buildActor(ownerId);
+    assertWithinConcurrentLiveEvents(actor, await countLiveEventsForOwner(ownerId, eventId));
   }
 
   const finishedAt = nextStatus === "finished" ? new Date() : event.finishedAt;
@@ -872,7 +886,7 @@ export function cancelEvent(eventId: string, userId: number): Promise<Event> {
 export async function pauseEvent(eventId: string, userId: number, paused: boolean): Promise<Event> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   if (event.status !== "live") {
     throw new ApiError(400, "Only a live event can be paused or resumed");
   }

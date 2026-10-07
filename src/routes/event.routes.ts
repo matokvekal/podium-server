@@ -53,6 +53,12 @@ import {
   listRideStopsController,
   updateRideStopController,
 } from "../controllers/rideStops.controller.js";
+import {
+  addEventManagerController,
+  listEventManagersController,
+  removeEventManagerController,
+  removeManagerInviteController,
+} from "../controllers/eventManagers.controller.js";
 import { linkEventTeamController } from "../controllers/team.controller.js";
 import { deduplicateClientAction } from "../middleware/clientActions.js";
 import { optionalAuth, requireAuth } from "../middleware/requireAuth.js";
@@ -198,7 +204,7 @@ eventRouter.post("/:eventId/chat", requireAuth, rideChatSendLimiter, sendRideCha
 // POST   /api/v1/events/:eventId/stops                 { label, lat, lng, kind? }
 // PATCH  /api/v1/events/:eventId/stops/:stopId         { label?, lat?, lng?, kind?, sortOrder? }
 // DELETE /api/v1/events/:eventId/stops/:stopId
-// Writes authorised by policy.ts "event:manage_stops" (the creator only) in rideStops.service.ts.
+// Writes authorised by policy.ts "event:manage_stops" (creator or manager) in rideStops.service.ts.
 eventRouter.get("/:eventId/stops", optionalAuth, listRideStopsController);
 eventRouter.post("/:eventId/stops", requireAuth, createRideStopController);
 eventRouter.patch("/:eventId/stops/:stopId", requireAuth, updateRideStopController);
@@ -311,6 +317,24 @@ eventRouter.delete(
 // now because "switch ride" on a shared link has to move a rider off the ride they were on.
 // Self-only: it never touches another rider's row. See event.service.ts::leaveEvent.
 eventRouter.post("/:eventId/leave", requireAuth, deduplicateClientAction, leaveEventController);
+
+// ---- ride managers ------------------------------------------------------------------------
+// People the creator names by email to run the ride with them (event_members role 'operator';
+// an email with no account waits in event_manager_invites, sql/059). Reading: the ride's
+// organizers. Adding / removing: the creator only (policy.ts "event:manage_members").
+
+// GET    /api/v1/events/:eventId/managers
+// POST   /api/v1/events/:eventId/managers                 { email }  201 added / 202 invited
+// DELETE /api/v1/events/:eventId/managers/:userId
+// DELETE /api/v1/events/:eventId/manager-invites/:email
+eventRouter.get("/:eventId/managers", requireAuth, listEventManagersController);
+eventRouter.post("/:eventId/managers", requireAuth, addEventManagerController);
+eventRouter.delete("/:eventId/managers/:userId", requireAuth, removeEventManagerController);
+eventRouter.delete(
+  "/:eventId/manager-invites/:email",
+  requireAuth,
+  removeManagerInviteController,
+);
 
 // PATCH /api/v1/events/:eventId/team
 // Links this ride into a team's schedule (or unlinks it with teamId: null).
