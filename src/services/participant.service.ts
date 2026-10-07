@@ -3,9 +3,12 @@
 // action here is owner-only until that lands. See plan/01-task-list.md milestone 3.
 
 import { buildActor } from "../authz/actor.js";
-import { hasRoomForParticipants } from "../authz/participant-capacity.js";
+import {
+  effectiveMaxParticipants,
+  hasRoomForParticipants,
+} from "../authz/participant-capacity.js";
 import { AUTO_CHECK_IN } from "../config/auto-check-in.js";
-import type { AttendanceStatus, EventParticipant, ResultStatus } from "../db/types.js";
+import type { AttendanceStatus, Event, EventParticipant, ResultStatus } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
 import { type AutoCheckInDecision, evaluateAutoCheckIn } from "../lib/auto-check-in.js";
 import type { LatLng } from "../lib/geo.js";
@@ -72,15 +75,16 @@ export async function listParticipantsForViewer(
  * read-then-check is enough; the concurrency-safe path is only needed for self-service joins.
  */
 async function assertRoomForRiders(
-  eventId: string,
+  event: Event,
   ownerId: number,
   adding: number,
 ): Promise<void> {
   const [actor, counts] = await Promise.all([
     buildActor(ownerId),
-    countJoinedParticipants(eventId),
+    countJoinedParticipants(event.id),
   ]);
-  const max = actor.entitlements.limits.maxParticipantsPerEvent;
+  // The admin's per-ride override (sql/060) wins over the owner's account cap when set.
+  const max = effectiveMaxParticipants(event, actor.entitlements.limits.maxParticipantsPerEvent);
   if (!hasRoomForParticipants(counts, adding, max)) {
     const current = counts.approved + counts.pending;
     throw new ApiError(409, `This ride is full — ${current} of ${max} riders (EVENT_FULL)`);
@@ -109,7 +113,7 @@ export async function addParticipant(
 ): Promise<EventParticipant> {
   const event = await assertOwnerOf(eventId, userId);
   // The rider cap is the creator's entitlement, also when a manager is the one adding.
-  await assertRoomForRiders(eventId, event.ownerId ?? userId, 1);
+  await assertRoomForRiders(event, event.ownerId ?? userId, 1);
   const participant = await insertManualParticipant(eventId, {
     name: input.name,
     email: input.email ?? null,
@@ -140,7 +144,7 @@ export async function addParticipants(
   const event = await assertOwnerOf(eventId, userId);
   // Checked for the whole file at once: importing the first 30 rows of a 60-row spreadsheet
   // and refusing the rest leaves the organizer worse off than refusing outright.
-  await assertRoomForRiders(eventId, event.ownerId ?? userId, rows.length);
+  await assertRoomForRiders(event, event.ownerId ?? userId, rows.length);
   const created = await insertManualParticipants(
     eventId,
     rows.map((input) => ({

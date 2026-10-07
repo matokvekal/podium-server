@@ -17,6 +17,18 @@ export function joinedParticipantCount(counts: JoinedCounts): number {
   return counts.approved + counts.pending;
 }
 
+/**
+ * The ceiling for one ride: the System Admin's per-ride override (events.max_participants,
+ * sql/060) when set, otherwise the owner's account cap. Only the number changes — the counting
+ * above is the same either way.
+ */
+export function effectiveMaxParticipants(
+  event: { maxParticipants?: number | null },
+  ownerMaxParticipantsPerEvent: number,
+): number {
+  return event.maxParticipants ?? ownerMaxParticipantsPerEvent;
+}
+
 /** True when `adding` more riders still fits under `max`. */
 export function hasRoomForParticipants(counts: JoinedCounts, adding: number, max: number): boolean {
   return joinedParticipantCount(counts) + adding <= max;
