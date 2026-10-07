@@ -278,6 +278,13 @@ export interface Event {
   expectedParticipants: number | null;
 
   /**
+   * The System Admin's per-ride rider cap (sql/060), set from /admin2026. null = no override,
+   * the owner's account cap applies. Replaces only the ceiling, never who counts toward it —
+   * read it through effectiveMaxParticipants (authz/participant-capacity.ts).
+   */
+  maxParticipants?: number | null;
+
+  /**
    * The organizer states a support / sag vehicle follows the ride — see
    * sql/024-event-support-vehicle.sql. Defaults false, and false means "not stated" as much as
    * it means "no": a rider must never plan around a vehicle nobody promised.

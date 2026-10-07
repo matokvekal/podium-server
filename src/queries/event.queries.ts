@@ -80,6 +80,8 @@ interface EventRow {
   has_support_vehicle: boolean;
   auto_check_in?: boolean;
   expected_participants: number | null;
+  /** sql/060 — absent (undefined) on a database without it. */
+  max_participants?: number | null;
   copied_from_event_id: string | null;
   copied_from_route_id: number | null;
   link_group_id?: string | null;
@@ -205,6 +207,9 @@ function mapEvent(row: EventRow): Event {
     // undefined on a database without sql/028 — reads as null, i.e. "the organizer stated no
     // expected number", exactly what a blank field means.
     expectedParticipants: row.expected_participants ?? null,
+    // undefined on a database without sql/060 — reads as null, i.e. "no admin override, the
+    // owner's account cap applies", which is what every ride was before it.
+    maxParticipants: row.max_participants ?? null,
     // undefined on a database without sql/025 — reads as null, i.e. "not copied from anywhere",
     // which is also what every ride whose track was uploaded or drawn genuinely is.
     copiedFromEventId: row.copied_from_event_id ?? null,

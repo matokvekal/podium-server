@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { buildActor } from "../authz/actor.js";
 import { EVENT_CAPABILITIES } from "../authz/capabilities.js";
+import { effectiveMaxParticipants } from "../authz/participant-capacity.js";
 import { eventCapabilitiesFor } from "../authz/policy.js";
 import type { Event, EventParticipant, User } from "../db/types.js";
 import { ApiError } from "../lib/api-error.js";
@@ -397,7 +398,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
   const capacity = limits
     ? {
         participantCount: counts.approved + counts.pending,
-        maxParticipants: limits.maxParticipantsPerEvent,
+        maxParticipants: effectiveMaxParticipants(event, limits.maxParticipantsPerEvent),
         groupCount,
         maxGroups: limits.maxGroupsPerEvent,
       }

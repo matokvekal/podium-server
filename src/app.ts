@@ -18,6 +18,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { notFound } from "./middleware/not-found.js";
 import { adminAnalyticsRouter } from "./routes/adminAnalytics.routes.js";
 import { adminRideImagesRouter } from "./routes/adminRideImages.routes.js";
+import { adminRidesRouter } from "./routes/adminRides.routes.js";
 import { analyticsRouter } from "./routes/analytics.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { eventRouter } from "./routes/event.routes.js";
@@ -207,6 +208,7 @@ export function createApp(): Express {
   app.use("/api/v1/teams", teamRouter);
   app.use("/api/v1/admin", adminAnalyticsRouter);
   app.use("/api/v1/admin/ride-images", adminRideImagesRouter);
+  app.use("/api/v1/admin/rides", adminRidesRouter);
   app.use("/api/v1/analytics", analyticsRouter);
   app.use("/api/v1/statistics", statisticsRouter);
 

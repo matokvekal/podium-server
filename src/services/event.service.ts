@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { buildActor, buildEventContext, denyFeature, denyForbidden } from "../authz/actor.js";
 import { consumeFeatureCredit } from "../authz/entitlements.js";
 import { assertWithinConcurrentLiveEvents, assertWithinEventsPerWeek } from "../authz/limits.js";
+import { effectiveMaxParticipants } from "../authz/participant-capacity.js";
 import type { Actor, EventContext } from "../authz/policy.js";
 import { canAccount, canEvent } from "../authz/policy.js";
 import { trackAuditEvent } from "../db/audit/audit.service.js";
@@ -141,7 +142,11 @@ export async function joinEvent(
       userId,
       bib,
       initialStatus,
-      maxParticipants: organizer.entitlements.limits.maxParticipantsPerEvent,
+      // The admin's per-ride override (sql/060) wins over the owner's account cap when set.
+      maxParticipants: effectiveMaxParticipants(
+        event,
+        organizer.entitlements.limits.maxParticipantsPerEvent,
+      ),
     });
     if (!result.ok) {
       logger.warn(
