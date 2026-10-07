@@ -125,10 +125,10 @@ describe("who may change stops", () => {
     }
   });
 
-  it("a co-organizer (operator) may NOT — creator only", async () => {
+  it("a ride manager (operator) may, same as the creator", async () => {
     getEventForViewer.mockResolvedValue(view("operator", "none"));
-    await expectStatus(addRideStop(RIDE, 7, input), 403);
-    expect(insertRideStop).not.toHaveBeenCalled();
+    insertRideStop.mockResolvedValue({ kind: "ok", row: row(1, "Coffee") });
+    await expect(addRideStop(RIDE, 7, input)).resolves.toMatchObject({ label: "Coffee" });
   });
 
   it("a rider may not add, move or delete", async () => {

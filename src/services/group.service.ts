@@ -22,13 +22,13 @@ import {
   updateGroup,
 } from "../queries/group.queries.js";
 import { selectParticipantsForEvent } from "../queries/participant.queries.js";
-import { assertOwner, getEventForViewer } from "./event.service.js";
+import { assertOrganizer, getEventForViewer } from "./event.service.js";
 import { getRouteForViewer } from "./routeLibrary.service.js";
 
 async function assertEventOwner(eventId: string, userId: number) {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   return event;
 }
 
@@ -59,9 +59,9 @@ export async function createGroup(
 ): Promise<EventGroup> {
   const event = await assertEventOwner(eventId, userId);
 
-  // The group cap is the event OWNER's entitlement. assertEventOwner has already verified
-  // userId === event.ownerId, so these are the same person today; naming the owner explicitly
-  // keeps it correct once operators (event_members.role) can create groups too.
+  // The group cap is the event OWNER's entitlement. assertEventOwner lets the creator or a
+  // manager (event_members operator) through, so name the owner explicitly rather than the
+  // caller.
   const [actor, existing] = await Promise.all([
     buildActor(event.ownerId ?? userId),
     countGroupsForEvent(eventId),

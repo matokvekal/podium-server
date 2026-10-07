@@ -34,7 +34,6 @@ import {
   selectRouteFavoritedByUser,
   selectRouteLikeCount,
 } from "../queries/routeLike.queries.js";
-import { assertOwner } from "./event.service.js";
 import { cleanupRouteVideo } from "./routeVideo.service.js";
 
 /**

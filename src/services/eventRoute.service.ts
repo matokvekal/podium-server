@@ -44,7 +44,7 @@ import {
   markEventRouteInfoPending,
 } from "../queries/routeSearch.queries.js";
 import type { SetEventRouteInput } from "../schemas/eventRoute.schemas.js";
-import { assertOwner, getEventForViewer } from "./event.service.js";
+import { assertOrganizer, getEventForViewer } from "./event.service.js";
 import { getRouteForViewer } from "./routeLibrary.service.js";
 import { getRouteVideoSummary, type RouteVideoSummary } from "./routeVideo.service.js";
 import { selectRouteAccess } from "../queries/routeGpx.queries.js";
@@ -65,7 +65,7 @@ export async function setEventRouteFromPoints(
 ): Promise<EventRoute> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
 
   // routes.is_public and events.visibility are separate flags, and nothing used to bridge
   // them: a route saved for a PUBLIC ride took the column default FALSE, so it never showed
@@ -212,7 +212,7 @@ export async function attachLibraryRouteToEvent(
 ): Promise<RouteWithOwner> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   if (event.status === "finished" || event.status === "cancelled") {
     throw new ApiError(400, `Cannot change the route of a ${event.status} event`);
   }
@@ -248,7 +248,7 @@ export async function copyTrackFromEvent(
 ): Promise<RouteWithOwner> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   if (event.status === "finished" || event.status === "cancelled") {
     throw new ApiError(400, `Cannot change the route of a ${event.status} event`);
   }
@@ -279,7 +279,7 @@ export async function copyTrackFromEvent(
 export async function detachRouteFromEvent(eventId: string, userId: number): Promise<void> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   const removed = await deleteEventRoute(eventId);
   if (!removed) throw new ApiError(404, "This event has no route attached");
   logger.info({ eventId, userId }, "route detached from event");

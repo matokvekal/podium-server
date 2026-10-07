@@ -181,13 +181,16 @@ export function toEventSummary(event: Event | EventListItem) {
     // instead. The detailed line stays GET /events/:id/route and the original file
     // GET /routes/:id/gpx.
     ...("preview" in summary ? { preview: summary.preview ?? null } : {}),
+    // The caller's role on the ride (owner = creator, operator = manager) — only on GET /events,
+    // the caller's own list, so the "Created" tab and the edit pencil include managed rides.
+    ...("myRole" in summary ? { myRole: summary.myRole ?? null } : {}),
   };
 }
 
 /**
  * `tier` decides what is actually filled in, not just what the flags claim. Defaults to
  * "owner" because every other caller of this function is an owner-only mutation (create,
- * update, status, pause, cancel) that has already passed assertOwner.
+ * update, status, pause, cancel) that has already passed assertOrganizer.
  *
  * Redaction is deliberately narrow: only the fields that answer "when and where is this
  * ride" — which is exactly what an unapproved rider must not have. Name, type and status
@@ -221,8 +224,11 @@ export function toEventDetail(
   const canSeeInfo = canSeeInfoOverride ?? true;
   // Decided once: it answers `isOwner` AND gates the account ceilings below, and those two must
   // never disagree — a viewer told `isOwner: false` who still receives a cap is the leak this
-  // guards against.
-  const viewerIsOwner = event.ownerId === viewerId;
+  // guards against. "Owner" here means ORGANIZER: the creator or a manager they appointed
+  // (event_members role 'operator') — a manager runs the ride exactly as the creator does.
+  const viewerIsCreator = viewerId !== null && event.ownerId === viewerId;
+  const viewerIsOwner =
+    viewerIsCreator || view?.context.role === "owner" || view?.context.role === "operator";
   const summary = toEventSummary(event);
   return {
     ...summary,
@@ -253,7 +259,10 @@ export function toEventDetail(
     startedAt: event.startedAt ?? null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
+    /** The creator or one of the ride's managers — shows the organizer controls. */
     isOwner: viewerIsOwner,
+    /** Only the creator (events.owner_id). A manager sees `isOwner: true, isCreator: false`. */
+    isCreator: viewerIsCreator,
     requiresApproval: event.requiresApproval,
     isPaused: event.isPaused,
     effectiveStatus: computeEffectiveStatus(event),

@@ -17,7 +17,7 @@ const selectEventStartPoint = vi.fn();
 
 vi.mock("./event.service.js", () => ({
   getEventForViewer: (...a: unknown[]) => getEventForViewer(...a),
-  assertOwner: vi.fn(),
+  assertOrganizer: vi.fn(),
 }));
 
 vi.mock("../queries/participant.queries.js", () => ({

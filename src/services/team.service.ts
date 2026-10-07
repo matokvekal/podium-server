@@ -34,7 +34,7 @@ import {
   updateMemberStatus,
   updateTeam,
 } from "../queries/team.queries.js";
-import { assertOwner } from "./event.service.js";
+import { assertOrganizer } from "./event.service.js";
 
 async function assertTeamOwner(teamId: number, userId: number): Promise<Team> {
   const team = await selectTeamById(teamId);
@@ -179,7 +179,7 @@ export async function linkEventToTeam(
 ): Promise<void> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   if (teamId !== null) await assertTeamOwner(teamId, userId);
   await setEventTeam(eventId, teamId);
   logger.info({ eventId, userId, teamId }, "event team link changed");

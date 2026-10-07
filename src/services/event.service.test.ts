@@ -20,10 +20,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const selectEventById = vi.fn();
 const updateEvent = vi.fn();
 const publishEventRouteIfOwned = vi.fn();
+const selectEventMemberRole = vi.fn();
 
 // Analytics is fire-and-forget and self-contained (src/audit/audit.service.test.ts covers it);
 // stub it so this suite never reaches the DB pool.
 vi.mock("../db/audit/audit.service.js", () => ({ trackAuditEvent: vi.fn() }));
+// A non-creator is checked against event_members for a manager role; here nobody is one.
+vi.mock("../queries/eventManagers.queries.js", () => ({
+  selectEventMemberRole: (...a: unknown[]) => selectEventMemberRole(...a),
+}));
 
 vi.mock("../queries/event.queries.js", async () => {
   const actual = await vi.importActual<typeof import("../queries/event.queries.js")>(
@@ -64,6 +69,7 @@ beforeEach(() => {
     ...input,
   }));
   publishEventRouteIfOwned.mockReset().mockResolvedValue(1);
+  selectEventMemberRole.mockReset().mockResolvedValue(null);
 });
 
 describe("PRIVATE -> PUBLIC publishes the ride's own track", () => {
@@ -147,5 +153,22 @@ describe("ownership still gates the edit itself", () => {
     ).rejects.toMatchObject({ status: 403 });
 
     expect(publishEventRouteIfOwned).not.toHaveBeenCalled();
+  });
+
+  it("lets a manager the creator appointed (operator) edit, same as the creator", async () => {
+    selectEventMemberRole.mockResolvedValue("operator");
+
+    const updated = await updateEventDetails("e1", 999, { name: "Renamed" } as never);
+
+    expect(selectEventMemberRole).toHaveBeenCalledWith("e1", 999);
+    expect(updated.name).toBe("Renamed");
+  });
+
+  it("a viewer row is not enough", async () => {
+    selectEventMemberRole.mockResolvedValue("viewer");
+
+    await expect(updateEventDetails("e1", 999, { name: "x" } as never)).rejects.toMatchObject({
+      status: 403,
+    });
   });
 });
