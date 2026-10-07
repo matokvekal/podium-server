@@ -1,5 +1,5 @@
 // HTTP-level: every track-video method requires a login, and the raw video body is accepted by
-// the transport (express.raw on /api/v1/routes) only up to the 2 MB ceiling.
+// the transport (express.raw on /api/v1/routes) only up to the 3 MB ceiling.
 
 import request from "supertest";
 import { describe, expect, it } from "vitest";

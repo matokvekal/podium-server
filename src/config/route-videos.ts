@@ -7,7 +7,7 @@
 export const ROUTE_VIDEO_MIME_TYPES = ["video/mp4", "video/webm", "video/quicktime"] as const;
 
 /** Hard ceiling, enforced by express.raw before the body is read AND again on the buffer. */
-export const ROUTE_VIDEO_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+export const ROUTE_VIDEO_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
 
 /** What the uploader's browser measured — display only. Anything outside this is dropped to null. */
 export const ROUTE_VIDEO_MAX_DURATION_S = 600;
