@@ -1947,6 +1947,23 @@ export async function autoFinishEvent(eventId: string, finishedAt: Date): Promis
   return affected > 0;
 }
 
+/**
+ * Whether anyone actually rode this ride: a raw GPS point from any of its riders, or a saved
+ * line (participant_tracks outlives location_points, which is purge-eligible). Used to tell an
+ * auto-finished ride nobody rode — which its organizer may reopen with a new date — from a real
+ * one.
+ */
+export async function eventHasRecordedRiding(eventId: string): Promise<boolean> {
+  const row = await queryOne<{ ridden: boolean }>(
+    `SELECT (EXISTS (SELECT 1 FROM location_points lp
+                       JOIN event_participants ep ON ep.id = lp.participant_id
+                      WHERE ep.event_id = $1)
+          OR EXISTS (SELECT 1 FROM participant_tracks pt WHERE pt.event_id = $1)) AS ridden`,
+    [eventId],
+  );
+  return row?.ridden === true;
+}
+
 /** Codes already handed out for a given DDMMYYYY prefix, so the next suffix can be picked. */
 export async function selectEventCodesWithPrefix(prefix: string): Promise<string[]> {
   const rows = await query<{ code: string }>("SELECT code FROM events WHERE code LIKE $1", [

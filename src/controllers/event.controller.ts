@@ -43,6 +43,7 @@ import {
   findParticipantForUser,
   getEventForViewer,
   getLinkedRidesForViewer,
+  isUnriddenAutoFinished,
   getLiveRiders,
   getSharedRideGroup,
   joinEvent,
@@ -404,7 +405,11 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
       }
     : null;
 
-  return toEventDetail(
+  // An auto-finished ride its organizer never started (isUnriddenAutoFinished): the ride page
+  // keeps Edit so a wrong date can be fixed. Organizers only; no query unless it is finished.
+  const canReschedule = view.tier === "owner" && (await isUnriddenAutoFinished(event));
+
+  const detail = toEventDetail(
     event,
     viewerId,
     myParticipant,
@@ -417,6 +422,7 @@ async function eventDetailWithRoute(view: EventView, viewerId: number | null) {
     canSeeRoute,
     linkedRides,
   );
+  return { ...detail, canReschedule };
 }
 
 /** Owner-only mutations already know who the caller is; re-resolve so the reply is consistent. */

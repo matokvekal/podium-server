@@ -28,6 +28,7 @@ import {
   applyEventLinkGroup,
   countEventsCreatedSince,
   countLiveEventsForOwner,
+  eventHasRecordedRiding,
   type EventListItem,
   insertEvent,
   insertEventMember,
@@ -254,6 +255,28 @@ function isActiveForStatus(status: EventStatus): boolean {
   return status !== "draft" && status !== "cancelled" && status !== "finished";
 }
 
+/** A new start time may not be in the past. The 5 minutes only absorb clock skew between the
+ *  organizer's device and this server - the form itself refuses any past time. */
+const PAST_START_GRACE_MS = 5 * 60 * 1000;
+
+function isPastStart(startsAt: Date, now = Date.now()): boolean {
+  return startsAt.getTime() < now - PAST_START_GRACE_MS;
+}
+
+/**
+ * A ride the auto-finish sweep closed (autoFinish.service.ts) that nobody ever rode: it never
+ * went live (no started_at), its finished_at is the sweep's stamp — the ride's own scheduled
+ * end, never the moment an organizer pressed Finish — and no rider sent a single GPS point.
+ * Its organizer may reopen it with a new date; finished stays terminal for every other ride.
+ */
+export async function isUnriddenAutoFinished(event: Event): Promise<boolean> {
+  if (event.status !== "finished" || event.startedAt) return false;
+  const scheduledEnd = event.endsAt ?? event.startsAt;
+  if (!scheduledEnd || !event.finishedAt) return false;
+  if (event.finishedAt.getTime() !== scheduledEnd.getTime()) return false;
+  return !(await eventHasRecordedRiding(event.id));
+}
+
 /**
  * PROMOTE is the System Admin's switch. ANY value from anyone else is refused — `false` too —
  * so a client can neither turn it on nor probe or flip it. undefined = the field was not sent.
@@ -337,6 +360,11 @@ export async function createEvent(
   },
 ): Promise<Event> {
   await assertMayChangePromote(ownerId, input.promoteOnly, input.promoteRegistrationMessage);
+  // The sweeper closes a ride a day after its start, so a past date would make the ride vanish
+  // into Past within minutes of being created.
+  if (input.startsAt && isPastStart(input.startsAt)) {
+    throw new ApiError(400, "The start date has already passed - check the day and month");
+  }
   const actor = await buildActor(ownerId);
 
   // "May this account create rides at all" — opened deliberately per account (a paid organizer
@@ -627,8 +655,10 @@ const VISIBILITY_FIELDS = new Set<keyof UpdateEventInput>([
 export async function updateEventDetails(
   eventId: string,
   userId: number,
-  input: UpdateEventInput,
+  requested: UpdateEventInput,
 ): Promise<Event> {
+  // `let`: reopening a ride may add a shifted end time to what was asked for.
+  let input = requested;
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
   assertOwner(event, userId);
@@ -640,7 +670,21 @@ export async function updateEventDetails(
   // to touch them is exactly the moment this used to forbid: after the ride, deciding to open
   // the tracks or the results. Locking them meant show_history_locations could only ever be
   // set before anyone had ridden anything, so history could never be shared retroactively.
-  if (event.status === "live" || event.status === "finished") {
+  //
+  // The one exception is a ride the sweeper closed that nobody rode (isUnriddenAutoFinished):
+  // its organizer may fix the date, and a future date reopens it as published.
+  const reopening = await isUnriddenAutoFinished(event);
+  if (reopening) {
+    if (!input.startsAt || isPastStart(input.startsAt)) {
+      throw new ApiError(400, "Pick a future start date to reopen this ride");
+    }
+    // An end time left as it was would still be in the past, and the sweeper would close the
+    // ride again: move it by the same amount as the start, keeping the ride's length.
+    if (input.endsAt === undefined && event.endsAt && event.startsAt) {
+      const shiftMs = input.startsAt.getTime() - event.startsAt.getTime();
+      input = { ...input, endsAt: new Date(event.endsAt.getTime() + shiftMs) };
+    }
+  } else if (event.status === "live" || event.status === "finished") {
     const detailFields = Object.keys(input).filter(
       (key) => !VISIBILITY_FIELDS.has(key as keyof UpdateEventInput),
     );
@@ -652,8 +696,22 @@ export async function updateEventDetails(
     }
   }
 
+  // A CHANGED start may not be in the past. An unchanged one may: the edit form always sends
+  // the start, and fixing the description of a ride that began an hour ago must still save.
+  if (
+    input.startsAt &&
+    input.startsAt.getTime() !== event.startsAt?.getTime() &&
+    isPastStart(input.startsAt)
+  ) {
+    throw new ApiError(400, "The start date has already passed - check the day and month");
+  }
+
   const updated = await updateEvent(eventId, input);
   if (!updated) throw new Error(`updateEventDetails: event ${eventId} not found after update`);
+  if (reopening) {
+    await updateEventStatus(eventId, "published", isActiveForStatus("published"), null);
+    logger.info({ eventId, userId }, "unridden auto-finished ride reopened with a new date");
+  }
 
   // Elevation gain has its own column and its own guarded statement — updateEvent above never
   // touches it. `undefined` means the caller left it out; `null` means "clear it, fall back to
@@ -792,7 +850,15 @@ export async function updateEventDetails(
   // client merges into its ride list, so returning that row showed the OLD duration / rest
   // stops / accessibility / support-vehicle flag on the card until the next refetch. Re-read
   // once, and only when one of those separate statements actually ran.
-  if (wroteElevation || wroteMeetingPoint || wrotePromote || wroteChat || wroteRidePlan || wroteCountryRegion) {
+  if (
+    reopening ||
+    wroteElevation ||
+    wroteMeetingPoint ||
+    wrotePromote ||
+    wroteChat ||
+    wroteRidePlan ||
+    wroteCountryRegion
+  ) {
     const fresh = await selectEventById(eventId);
     if (fresh) return fresh;
   }
