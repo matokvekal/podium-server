@@ -31,13 +31,13 @@ describe("the System Admin rides API requires the admin gate on every method", (
 });
 
 describe("setRideMaxParticipantsSchema", () => {
-  it.each([1, 300, 30_000, 100_000, null])("accepts %s", (value) => {
+  it.each([1, 300, 30_000, 200_000, 2_147_483_647, null])("accepts %s", (value) => {
     expect(setRideMaxParticipantsSchema.parse({ maxParticipants: value })).toEqual({
       maxParticipants: value,
     });
   });
 
-  it.each([0, -5, 2.5, 100_001, "300", undefined])("refuses %s", (value) => {
+  it.each([0, -5, 2.5, 2_147_483_648, "300", undefined])("refuses %s", (value) => {
     expect(setRideMaxParticipantsSchema.safeParse({ maxParticipants: value }).success).toBe(false);
   });
 });
