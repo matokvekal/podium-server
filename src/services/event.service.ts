@@ -28,6 +28,7 @@ import {
   applyEventLinkGroup,
   countEventsCreatedSince,
   countLiveEventsForOwner,
+  deleteHalfCreatedEvent,
   eventHasRecordedRiding,
   type EventListItem,
   insertEvent,
@@ -442,101 +443,112 @@ export async function createEvent(
     level: input.level ?? null,
     organizerGroup: input.organizerGroup ?? null,
   });
-  // Layer 3: the creator becomes admin OF THIS EVENT ONLY. events.owner_id stays the source
-  // of truth; this row is the extensible form of it, and the only way to express an operator.
-  await insertEventMember(event.id, ownerId, "owner");
+  // Everything below writes more rows/columns for the ride just inserted. If any of it throws, the
+  // half-made ride is removed again (deleteHalfCreatedEvent) before the error goes back: a failed
+  // POST /events must not leave a ride behind. A compensating delete rather than one transaction,
+  // because these writers each use the shared pool; the row was never returned to anyone yet.
+  try {
+    // Layer 3: the creator becomes admin OF THIS EVENT ONLY. events.owner_id stays the source
+    // of truth; this row is the extensible form of it, and the only way to express an operator.
+    await insertEventMember(event.id, ownerId, "owner");
 
-  // Elevation gain is written on its own (own column, own guarded statement — see
-  // updateEventElevationGain). The reply is re-read by the controller, so the returned `event`
-  // not carrying it yet is fine.
-  if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
-    await updateEventElevationGain(event.id, input.elevationGainM);
-  }
+    // Elevation gain is written on its own (own column, own guarded statement — see
+    // updateEventElevationGain). The reply is re-read by the controller, so the returned `event`
+    // not carrying it yet is fine.
+    if (input.elevationGainM !== undefined && input.elevationGainM !== null) {
+      await updateEventElevationGain(event.id, input.elevationGainM);
+    }
 
-  // Same story for the meeting-point override — own guarded pair of columns, own statement.
-  if (input.meetingPoint !== undefined && input.meetingPoint !== null) {
-    await updateEventMeetingPoint(event.id, input.meetingPoint);
-  }
+    // Same story for the meeting-point override — own guarded pair of columns, own statement.
+    if (input.meetingPoint !== undefined && input.meetingPoint !== null) {
+      await updateEventMeetingPoint(event.id, input.meetingPoint);
+    }
 
-  // PROMOTE (sql/053) — own guarded statement. Only ever written when switched ON: the column
-  // defaults to false, so a create that says false has nothing to do.
-  if (input.promoteOnly === true) {
-    await updateEventPromoteOnly(event.id, true);
-  }
-  // Chat is written only when switched OFF: the column defaults to true (sql/056).
-  if (input.chatEnabled === false) {
-    await updateEventChatEnabled(event.id, false);
-  }
-  // Completion medal (sql/061): written only when switched ON — the column defaults to off.
-  if (input.medalEnabled === true) {
-    await updateEventMedalConfig(event.id, {
-      medalEnabled: true,
-      medalText: input.medalText,
-      medalColorId: input.medalColorId,
-      medalStyleId: input.medalStyleId,
+    // PROMOTE (sql/053) — own guarded statement. Only ever written when switched ON: the column
+    // defaults to false, so a create that says false has nothing to do.
+    if (input.promoteOnly === true) {
+      await updateEventPromoteOnly(event.id, true);
+    }
+    // Chat is written only when switched OFF: the column defaults to true (sql/056).
+    if (input.chatEnabled === false) {
+      await updateEventChatEnabled(event.id, false);
+    }
+    // Completion medal (sql/061): written only when switched ON — the column defaults to off.
+    if (input.medalEnabled === true) {
+      await updateEventMedalConfig(event.id, {
+        medalEnabled: true,
+        medalText: input.medalText,
+        medalColorId: input.medalColorId,
+        medalStyleId: input.medalStyleId,
+      });
+    }
+    // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
+    if (input.promoteRegistrationMessage) {
+      await updateEventPromoteMessage(event.id, input.promoteRegistrationMessage);
+    }
+
+    // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
+    // guarded statement, only touched for keys the create request actually carried.
+    if (
+      input.durationMin !== undefined ||
+      input.restStops !== undefined ||
+      input.isAccessible !== undefined ||
+      input.hasSupportVehicle !== undefined ||
+      input.autoCheckIn !== undefined ||
+      input.expectedParticipants !== undefined ||
+      input.terrainGrade !== undefined ||
+      input.routeDifficulty !== undefined ||
+      input.season !== undefined ||
+      input.shade !== undefined
+    ) {
+      await updateEventRidePlan(event.id, {
+        durationMin: input.durationMin,
+        restStops: input.restStops,
+        isAccessible: input.isAccessible,
+        hasSupportVehicle: input.hasSupportVehicle,
+        autoCheckIn: input.autoCheckIn,
+        expectedParticipants: input.expectedParticipants,
+        terrainGrade: input.terrainGrade,
+        routeDifficulty: input.routeDifficulty,
+        season: input.season,
+        shade: input.shade,
+      });
+    }
+
+    // country / region — own guarded statement (see updateEventCountryRegion). country always
+    // gets a value on create: the organizer's, else 'IL'. region only when the form sent one.
+    await updateEventCountryRegion(event.id, {
+      country: input.country ?? "IL",
+      ...(input.region !== undefined ? { region: input.region } : {}),
     });
-  }
-  // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
-  if (input.promoteRegistrationMessage) {
-    await updateEventPromoteMessage(event.id, input.promoteRegistrationMessage);
-  }
 
-  // Same story for the ride-plan columns (duration / rest stops / accessibility) — own
-  // guarded statement, only touched for keys the create request actually carried.
-  if (
-    input.durationMin !== undefined ||
-    input.restStops !== undefined ||
-    input.isAccessible !== undefined ||
-    input.hasSupportVehicle !== undefined ||
-    input.autoCheckIn !== undefined ||
-    input.expectedParticipants !== undefined ||
-    input.terrainGrade !== undefined ||
-    input.routeDifficulty !== undefined ||
-    input.season !== undefined ||
-    input.shade !== undefined
-  ) {
-    await updateEventRidePlan(event.id, {
-      durationMin: input.durationMin,
-      restStops: input.restStops,
-      isAccessible: input.isAccessible,
-      hasSupportVehicle: input.hasSupportVehicle,
-      autoCheckIn: input.autoCheckIn,
-      expectedParticipants: input.expectedParticipants,
-      terrainGrade: input.terrainGrade,
-      routeDifficulty: input.routeDifficulty,
-      season: input.season,
-      shade: input.shade,
+    // Ride image — own column, own guarded statement (see updateEventRideImage). Nothing to
+    // clear on create, so only written when the organizer actually picked one. The schema only
+    // checked the CHARSET (schemas/event.schemas.ts) — whether this key is one the server
+    // currently publishes (static or admin-uploaded, ride_images table) is an async check that
+    // has to happen here, same split as setPreset/setGalleryImage in user-image.service.ts.
+    if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
+      await assertRideImageAssignable(input.rideImageKey, null);
+      await updateEventRideImage(event.id, input.rideImageKey);
+    }
+
+    // Owning a ride and riding it are different things — event_members says who runs it,
+    // event_participants says who is on the start list. An organizer who ticked "I'm riding
+    // too" belongs in both, linked to their real user_id so the client can tell it is them.
+    // Never "waiting_approval": nobody approves the owner onto their own ride.
+    if (input.joinAsRider) {
+      await upsertParticipant({
+        eventId: event.id,
+        userId: ownerId,
+        bib: undefined,
+        initialStatus: input.requiresApproval ? "approved" : "registered",
+      });
+    }
+  } catch (err) {
+    await deleteHalfCreatedEvent(event.id).catch((cleanupErr: unknown) => {
+      logger.error({ err: cleanupErr, eventId: event.id }, "could not remove a half-created ride");
     });
-  }
-
-  // country / region — own guarded statement (see updateEventCountryRegion). country always
-  // gets a value on create: the organizer's, else 'IL'. region only when the form sent one.
-  await updateEventCountryRegion(event.id, {
-    country: input.country ?? "IL",
-    ...(input.region !== undefined ? { region: input.region } : {}),
-  });
-
-  // Ride image — own column, own guarded statement (see updateEventRideImage). Nothing to
-  // clear on create, so only written when the organizer actually picked one. The schema only
-  // checked the CHARSET (schemas/event.schemas.ts) — whether this key is one the server
-  // currently publishes (static or admin-uploaded, ride_images table) is an async check that
-  // has to happen here, same split as setPreset/setGalleryImage in user-image.service.ts.
-  if (input.rideImageKey !== undefined && input.rideImageKey !== null) {
-    await assertRideImageAssignable(input.rideImageKey, null);
-    await updateEventRideImage(event.id, input.rideImageKey);
-  }
-
-  // Owning a ride and riding it are different things — event_members says who runs it,
-  // event_participants says who is on the start list. An organizer who ticked "I'm riding
-  // too" belongs in both, linked to their real user_id so the client can tell it is them.
-  // Never "waiting_approval": nobody approves the owner onto their own ride.
-  if (input.joinAsRider) {
-    await upsertParticipant({
-      eventId: event.id,
-      userId: ownerId,
-      bib: undefined,
-      initialStatus: input.requiresApproval ? "approved" : "registered",
-    });
+    throw err;
   }
 
   logger.info({ eventId: event.id, ownerId, joinAsRider: !!input.joinAsRider }, "event created");

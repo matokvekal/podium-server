@@ -1558,15 +1558,15 @@ export async function updateEventMedalConfig(
   }
   if (config.medalText !== undefined) {
     params.push(config.medalText);
-    sets.push(`medal_text = ${params.length}`);
+    sets.push(`medal_text = $${params.length}`);
   }
   if (config.medalColorId !== undefined) {
     params.push(config.medalColorId);
-    sets.push(`medal_color_id = ${params.length}`);
+    sets.push(`medal_color_id = $${params.length}`);
   }
   if (config.medalStyleId !== undefined) {
     params.push(config.medalStyleId);
-    sets.push(`medal_style_id = ${params.length}`);
+    sets.push(`medal_style_id = $${params.length}`);
   }
   if (sets.length === 0) return;
   try {
@@ -2362,4 +2362,18 @@ export async function upsertParticipantLastLocation(
       distanceTravelledKm,
     ],
   );
+}
+
+/**
+ * Undo a ride whose create request failed part-way (event.service.ts createEvent): the ride row
+ * plus the only rows createEvent itself adds for it — the owner's event_members row and the
+ * organizer's own start-list row. One transaction, so it is all or nothing. Only ever called for
+ * a ride that was inserted moments ago by the same request and never returned to anyone.
+ */
+export async function deleteHalfCreatedEvent(eventId: string): Promise<void> {
+  await withTransaction(async (tx) => {
+    await tx.query("DELETE FROM event_participants WHERE event_id = $1", [eventId]);
+    await tx.query("DELETE FROM event_members WHERE event_id = $1", [eventId]);
+    await tx.query("DELETE FROM events WHERE id = $1", [eventId]);
+  });
 }
