@@ -175,3 +175,22 @@ describe("toEventSummary — chatEnabled (sql/056)", () => {
     expect(row.promoteOnly).toBe(true);
   });
 });
+
+describe("medal dedication (sql/061) — organizers only until it is awarded", () => {
+  const medalRide = { ...event, medalEnabled: true, medalText: "Well ridden!" } as typeof event;
+
+  it("a summary never carries the dedication, only the switch", () => {
+    const summary = toEventSummary(medalRide);
+    expect(summary.medalEnabled).toBe(true);
+    expect(summary.medalText).toBeNull();
+  });
+
+  it("the detail gives it to the organizer and to nobody else", () => {
+    const forOwner = toEventDetail(medalRide, OWNER_ID, null, "owner", null, null, null, null, null);
+    const forRider = toEventDetail(medalRide, STRANGER_ID, null, "approved", null, null, null, null, null);
+    const forAnon = toEventDetail(medalRide, null, null, "public", null, null, null, null, null);
+    expect(forOwner.medalText).toBe("Well ridden!");
+    expect(forRider.medalText).toBeNull();
+    expect(forAnon.medalText).toBeNull();
+  });
+});

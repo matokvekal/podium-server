@@ -13,6 +13,7 @@ import { countEventsCreatedSince } from "../queries/event.queries.js";
 import { countTeamsForOwner } from "../queries/team.queries.js";
 import { selectUserEmails } from "../queries/user.queries.js";
 import { redeemCouponSchema, updateProfileSchema } from "../schemas/user.schemas.js";
+import { getUnseenMedalCount } from "../services/eventMedals.service.js";
 import { findUserById, needsProfile, updateProfile } from "../services/user.service.js";
 
 // Rider Statistics isn't ready for every rider yet — hide the nav entry for everyone except
@@ -93,10 +94,12 @@ export function toProfile(user: User) {
 async function toAccount(user: User) {
   const actor = await buildActor(user.id);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [eventsThisWeek, teamsOwned, statisticsEmails] = await Promise.all([
+  const [eventsThisWeek, teamsOwned, statisticsEmails, unseenMedalCount] = await Promise.all([
     countEventsCreatedSince(user.id, weekAgo),
     safeCountTeamsForOwner(user.id),
     selectUserEmails(user.id),
+    // Never throws — 0 on any failure, so a medal problem can't break the profile (sql/061).
+    getUnseenMedalCount(user.id),
   ]);
 
   const { maxEventsPerWeek, maxParticipantsPerEvent, maxGroupsPerEvent } =
@@ -133,6 +136,9 @@ async function toAccount(user: User) {
       limits: actor.entitlements.limits,
     },
     usage: { eventsThisWeek, teamsOwned },
+    /** Completion medals the rider has not opened yet (sql/061) — drives the "New" tag on
+     *  Achievements and the one-time medal reveal. 0 on a database without the table. */
+    unseenMedalCount,
     /** Live grants, for an account screen that can show "Pro until 12 March". */
     grants: actor.entitlements.grants,
   };

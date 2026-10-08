@@ -97,6 +97,17 @@ export function toEventSummary(event: Event | EventListItem) {
     // Whether the ride has a chat (sql/056). true for every existing ride. The client hides the
     // chat button, badge and polling when false; the server refuses chat calls regardless.
     chatEnabled: event.chatEnabled ?? true,
+    // Completion medal (sql/061): off for every existing ride. The DEDICATION is never on a
+    // summary: riders first read it on the medal itself, once it is awarded. Only the ride's
+    // organizers get it, on the detail response (toEventDetail), for the edit form to prefill.
+    medalEnabled: event.medalEnabled ?? false,
+    medalText: null as string | null,
+    // The medal's look (colour + style ids) is not a secret; null = the original look.
+    medalColorId: event.medalColorId ?? null,
+    medalStyleId: event.medalStyleId ?? null,
+    // Whether the CALLER holds this ride's medal — only the my-rides list fills it in (one
+    // batched lookup); false everywhere else. Drives the 🏅 on a Past Ride card.
+    myMedal: summary.myMedal ?? false,
     // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
     // "Browse tracks" picker filters on both; a card shows the region label. `region` null
     // means the organiser has not set one.
@@ -183,13 +194,16 @@ export function toEventSummary(event: Event | EventListItem) {
     // instead. The detailed line stays GET /events/:id/route and the original file
     // GET /routes/:id/gpx.
     ...("preview" in summary ? { preview: summary.preview ?? null } : {}),
+    // The caller's role on the ride (owner = creator, operator = manager) — only on GET /events,
+    // the caller's own list, so the "Created" tab and the edit pencil include managed rides.
+    ...("myRole" in summary ? { myRole: summary.myRole ?? null } : {}),
   };
 }
 
 /**
  * `tier` decides what is actually filled in, not just what the flags claim. Defaults to
  * "owner" because every other caller of this function is an owner-only mutation (create,
- * update, status, pause, cancel) that has already passed assertOwner.
+ * update, status, pause, cancel) that has already passed assertOrganizer.
  *
  * Redaction is deliberately narrow: only the fields that answer "when and where is this
  * ride" — which is exactly what an unapproved rider must not have. Name, type and status
@@ -223,8 +237,11 @@ export function toEventDetail(
   const canSeeInfo = canSeeInfoOverride ?? true;
   // Decided once: it answers `isOwner` AND gates the account ceilings below, and those two must
   // never disagree — a viewer told `isOwner: false` who still receives a cap is the leak this
-  // guards against.
-  const viewerIsOwner = event.ownerId === viewerId;
+  // guards against. "Owner" here means ORGANIZER: the creator or a manager they appointed
+  // (event_members role 'operator') — a manager runs the ride exactly as the creator does.
+  const viewerIsCreator = viewerId !== null && event.ownerId === viewerId;
+  const viewerIsOwner =
+    viewerIsCreator || view?.context.role === "owner" || view?.context.role === "operator";
   const summary = toEventSummary(event);
   return {
     ...summary,
@@ -235,6 +252,9 @@ export function toEventDetail(
     meetingPoint: canSeeInfo ? summary.meetingPoint : null,
     requiresBib: event.requiresBib,
     description: canSeeInfo ? event.description : null,
+    // The medal dedication — organizers only (creator or ride manager); every rider gets null
+    // and first reads it on their awarded medal (GET /medals/me).
+    medalText: viewerIsOwner ? (event.medalText ?? null) : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
      *  is waiting on the organizer, and the fields above are nulled for them on purpose.
      *  @deprecated read `capabilities` instead — see gilad/agents/server-source-of-truth.md. */
@@ -255,7 +275,10 @@ export function toEventDetail(
     startedAt: event.startedAt ?? null,
     createdAt: event.createdAt,
     updatedAt: event.updatedAt,
+    /** The creator or one of the ride's managers — shows the organizer controls. */
     isOwner: viewerIsOwner,
+    /** Only the creator (events.owner_id). A manager sees `isOwner: true, isCreator: false`. */
+    isCreator: viewerIsCreator,
     requiresApproval: event.requiresApproval,
     isPaused: event.isPaused,
     effectiveStatus: computeEffectiveStatus(event),

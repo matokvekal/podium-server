@@ -135,8 +135,9 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
 
     case "event:view_history":
       // Stricter default than results (FALSE vs TRUE): where someone rode is more revealing
-      // than whether they finished — it is their route home.
-      if (ctx.role === "owner") return true;
+      // than whether they finished — it is their route home. Its organizers (creator and
+      // managers) see it, same as the rest of the ride.
+      if (isStaff(ctx)) return true;
       if (ctx.participation === "pending") return false;
       return ctx.event.showHistoryLocations;
 
@@ -171,12 +172,14 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
       return isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status);
 
     case "event:delete":
-      // Cancelling a ride is the owner's alone — an operator helps run it, not end it.
-      return ctx.role === "owner";
+      // A manager (operator) runs the ride exactly as its creator does, cancelling included —
+      // that is what appointing one means (eventManagers.service.ts).
+      return isStaff(ctx);
 
     case "event:manage_members":
-      // Co-organizers are a Club-tier feature, and only the owner may appoint them.
-      return ctx.role === "owner" && actor.entitlements.features.has("co_organizers");
+      // Only the creator appoints or removes managers; a manager cannot add more of them or
+      // remove the creator. Free on every plan — any creator may name managers.
+      return ctx.role === "owner";
 
     case "event:chat":
       // The ride's chat is for the people ON the ride: its organizers and its approved riders.
@@ -188,9 +191,9 @@ export function canEvent(actor: Actor, capability: EventCapability, ctx: EventCo
       return ctx.event.chatEnabled !== false && (isStaff(ctx) || isRiding(ctx));
 
     case "event:manage_stops":
-      // The ride's creator only — asked for directly, so a co-organizer (operator) does not get
-      // it. Live is allowed on purpose (a stop can move on the day); finished / cancelled is not.
-      return ctx.role === "owner" && !FINAL_STATUSES.includes(ctx.event.status);
+      // The ride's organizers — its creator and the managers they appointed. Live is allowed on
+      // purpose (a stop can move on the day); finished / cancelled is not.
+      return isStaff(ctx) && !FINAL_STATUSES.includes(ctx.event.status);
 
     default: {
       // Exhaustiveness: adding a capability without a rule fails to compile rather than

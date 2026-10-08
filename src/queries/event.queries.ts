@@ -70,6 +70,11 @@ interface EventRow {
   promote_registration_message?: string | null;
   /** sql/056 — absent (undefined) on a database without it, which reads as enabled. */
   chat_enabled?: boolean;
+  /** sql/061 — absent (undefined) on a database without it, which reads as no medal. */
+  medal_enabled?: boolean;
+  medal_text?: string | null;
+  medal_color_id?: string | null;
+  medal_style_id?: string | null;
   duration_min: number | null;
   rest_stops: number | null;
   is_accessible: boolean;
@@ -186,6 +191,11 @@ function mapEvent(row: EventRow): Event {
     promoteOnly: row.promote_only ?? false,
     promoteRegistrationMessage: row.promote_registration_message ?? null,
     chatEnabled: row.chat_enabled ?? true,
+    // undefined on a database without sql/061 — reads as "no medal", what every ride was before.
+    medalEnabled: row.medal_enabled ?? false,
+    medalText: row.medal_text ?? null,
+    medalColorId: row.medal_color_id ?? null,
+    medalStyleId: row.medal_style_id ?? null,
     // undefined on a database without sql/022 — duration/stops read as "not stated", the
     // accessibility marker as false (the safe default the column also backfills to).
     durationMin: row.duration_min ?? null,
@@ -250,6 +260,9 @@ export interface EventListItem extends Event {
   /** The organizer's display name, resolved the same way a participant's is. Null when the
    *  ride predates owner_id, or when the owner row has no name of any kind. */
   ownerName: string | null;
+  /** Whether the CALLER received this ride's completion medal (sql/061). Only GET /events (my
+   *  rides) fills it in — one batched lookup per list, never per card; absent elsewhere. */
+  myMedal?: boolean;
   /** How many riders have liked the ATTACHED TRACK — not the ride. One count per route, shared
    *  by every ride built on it (sql/036). Only populated by GET /events/public; null elsewhere. */
   likes: number | null;
@@ -269,6 +282,10 @@ export interface EventListItem extends Event {
    *  unpaginated, so a caller that draws no maps must not pay ~1.4 KB per ride for them. Null
    *  when the ride has no route or the route has no drawable line. Never on the detail payload. */
   preview?: RoutePreview | null;
+  /** The caller's role on the ride — 'owner' (creator), 'operator' (a manager the creator
+   *  appointed) or null for a ride they only joined. Only on GET /events (the caller's own
+   *  list); absent everywhere else. */
+  myRole?: "owner" | "operator" | "viewer" | null;
 }
 
 /**
@@ -377,6 +394,8 @@ interface EventSummaryRow extends EventRow {
   /** Only selected by selectPublicEvents's runList, computed from nearLat/nearLon — see
    *  NEAR_ME_DISTANCE_EXPR. Absent on every other query. */
   distance_from_me_km?: number | null;
+  /** Only selected by selectEventsForUser: the caller's event_members role on the ride. */
+  my_role?: "owner" | "operator" | "viewer" | null;
 }
 
 function mapEventListItem(row: EventSummaryRow): EventListItem {
@@ -401,6 +420,8 @@ function mapEventListItem(row: EventSummaryRow): EventListItem {
     // Only when the query selected the preview column at all; a list that did not ask for it
     // keeps exactly the payload it always had (no `preview` key, not even a null).
     ...(row.thumb_source !== undefined ? { preview: previewFromStored(row.thumb_source) } : {}),
+    // Only on the caller's own list (selectEventsForUser).
+    ...(row.my_role !== undefined ? { myRole: row.my_role } : {}),
   };
 }
 
@@ -488,12 +509,14 @@ export async function selectEventsForUser(
       // The rejected filter sits in the JOIN, not the WHERE: in the WHERE it would also drop
       // events this user OWNS but was rejected from, which cannot happen today but is exactly
       // the kind of thing that starts happening once co-organizers land.
-      `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}
+      `SELECT DISTINCT e.*, ${EVENT_SUMMARY_COLUMNS}, em_me.role AS my_role
          FROM events e
          LEFT JOIN event_participants ep
                 ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+         LEFT JOIN event_members em_me ON em_me.event_id = e.id AND em_me.user_id = $1
          ${EVENT_SUMMARY_JOINS}
-        WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+        WHERE (e.owner_id = $1 OR ep.user_id = $1 OR em_me.role IN ('owner', 'operator'))
+          AND e.status != 'cancelled'
         ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
       [userId],
     );
@@ -510,13 +533,15 @@ export async function selectEventsForUser(
       const rows = await query<EventSummaryRow>(
         `SELECT DISTINCT e.*, ${eventSummaryColumns(features.thumb)}${
           features.downloads ? ", copy_summary.download_count" : ""
-        }
+        }, em_me.role AS my_role
            FROM events e
            LEFT JOIN event_participants ep
                   ON ep.event_id = e.id AND ep.user_id = $1 AND ep.registration_status != 'rejected'
+           LEFT JOIN event_members em_me ON em_me.event_id = e.id AND em_me.user_id = $1
            ${eventSummaryJoins(features.thumb)}
            ${features.downloads ? copySummaryJoin(features.seeds) : ""}
-          WHERE (e.owner_id = $1 OR ep.user_id = $1) AND e.status != 'cancelled'
+          WHERE (e.owner_id = $1 OR ep.user_id = $1 OR em_me.role IN ('owner', 'operator'))
+            AND e.status != 'cancelled'
           ORDER BY e.starts_at ASC NULLS LAST, e.created_at DESC`,
         [userId],
       );
@@ -1301,6 +1326,11 @@ export interface UpdateEventInput {
   promoteRegistrationMessage?: string | null;
   /** Chat on/off (sql/056) — written via updateEventChatEnabled. undefined = keep. */
   chatEnabled?: boolean;
+  /** Completion medal (sql/061) — written via updateEventMedalConfig. undefined = keep. */
+  medalEnabled?: boolean;
+  medalText?: string | null;
+  medalColorId?: string | null;
+  medalStyleId?: string | null;
   /** Handled by updateEventRidePlan, NOT the updateEvent SQL below. undefined = leave alone;
    *  a value (null included, for duration/restStops/expectedParticipants) = set it. */
   durationMin?: number | null;
@@ -1499,6 +1529,54 @@ export async function updateEventChatEnabled(eventId: string, chatEnabled: boole
   } catch (err) {
     if (isMissingColumnError(err)) {
       logger.warn({ err }, "events.chat_enabled missing — run sql/056-events-chat-enabled.sql");
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Writes the completion-medal switch and dedication (sql/061) on their own, guarded against a
+ * database without them. undefined = keep that column as it is. Turning the medal off keeps the
+ * dedication, so switching it back on does not make the organizer retype it. Medals already
+ * awarded are never touched: they carry their own snapshot (event_medal_awards).
+ */
+export async function updateEventMedalConfig(
+  eventId: string,
+  config: {
+    medalEnabled?: boolean;
+    medalText?: string | null;
+    medalColorId?: string | null;
+    medalStyleId?: string | null;
+  },
+): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [eventId];
+  if (config.medalEnabled !== undefined) {
+    params.push(config.medalEnabled);
+    sets.push(`medal_enabled = $${params.length}`);
+  }
+  if (config.medalText !== undefined) {
+    params.push(config.medalText);
+    sets.push(`medal_text = ${params.length}`);
+  }
+  if (config.medalColorId !== undefined) {
+    params.push(config.medalColorId);
+    sets.push(`medal_color_id = ${params.length}`);
+  }
+  if (config.medalStyleId !== undefined) {
+    params.push(config.medalStyleId);
+    sets.push(`medal_style_id = ${params.length}`);
+  }
+  if (sets.length === 0) return;
+  try {
+    await execute(
+      `UPDATE events SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1`,
+      params,
+    );
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      logger.warn({ err }, "events.medal_enabled missing — run sql/061-event-medals.sql");
       return;
     }
     throw err;

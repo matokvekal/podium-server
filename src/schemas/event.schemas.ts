@@ -10,6 +10,13 @@ import {
   TRAIL_SEASONS,
   TRAIL_SHADES,
 } from "../db/types.js";
+import {
+  countWords,
+  MEDAL_COLOR_IDS,
+  MEDAL_STYLE_IDS,
+  MEDAL_TEXT_MAX_CHARS,
+  MEDAL_TEXT_MAX_WORDS,
+} from "../lib/medal-text.js";
 import { REGION_KEYS } from "../lib/regions.js";
 
 /**
@@ -64,6 +71,14 @@ const blankToNull = (max: number) =>
     .transform((value) => (value == null ? value : value.trim() || null));
 const organizerDisplayName = blankToNull(200);
 const promoteRegistrationMessage = blankToNull(1000);
+/** Completion-medal dedication (sql/061). Blank = null. At most 30 words — lib/medal-text.ts. */
+const medalText = blankToNull(MEDAL_TEXT_MAX_CHARS).refine(
+  (value) => value == null || countWords(value) <= MEDAL_TEXT_MAX_WORDS,
+  { message: `The medal dedication can be at most ${MEDAL_TEXT_MAX_WORDS} words` },
+);
+/** The medal's background (sql/061): one of the known ids, or null = the original look. */
+const medalColorId = z.enum(MEDAL_COLOR_IDS).nullable().optional();
+const medalStyleId = z.enum(MEDAL_STYLE_IDS).nullable().optional();
 
 const meetingPoint = z
   .object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180) })
@@ -223,6 +238,12 @@ export const createEventSchema = z.object({
   // enabled). The owner sets it; turning it off keeps the messages.
   chatEnabled: z.boolean().optional(),
 
+  // Completion medal (sql/061). Off unless sent as true; the service requires a dedication then.
+  medalEnabled: z.boolean().optional(),
+  medalText,
+  medalColorId,
+  medalStyleId,
+
   // Organizer-set ride plan — see sql/022-event-ride-plan.sql. All three: `null` (or omitted)
   // means "not stated / leave alone", a value sets it. duration in whole minutes.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),
@@ -304,6 +325,12 @@ export const updateEventSchema = z.object({
   // Chat on/off for this ride (sql/056). Independent of PROMOTE. Omitted = leave alone (create:
   // enabled). The owner sets it; turning it off keeps the messages.
   chatEnabled: z.boolean().optional(),
+
+  // Completion medal (sql/061). Omitted = leave alone. Owner or ride manager, like every detail.
+  medalEnabled: z.boolean().optional(),
+  medalText,
+  medalColorId,
+  medalStyleId,
 
   // See createEventSchema. `null` clears the field; omitted leaves it untouched.
   durationMin: z.number().int().positive().max(2880).nullable().optional(),

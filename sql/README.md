@@ -103,6 +103,7 @@ be. Do not re-run `019`.
 | `049-ride-stop-points.sql` | `ride_stop_points` — break / coffee stops the ride's CREATOR places on the map (label, lat/lng, kind, order), shown on the ride page, the live map and the stop list. Separate from `events.rest_stops` (a typed number, untouched) and from `routes.markers` (a track is shared between rides; stops are per ride). Until it runs, `GET /events/:id/stops` answers "no stops" | yes — new table, starts empty |
 | `057-ai-search-prep.sql` | `routes.ai_search_text` / `ai_search_updated_at` / `ai_search_version`, `events.route_info_processed`. Schema only — no backfill, no index, no extension (⚠ applied on prod 2026-10-01 under its draft name `050-ai-search-prep.sql`) | yes — additive, `IF NOT EXISTS`, metadata-only |
 | `057a-enable-pg-trgm.sql` | OPTIONAL. `CREATE EXTENSION IF NOT EXISTS pg_trgm` only. ⚠ may need elevated privileges (superuser on PG ≤12; CREATE on the database on PG 13+). Independent of `057` | yes — no table or data touched |
+| `061-event-medals.sql` | Event Completion Medals: `events.medal_enabled` (default false) / `medal_text`, and `event_medal_awards` (one snapshot row per ride + rider, unique `(event_id, user_id)`, `seen_at` for the "new medal" state). Until it runs, rides have no medal and every medal read is empty | yes — additive, `IF NOT EXISTS`, metadata-only column add; new table starts empty |
 | `900-timestamptz-migration.sql` | **every timestamp → `TIMESTAMPTZ`** | ⚠ **rewrites existing data** |
 
 ## Rules

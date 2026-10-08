@@ -11,6 +11,8 @@ const updateEventPromoteMessage = vi.fn();
 const selectUserEmails = vi.fn();
 
 vi.mock("../db/audit/audit.service.js", () => ({ trackAuditEvent: vi.fn() }));
+// A non-creator is checked against event_members for a manager role; here nobody is one.
+vi.mock("../queries/eventManagers.queries.js", () => ({ selectEventMemberRole: async () => null }));
 vi.mock("../queries/user.queries.js", () => ({
   selectUserEmails: (...a: unknown[]) => selectUserEmails(...a),
 }));

@@ -29,7 +29,8 @@ import {
   updateResult,
 } from "../queries/participant.queries.js";
 import { refreshStatsAfterAttendanceChange } from "../statistics/statistics.service.js";
-import { assertOwner, getEventForViewer, type ViewerTier } from "./event.service.js";
+import { awardMedalsForFinishedEvent } from "./eventMedals.service.js";
+import { assertOrganizer, getEventForViewer, type ViewerTier } from "./event.service.js";
 
 /**
  * Owner sees everyone. Otherwise: a rider who is on the list may look — approved/registered
@@ -91,9 +92,10 @@ async function assertRoomForRiders(
   }
 }
 
+/** The creator or one of the ride's managers (event.service.ts assertOrganizer). */
 async function assertOwnerOf(eventId: string, userId: number) {
   const { event } = await getEventForViewer(eventId, userId);
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   return event;
 }
 
@@ -111,7 +113,8 @@ export async function addParticipant(
   },
 ): Promise<EventParticipant> {
   const event = await assertOwnerOf(eventId, userId);
-  await assertRoomForRiders(event, userId, 1);
+  // The rider cap is the creator's entitlement, also when a manager is the one adding.
+  await assertRoomForRiders(event, event.ownerId ?? userId, 1);
   const participant = await insertManualParticipant(eventId, {
     name: input.name,
     email: input.email ?? null,
@@ -142,7 +145,7 @@ export async function addParticipants(
   const event = await assertOwnerOf(eventId, userId);
   // Checked for the whole file at once: importing the first 30 rows of a 60-row spreadsheet
   // and refusing the rest leaves the organizer worse off than refusing outright.
-  await assertRoomForRiders(event, userId, rows.length);
+  await assertRoomForRiders(event, event.ownerId ?? userId, rows.length);
   const created = await insertManualParticipants(
     eventId,
     rows.map((input) => ({
@@ -242,6 +245,9 @@ export async function setAttendance(
   // nothing is needed: the finish hook computes everything from scratch.
   if (event.status === "finished" && updated.userId !== null) {
     await refreshStatsAfterAttendanceChange(eventId, updated.userId);
+    // A rider ticked off after the finish may now qualify for the ride's completion medal.
+    // Add-only and idempotent (an un-tick never takes a medal back); never throws.
+    await awardMedalsForFinishedEvent(eventId);
   }
   return updated;
 }

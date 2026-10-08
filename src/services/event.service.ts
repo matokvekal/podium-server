@@ -57,6 +57,7 @@ import {
   updateEventElevationGain,
   updateEventMeetingPoint,
   updateEventChatEnabled,
+  updateEventMedalConfig,
   updateEventPromoteMessage,
   updateEventPromoteOnly,
   updateEventPaused,
@@ -66,6 +67,7 @@ import {
   upsertParticipant,
   upsertParticipantLastLocation,
 } from "../queries/event.queries.js";
+import { selectEventMemberRole } from "../queries/eventManagers.queries.js";
 import { publishEventRouteIfOwned } from "../queries/eventRoute.queries.js";
 import {
   approveAllWaitingParticipants,
@@ -73,6 +75,7 @@ import {
 } from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
 import { assertRegistrationOpen, canManagePromote } from "../authz/promote.js";
+import { awardMedalsForFinishedEvent, selectMyMedalEventIds } from "./eventMedals.service.js";
 import { assertRideImageAssignable } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 import { prepareTrackSearch } from "./trackSearch.service.js";
@@ -228,10 +231,16 @@ export async function saveLocationBatch(
 // Ownership, CRUD and the status workflow — milestone 2.
 // ---------------------------------------------------------------------------------------
 
-export function assertOwner(event: Event, userId: number): void {
-  if (event.ownerId !== userId) {
-    throw new ApiError(403, "Only the event owner may do this");
-  }
+/**
+ * The ride's organizers: its creator (events.owner_id) or a manager the creator appointed
+ * (event_members role 'operator', eventManagers.service.ts). Both may do every owner action;
+ * the creator check runs first so the common case costs no query.
+ */
+export async function assertOrganizer(event: Event, userId: number): Promise<void> {
+  if (event.ownerId !== null && event.ownerId === userId) return;
+  const role = await selectEventMemberRole(event.id, userId);
+  if (role === "owner" || role === "operator") return;
+  throw new ApiError(403, "Only the ride's organizers may do this");
 }
 
 /** draft -> published -> registration_open -> ready -> live -> finished. Any non-terminal
@@ -275,6 +284,13 @@ export async function isUnriddenAutoFinished(event: Event): Promise<boolean> {
   if (!scheduledEnd || !event.finishedAt) return false;
   if (event.finishedAt.getTime() !== scheduledEnd.getTime()) return false;
   return !(await eventHasRecordedRiding(event.id));
+}
+
+/** A medal switched ON must say something: every rider's medal prints the dedication. */
+function assertMedalHasText(medalEnabled: boolean | undefined, medalText: string | null | undefined) {
+  if (medalEnabled === true && !medalText?.trim()) {
+    throw new ApiError(400, "Write a medal dedication, or turn the completion medal off");
+  }
 }
 
 /**
@@ -357,9 +373,15 @@ export async function createEvent(
     promoteRegistrationMessage?: string | null;
     /** Chat on/off (sql/056). Omitted = enabled. */
     chatEnabled?: boolean;
+    /** Completion medal (sql/061). Omitted = off. */
+    medalEnabled?: boolean;
+    medalText?: string | null;
+    medalColorId?: string | null;
+    medalStyleId?: string | null;
   },
 ): Promise<Event> {
   await assertMayChangePromote(ownerId, input.promoteOnly, input.promoteRegistrationMessage);
+  assertMedalHasText(input.medalEnabled, input.medalText);
   // The sweeper closes a ride a day after its start, so a past date would make the ride vanish
   // into Past within minutes of being created.
   if (input.startsAt && isPastStart(input.startsAt)) {
@@ -445,6 +467,15 @@ export async function createEvent(
   if (input.chatEnabled === false) {
     await updateEventChatEnabled(event.id, false);
   }
+  // Completion medal (sql/061): written only when switched ON — the column defaults to off.
+  if (input.medalEnabled === true) {
+    await updateEventMedalConfig(event.id, {
+      medalEnabled: true,
+      medalText: input.medalText,
+      medalColorId: input.medalColorId,
+      medalStyleId: input.medalStyleId,
+    });
+  }
   // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
   if (input.promoteRegistrationMessage) {
     await updateEventPromoteMessage(event.id, input.promoteRegistrationMessage);
@@ -523,6 +554,10 @@ export async function createEvent(
   return event;
 }
 
+function isMyOrganizedRide(event: EventListItem, userId: number): boolean {
+  return event.ownerId === userId || event.myRole === "owner" || event.myRole === "operator";
+}
+
 export type EventsFilter = "mine" | "joined" | "upcoming" | "live" | "past" | "following";
 
 const UPCOMING_STATUSES: EventStatus[] = ["published", "registration_open", "ready"];
@@ -539,11 +574,30 @@ export async function listMyEvents(
   if (filter === "following") return selectUpcomingEventsForFollowed(userId);
 
   const events = await selectEventsForUser(userId, options);
+  return withMyMedals(userId, filterMyEvents(events, filter, userId));
+}
+
+/** Marks the finished rides the caller holds a completion medal for (sql/061) — ONE batched
+ *  lookup for the whole list. Never throws: on any failure every ride simply has no medal. */
+async function withMyMedals(userId: number, events: EventListItem[]): Promise<EventListItem[]> {
+  const finishedIds = events.filter((e) => e.status === "finished").map((e) => e.id);
+  if (finishedIds.length === 0) return events;
+  const mine = await selectMyMedalEventIds(userId, finishedIds);
+  if (mine.size === 0) return events;
+  return events.map((e) => (mine.has(e.id) ? { ...e, myMedal: true } : e));
+}
+
+function filterMyEvents(
+  events: EventListItem[],
+  filter: EventsFilter,
+  userId: number,
+): EventListItem[] {
   switch (filter) {
+    // "mine" = rides I organize: the ones I created and the ones I was made a manager of.
     case "mine":
-      return events.filter((event) => event.ownerId === userId);
+      return events.filter((event) => isMyOrganizedRide(event, userId));
     case "joined":
-      return events.filter((event) => event.ownerId !== userId);
+      return events.filter((event) => !isMyOrganizedRide(event, userId));
     case "upcoming":
       return events.filter((event) => UPCOMING_STATUSES.includes(event.status));
     case "live":
@@ -661,8 +715,12 @@ export async function updateEventDetails(
   let input = requested;
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   await assertMayChangePromote(userId, input.promoteOnly, input.promoteRegistrationMessage);
+  assertMedalHasText(
+    input.medalEnabled,
+    input.medalText !== undefined ? input.medalText : event.medalText,
+  );
   // Once live, the ride's DETAILS are locked — name, date, place, description. Moving those
   // out from under riders who are already on the road is the thing this guard exists to stop.
   //
@@ -737,10 +795,25 @@ export async function updateEventDetails(
   if (input.promoteRegistrationMessage !== undefined) {
     await updateEventPromoteMessage(eventId, input.promoteRegistrationMessage);
   }
-  // Chat on/off (sql/056) - the owner's setting (assertOwner above). Messages are never touched.
+  // Chat on/off (sql/056) - the organizers' setting (assertOrganizer above). Messages are never touched.
   const wroteChat = input.chatEnabled !== undefined;
   if (input.chatEnabled !== undefined) {
     await updateEventChatEnabled(eventId, input.chatEnabled);
+  }
+  // Completion medal (sql/061) - the organizers' setting, like chat. A finished ride is locked
+  // above (detail fields), so a medal already awarded is never re-worded from here.
+  const wroteMedal =
+    input.medalEnabled !== undefined ||
+    input.medalText !== undefined ||
+    input.medalColorId !== undefined ||
+    input.medalStyleId !== undefined;
+  if (wroteMedal) {
+    await updateEventMedalConfig(eventId, {
+      medalEnabled: input.medalEnabled,
+      medalText: input.medalText,
+      medalColorId: input.medalColorId,
+      medalStyleId: input.medalStyleId,
+    });
   }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
@@ -856,6 +929,7 @@ export async function updateEventDetails(
     wroteMeetingPoint ||
     wrotePromote ||
     wroteChat ||
+    wroteMedal ||
     wroteRidePlan ||
     wroteCountryRegion
   ) {
@@ -877,7 +951,7 @@ export async function changeEventStatus(
 ): Promise<Event> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
 
   // Asking for the state it is already in is a no-op, not an error. Now that POST /events
   // creates a published event, the client's old create-then-publish pair would otherwise 400
@@ -894,8 +968,10 @@ export async function changeEventStatus(
   }
 
   if (nextStatus === "live") {
-    const actor = await buildActor(userId);
-    assertWithinConcurrentLiveEvents(actor, await countLiveEventsForOwner(userId, eventId));
+    // The creator's ceiling, also when one of the ride's managers presses START.
+    const ownerId = event.ownerId ?? userId;
+    const actor = await buildActor(ownerId);
+    assertWithinConcurrentLiveEvents(actor, await countLiveEventsForOwner(ownerId, eventId));
   }
 
   const finishedAt = nextStatus === "finished" ? new Date() : event.finishedAt;
@@ -928,6 +1004,11 @@ export async function changeEventStatus(
     // immediately. Isolated, read-only, and never throws — see refreshStatsForFinishedEvent's
     // own header for why this one call is the entire integration surface with that subsystem.
     await refreshStatsForFinishedEvent(eventId);
+    // Completion medals (sql/061) for every rider who rode it, when the organizer turned the
+    // medal on. Never throws and idempotent — see eventMedals.service.ts.
+    await awardMedalsForFinishedEvent(eventId).catch((err: unknown) => {
+      logger.warn({ err, eventId }, "completion medals: award failed after finish");
+    });
   }
 
   return updated;
@@ -943,7 +1024,7 @@ export function cancelEvent(eventId: string, userId: number): Promise<Event> {
 export async function pauseEvent(eventId: string, userId: number, paused: boolean): Promise<Event> {
   const event = await selectEventById(eventId);
   if (!event) throw new ApiError(404, "Event not found");
-  assertOwner(event, userId);
+  await assertOrganizer(event, userId);
   if (event.status !== "live") {
     throw new ApiError(400, "Only a live event can be paused or resumed");
   }

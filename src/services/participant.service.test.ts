@@ -18,7 +18,7 @@ const updateRegistrationStatus = vi.fn();
 vi.mock("./event.service.js", () => ({
   getEventForViewer: (...a: unknown[]) => getEventForViewer(...a),
   // real ownership rule, inlined so the test does not depend on the module it is stubbing
-  assertOwner: (event: { ownerId: number }, userId: number) => {
+  assertOrganizer: (event: { ownerId: number }, userId: number) => {
     if (event.ownerId !== userId) throw new ApiError(403, "Only the event owner may do this");
   },
 }));

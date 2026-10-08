@@ -9,6 +9,8 @@ const updateEventChatEnabled = vi.fn();
 const updateEventPromoteOnly = vi.fn();
 
 vi.mock("../db/audit/audit.service.js", () => ({ trackAuditEvent: vi.fn() }));
+// A non-creator is checked against event_members for a manager role; here nobody is one.
+vi.mock("../queries/eventManagers.queries.js", () => ({ selectEventMemberRole: async () => null }));
 vi.mock("../queries/event.queries.js", async () => {
   const actual = await vi.importActual<typeof import("../queries/event.queries.js")>(
     "../queries/event.queries.js",
