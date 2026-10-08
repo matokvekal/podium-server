@@ -57,6 +57,7 @@ import {
   updateEventElevationGain,
   updateEventMeetingPoint,
   updateEventChatEnabled,
+  updateEventMedalConfig,
   updateEventPromoteMessage,
   updateEventPromoteOnly,
   updateEventPaused,
@@ -74,6 +75,7 @@ import {
 } from "../queries/participant.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
 import { assertRegistrationOpen, canManagePromote } from "../authz/promote.js";
+import { awardMedalsForFinishedEvent, selectMyMedalEventIds } from "./eventMedals.service.js";
 import { assertRideImageAssignable } from "./rideImages.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 import { prepareTrackSearch } from "./trackSearch.service.js";
@@ -284,6 +286,13 @@ export async function isUnriddenAutoFinished(event: Event): Promise<boolean> {
   return !(await eventHasRecordedRiding(event.id));
 }
 
+/** A medal switched ON must say something: every rider's medal prints the dedication. */
+function assertMedalHasText(medalEnabled: boolean | undefined, medalText: string | null | undefined) {
+  if (medalEnabled === true && !medalText?.trim()) {
+    throw new ApiError(400, "Write a medal dedication, or turn the completion medal off");
+  }
+}
+
 /**
  * PROMOTE is the System Admin's switch. ANY value from anyone else is refused — `false` too —
  * so a client can neither turn it on nor probe or flip it. undefined = the field was not sent.
@@ -364,9 +373,15 @@ export async function createEvent(
     promoteRegistrationMessage?: string | null;
     /** Chat on/off (sql/056). Omitted = enabled. */
     chatEnabled?: boolean;
+    /** Completion medal (sql/061). Omitted = off. */
+    medalEnabled?: boolean;
+    medalText?: string | null;
+    medalColorId?: string | null;
+    medalStyleId?: string | null;
   },
 ): Promise<Event> {
   await assertMayChangePromote(ownerId, input.promoteOnly, input.promoteRegistrationMessage);
+  assertMedalHasText(input.medalEnabled, input.medalText);
   // The sweeper closes a ride a day after its start, so a past date would make the ride vanish
   // into Past within minutes of being created.
   if (input.startsAt && isPastStart(input.startsAt)) {
@@ -451,6 +466,15 @@ export async function createEvent(
   // Chat is written only when switched OFF: the column defaults to true (sql/056).
   if (input.chatEnabled === false) {
     await updateEventChatEnabled(event.id, false);
+  }
+  // Completion medal (sql/061): written only when switched ON — the column defaults to off.
+  if (input.medalEnabled === true) {
+    await updateEventMedalConfig(event.id, {
+      medalEnabled: true,
+      medalText: input.medalText,
+      medalColorId: input.medalColorId,
+      medalStyleId: input.medalStyleId,
+    });
   }
   // The message is kept whatever promoteOnly says (it survives PROMOTE being switched off).
   if (input.promoteRegistrationMessage) {
@@ -550,6 +574,24 @@ export async function listMyEvents(
   if (filter === "following") return selectUpcomingEventsForFollowed(userId);
 
   const events = await selectEventsForUser(userId, options);
+  return withMyMedals(userId, filterMyEvents(events, filter, userId));
+}
+
+/** Marks the finished rides the caller holds a completion medal for (sql/061) — ONE batched
+ *  lookup for the whole list. Never throws: on any failure every ride simply has no medal. */
+async function withMyMedals(userId: number, events: EventListItem[]): Promise<EventListItem[]> {
+  const finishedIds = events.filter((e) => e.status === "finished").map((e) => e.id);
+  if (finishedIds.length === 0) return events;
+  const mine = await selectMyMedalEventIds(userId, finishedIds);
+  if (mine.size === 0) return events;
+  return events.map((e) => (mine.has(e.id) ? { ...e, myMedal: true } : e));
+}
+
+function filterMyEvents(
+  events: EventListItem[],
+  filter: EventsFilter,
+  userId: number,
+): EventListItem[] {
   switch (filter) {
     // "mine" = rides I organize: the ones I created and the ones I was made a manager of.
     case "mine":
@@ -675,6 +717,10 @@ export async function updateEventDetails(
   if (!event) throw new ApiError(404, "Event not found");
   await assertOrganizer(event, userId);
   await assertMayChangePromote(userId, input.promoteOnly, input.promoteRegistrationMessage);
+  assertMedalHasText(
+    input.medalEnabled,
+    input.medalText !== undefined ? input.medalText : event.medalText,
+  );
   // Once live, the ride's DETAILS are locked — name, date, place, description. Moving those
   // out from under riders who are already on the road is the thing this guard exists to stop.
   //
@@ -753,6 +799,21 @@ export async function updateEventDetails(
   const wroteChat = input.chatEnabled !== undefined;
   if (input.chatEnabled !== undefined) {
     await updateEventChatEnabled(eventId, input.chatEnabled);
+  }
+  // Completion medal (sql/061) - the organizers' setting, like chat. A finished ride is locked
+  // above (detail fields), so a medal already awarded is never re-worded from here.
+  const wroteMedal =
+    input.medalEnabled !== undefined ||
+    input.medalText !== undefined ||
+    input.medalColorId !== undefined ||
+    input.medalStyleId !== undefined;
+  if (wroteMedal) {
+    await updateEventMedalConfig(eventId, {
+      medalEnabled: input.medalEnabled,
+      medalText: input.medalText,
+      medalColorId: input.medalColorId,
+      medalStyleId: input.medalStyleId,
+    });
   }
 
   // Ride-plan columns — same pattern. updateEventRidePlan itself skips keys left undefined.
@@ -868,6 +929,7 @@ export async function updateEventDetails(
     wroteMeetingPoint ||
     wrotePromote ||
     wroteChat ||
+    wroteMedal ||
     wroteRidePlan ||
     wroteCountryRegion
   ) {
@@ -942,6 +1004,11 @@ export async function changeEventStatus(
     // immediately. Isolated, read-only, and never throws — see refreshStatsForFinishedEvent's
     // own header for why this one call is the entire integration surface with that subsystem.
     await refreshStatsForFinishedEvent(eventId);
+    // Completion medals (sql/061) for every rider who rode it, when the organizer turned the
+    // medal on. Never throws and idempotent — see eventMedals.service.ts.
+    await awardMedalsForFinishedEvent(eventId).catch((err: unknown) => {
+      logger.warn({ err, eventId }, "completion medals: award failed after finish");
+    });
   }
 
   return updated;

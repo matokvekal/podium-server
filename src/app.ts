@@ -27,6 +27,7 @@ import { rideImagesRouter } from "./routes/rideImages.routes.js";
 import { routeLibraryRouter } from "./routes/routeLibrary.routes.js";
 import { teamRouter } from "./routes/team.routes.js";
 import { userRouter } from "./routes/user.routes.js";
+import { medalsRouter } from "./medals/medals.routes.js";
 import { statisticsRouter } from "./statistics/statistics.routes.js";
 
 export function createApp(): Express {
@@ -211,6 +212,7 @@ export function createApp(): Express {
   app.use("/api/v1/admin/rides", adminRidesRouter);
   app.use("/api/v1/analytics", analyticsRouter);
   app.use("/api/v1/statistics", statisticsRouter);
+  app.use("/api/v1/medals", medalsRouter);
 
   app.use(notFound);
   app.use(errorHandler);

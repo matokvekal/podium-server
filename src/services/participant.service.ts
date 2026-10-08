@@ -29,6 +29,7 @@ import {
   updateResult,
 } from "../queries/participant.queries.js";
 import { refreshStatsAfterAttendanceChange } from "../statistics/statistics.service.js";
+import { awardMedalsForFinishedEvent } from "./eventMedals.service.js";
 import { assertOrganizer, getEventForViewer, type ViewerTier } from "./event.service.js";
 
 /**
@@ -244,6 +245,9 @@ export async function setAttendance(
   // nothing is needed: the finish hook computes everything from scratch.
   if (event.status === "finished" && updated.userId !== null) {
     await refreshStatsAfterAttendanceChange(eventId, updated.userId);
+    // A rider ticked off after the finish may now qualify for the ride's completion medal.
+    // Add-only and idempotent (an un-tick never takes a medal back); never throws.
+    await awardMedalsForFinishedEvent(eventId);
   }
   return updated;
 }

@@ -18,6 +18,9 @@
 //   1. writeParticipantTracks — reduce each rider's raw points to one saved line. Time-critical:
 //      location_points is purge-eligible and participant_tracks is not (track-writer.ts).
 //   2. refreshStatsForFinishedEvent — recompute every rider's Statistics right away.
+//   3. awardMedalsForFinishedEvent — completion medals, when the organizer turned one on.
+// Each pass then ends with catchUpRecentMedalAwards: an idempotent re-run of the medal award for
+// medal rides finished in the last week, so a medal a failed hook missed is still given.
 //
 // SAFE TO RUN ON EVERY NODE, EVERY TIME: the flip is a guarded UPDATE (autoFinishEvent), so two
 // overlapping sweeps — or a sweep racing an organizer — finish a ride exactly once; the loser
@@ -30,6 +33,7 @@
 import { logger } from "../lib/logger.js";
 import { autoFinishEvent, selectEventsDueForAutoFinish } from "../queries/event.queries.js";
 import { refreshStatsForFinishedEvent } from "../statistics/statistics.service.js";
+import { awardMedalsForFinishedEvent, catchUpRecentMedalAwards } from "./eventMedals.service.js";
 import { writeParticipantTracks } from "./track-writer.js";
 
 /** How long after a ride's end it is left for its organizer before the sweeper closes it. */
@@ -60,10 +64,13 @@ export async function runAutoFinishSweep(): Promise<number> {
       );
       await writeParticipantTracks(candidate.id);
       await refreshStatsForFinishedEvent(candidate.id);
+      await awardMedalsForFinishedEvent(candidate.id);
     } catch (err) {
       logger.warn({ err, eventId: candidate.id }, "auto-finish: failed for one ride");
     }
   }
+  // Never throws (eventMedals.service.ts) — and it runs whether or not anything flipped above.
+  await catchUpRecentMedalAwards();
   return finished;
 }
 

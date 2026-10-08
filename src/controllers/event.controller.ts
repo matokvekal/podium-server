@@ -97,6 +97,17 @@ export function toEventSummary(event: Event | EventListItem) {
     // Whether the ride has a chat (sql/056). true for every existing ride. The client hides the
     // chat button, badge and polling when false; the server refuses chat calls regardless.
     chatEnabled: event.chatEnabled ?? true,
+    // Completion medal (sql/061): off for every existing ride. The DEDICATION is never on a
+    // summary: riders first read it on the medal itself, once it is awarded. Only the ride's
+    // organizers get it, on the detail response (toEventDetail), for the edit form to prefill.
+    medalEnabled: event.medalEnabled ?? false,
+    medalText: null as string | null,
+    // The medal's look (colour + style ids) is not a secret; null = the original look.
+    medalColorId: event.medalColorId ?? null,
+    medalStyleId: event.medalStyleId ?? null,
+    // Whether the CALLER holds this ride's medal — only the my-rides list fills it in (one
+    // batched lookup); false everywhere else. Drives the 🏅 on a Past Ride card.
+    myMedal: summary.myMedal ?? false,
     // The ride's country (2-letter) and coarse region key (sql/030-country.sql). The
     // "Browse tracks" picker filters on both; a card shows the region label. `region` null
     // means the organiser has not set one.
@@ -241,6 +252,9 @@ export function toEventDetail(
     meetingPoint: canSeeInfo ? summary.meetingPoint : null,
     requiresBib: event.requiresBib,
     description: canSeeInfo ? event.description : null,
+    // The medal dedication — organizers only (creator or ride manager); every rider gets null
+    // and first reads it on their awarded medal (GET /medals/me).
+    medalText: viewerIsOwner ? (event.medalText ?? null) : null,
     /** What this viewer is: owner | approved | pending | public | stranger. A "pending" reader
      *  is waiting on the organizer, and the fields above are nulled for them on purpose.
      *  @deprecated read `capabilities` instead — see gilad/agents/server-source-of-truth.md. */

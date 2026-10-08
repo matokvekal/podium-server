@@ -226,6 +226,16 @@ export interface Event {
    * the server refuses reads and sends, and no unread count is produced. The messages are kept.
    */
   chatEnabled: boolean;
+  /**
+   * Event Completion Medal (sql/061). Off on every existing ride and on a database without the
+   * columns. When on, every rider who rode it gets one medal when it finishes
+   * (services/eventMedals.service.ts); medalText is the organizer's dedication, ≤30 words.
+   */
+  medalEnabled: boolean;
+  medalText: string | null;
+  /** The medal's background colour / style ids (lib/medal-text.ts); null = the original look. */
+  medalColorId: string | null;
+  medalStyleId: string | null;
 
   /**
    * Organizer-set ride plan — see sql/022-event-ride-plan.sql. None of these can be derived,
