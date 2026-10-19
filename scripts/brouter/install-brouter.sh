@@ -44,7 +44,7 @@ if ! bash "$HERE/preflight-brouter.sh"; then
     echo "pre-flight said NO-GO — nothing was changed."; exit 1
   fi
 fi
-if [ "$REINSTALL" -eq 0 ] && sudo -u "$APP_USER" bash -lc 'pm2 describe brouter' >/dev/null 2>&1; then
+if [ "$REINSTALL" -eq 0 ] && sudo -u "$APP_USER" -H bash -lc 'pm2 describe brouter' >/dev/null 2>&1; then
   echo "pm2 already has a 'brouter' process. Use --reinstall to replace it."; exit 1
 fi
 
@@ -79,7 +79,7 @@ done
 chown -R "$APP_USER:$APP_USER" "$DIR"
 
 echo "== start (pm2 '$APP_USER', 127.0.0.1:$PORT)"
-sudo -u "$APP_USER" bash -lc "
+sudo -u "$APP_USER" -H bash -lc "
   pm2 delete brouter >/dev/null 2>&1 || true
   pm2 start nice --interpreter none --name brouter --cwd '$DIR' --max-memory-restart 700M -- -n 10 '$JAVA_BIN' \
     -Xmx$HEAP -cp 'brouter-$VERSION/brouter-$VERSION-all.jar' \

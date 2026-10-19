@@ -18,7 +18,7 @@ if grep -q '^ROUTING_URL=' /opt/elnino/.env 2>/dev/null; then
   echo "WARNING: /opt/elnino/.env still has ROUTING_URL — remove it and restart the API (see above)."
 fi
 
-sudo -u "$APP_USER" bash -lc 'pm2 delete brouter >/dev/null 2>&1 || true; pm2 save'
+sudo -u "$APP_USER" -H bash -lc 'pm2 delete brouter >/dev/null 2>&1 || true; pm2 save'
 removed_java=0
 if [ -f "$DIR/.java-installed-by-brouter" ]; then
   apt-get remove -y -qq openjdk-21-jre-headless && removed_java=1

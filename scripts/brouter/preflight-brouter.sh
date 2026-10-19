@@ -53,8 +53,8 @@ else
   problems+=("user $APP_USER does not exist")
 fi
 
-if sudo -u "$APP_USER" bash -lc 'command -v pm2' >/dev/null 2>&1; then
-  procs=$(sudo -u "$APP_USER" bash -lc 'pm2 jlist 2>/dev/null' | node -e '
+if sudo -u "$APP_USER" -H bash -lc 'command -v pm2' >/dev/null 2>&1; then
+  procs=$(sudo -u "$APP_USER" -H bash -lc 'pm2 jlist 2>/dev/null' | node -e '
     let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const l=JSON.parse(s);
     console.log(l.map(p=>`${p.name}:${p.pm2_env.status}:${Math.round((p.monit?.memory||0)/1048576)}MB`).join(" "))}catch{console.log("?")}})' 2>/dev/null)
   say "pm2 ($APP_USER)" "${procs:-none}"
