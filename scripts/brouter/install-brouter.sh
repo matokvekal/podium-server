@@ -2,51 +2,97 @@
 # Self-hosted BRouter for the Route Builder (POST /api/v1/route-builder/segment).
 #
 # Why self-hosted: the public brouter.de server publishes no terms allowing other apps to use it
-# from production, so production routes on its own BRouter. Free and open source (MIT), OSM data.
-# It listens on 127.0.0.1 only — nothing new is exposed; the API reaches it through ROUTING_URL.
+# from production. BRouter is free and open source (MIT), on OpenStreetMap data.
 #
-# Run once as root on the API server:   sudo bash scripts/brouter/install-brouter.sh
-# Re-run any time to refresh the map data (weekly upstream; monthly is plenty) — it is idempotent.
-# Then add to /opt/elnino/.env:          ROUTING_URL=http://127.0.0.1:17777
-# and restart the API:                   sudo -u elnino pm2 restart elnino-server --update-env
+# Isolation — what this touches and what it does not:
+#   touches   /opt/brouter (new), one pm2 process "brouter" under the app user, and — only if no
+#             Java 11+ is installed — the package openjdk-21-jre-headless.
+#   never     the ElNino API process, nginx, /opt/elnino/.env, the database, firewall rules.
+#   network   listens on 127.0.0.1:17777 only; nothing new is reachable from outside.
+#   limits    heap 256 MB (~450 MB resident at peak), 2 routing threads, nice 10 so the API
+#             always gets the CPU first.
+# The API does not use BRouter until ROUTING_URL is set — installing changes nothing for riders.
 #
-# Resources: ~75 MB of map data for Israel, ~300-500 MB RAM, a route in about a second.
+#   sudo bash scripts/brouter/preflight-brouter.sh     # read-only GO / NO-GO first
+#   sudo bash scripts/brouter/install-brouter.sh       # install + start + test
+#   sudo bash scripts/brouter/check-brouter.sh         # routing test any time
+#   sudo bash scripts/brouter/uninstall-brouter.sh     # rollback
+#
+# Re-run with --reinstall to refresh the map data (weekly upstream; monthly is plenty).
 
 set -euo pipefail
 
 VERSION="1.7.10"
-DIR="/opt/brouter"
-PORT="17777"
-# 5x5-degree data tiles covering Israel (Eilat to the Golan). Add tiles here to route elsewhere.
+DIR="${BROUTER_DIR:-/opt/brouter}"
+PORT="${BROUTER_PORT:-17777}"
+APP_USER="${APP_USER:-elnino}"
+HEAP="256M"
+THREADS="2"
+# 5x5-degree data tiles covering Israel, Eilat to the Golan. Add tiles to route elsewhere.
 TILES="E30_N25 E30_N30 E35_N25 E35_N30"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
-command -v java >/dev/null || apt-get install -y openjdk-21-jre-headless
-command -v unzip >/dev/null || apt-get install -y unzip
+[ "$(id -u)" -eq 0 ] || { echo "run with sudo"; exit 1; }
+REINSTALL=0
+[ "${1:-}" = "--reinstall" ] && REINSTALL=1
 
-mkdir -p "$DIR/segments4" "$DIR/customprofiles"
-if [ ! -f "$DIR/brouter-$VERSION/brouter-$VERSION-all.jar" ]; then
-  curl -fsSL -o /tmp/brouter.zip "https://github.com/abrensch/brouter/releases/download/v$VERSION/brouter-$VERSION.zip"
-  unzip -q -o /tmp/brouter.zip -d "$DIR"
-  rm -f /tmp/brouter.zip
+echo "== pre-flight"
+if ! bash "$HERE/preflight-brouter.sh"; then
+  if [ "$REINSTALL" -eq 1 ] && ss -ltnp "sport = :$PORT" 2>/dev/null | grep -q java; then
+    echo "(port $PORT is our own BRouter — reinstalling)"
+  else
+    echo "pre-flight said NO-GO — nothing was changed."; exit 1
+  fi
 fi
-for t in $TILES; do
-  curl -fsSL -o "$DIR/segments4/$t.rd5.tmp" "https://brouter.de/brouter/segments4/$t.rd5"
-  mv "$DIR/segments4/$t.rd5.tmp" "$DIR/segments4/$t.rd5"
-done
-chown -R elnino:elnino "$DIR"
+if [ "$REINSTALL" -eq 0 ] && sudo -u "$APP_USER" bash -lc 'pm2 describe brouter' >/dev/null 2>&1; then
+  echo "pm2 already has a 'brouter' process. Use --reinstall to replace it."; exit 1
+fi
 
-# Same process manager as the API (see EL_NINO_PRODUCTION_GUIDE.md, "PM2").
-sudo -u elnino bash -c "
+echo "== java"
+JAVA_INSTALLED_BY_US=0
+if ! command -v java >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y -qq openjdk-21-jre-headless
+  JAVA_INSTALLED_BY_US=1
+fi
+JAVA_BIN="$(command -v java)"
+command -v unzip >/dev/null || apt-get install -y -qq unzip
+"$JAVA_BIN" -version 2>&1 | head -1
+
+echo "== files ($DIR)"
+mkdir -p "$DIR/segments4" "$DIR/customprofiles"
+[ "$JAVA_INSTALLED_BY_US" -eq 1 ] && touch "$DIR/.java-installed-by-brouter"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+if [ ! -f "$DIR/brouter-$VERSION/brouter-$VERSION-all.jar" ]; then
+  curl -fsSL -o "$TMP/brouter.zip" "https://github.com/abrensch/brouter/releases/download/v$VERSION/brouter-$VERSION.zip"
+  unzip -q -o "$TMP/brouter.zip" -d "$DIR"
+fi
+for p in fastbike mtb; do
+  [ -f "$DIR/brouter-$VERSION/profiles2/$p.brf" ] || { echo "profile $p.brf missing from the release"; exit 1; }
+done
+for t in $TILES; do
+  curl -fsSL -o "$TMP/$t.rd5" "https://brouter.de/brouter/segments4/$t.rd5"
+  [ "$(stat -c %s "$TMP/$t.rd5")" -gt 1000000 ] || { echo "$t.rd5 looks truncated"; exit 1; }
+  mv "$TMP/$t.rd5" "$DIR/segments4/$t.rd5"   # replaced whole, never half-written
+done
+chown -R "$APP_USER:$APP_USER" "$DIR"
+
+echo "== start (pm2 '$APP_USER', 127.0.0.1:$PORT)"
+sudo -u "$APP_USER" bash -lc "
   pm2 delete brouter >/dev/null 2>&1 || true
-  pm2 start java --name brouter --cwd '$DIR' -- -Xmx512M -cp 'brouter-$VERSION/brouter-$VERSION-all.jar' \
-    btools.server.RouteServer segments4 'brouter-$VERSION/profiles2' customprofiles $PORT 4 127.0.0.1
+  pm2 start nice --interpreter none --name brouter --cwd '$DIR' --max-memory-restart 700M -- -n 10 '$JAVA_BIN' \
+    -Xmx$HEAP -cp 'brouter-$VERSION/brouter-$VERSION-all.jar' \
+    btools.server.RouteServer segments4 'brouter-$VERSION/profiles2' customprofiles $PORT $THREADS 127.0.0.1
   pm2 save
 "
 
-# Smoke test: Pedaya -> Beit Shemesh, both profiles the Route Builder uses.
-sleep 5
-for p in fastbike mtb; do
-  curl -fsS "http://127.0.0.1:$PORT/brouter?lonlats=34.948,31.853|34.99,31.75&profile=$p&alternativeidx=0&format=geojson" \
-    | grep -o '"track-length": "[0-9]*"' | sed "s/^/$p: /"
+echo "== test"
+for i in $(seq 1 30); do
+  curl -s -o /dev/null "http://127.0.0.1:$PORT/brouter?lonlats=34.95,31.85|34.98,31.80&profile=fastbike&format=geojson" && break
+  sleep 1
 done
-echo "BRouter is up on 127.0.0.1:$PORT. Set ROUTING_URL=http://127.0.0.1:$PORT in /opt/elnino/.env."
+bash "$HERE/check-brouter.sh"
+echo
+echo "Installed. Riders are not affected until /opt/elnino/.env gets ROUTING_URL=http://127.0.0.1:$PORT"
+echo "and the Route Builder server release is deployed. Rollback: sudo bash $HERE/uninstall-brouter.sh"
