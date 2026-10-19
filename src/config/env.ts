@@ -148,6 +148,17 @@ const envSchema = z.object({
   // RIDE_IMAGES_DIR (resolveRouteVideosDir below): unset in production disables the feature,
   // nothing else. Must sit outside the deployment directory; the dev default is gitignored.
   ROUTE_VIDEOS_DIR: z.string().optional(),
+
+  // Route Builder auto-routing (lib/routing/): the base URL of a BRouter server. Production runs
+  // its own on the API host (scripts/brouter/install-brouter.sh → http://127.0.0.1:17777): the
+  // public brouter.de publishes no terms allowing other apps to use it, so it is for development
+  // only. Unset = routing unavailable: GET /route-builder/config says so and the builder shows
+  // it as an error — it never quietly switches to straight lines.
+  ROUTING_URL: z.string().optional(),
+  // BRouter profile names for the builder's two modes. Profiles live on the BRouter server, so
+  // these are config, not code: a self-hosted instance may name them differently.
+  ROUTING_PROFILE_ROAD: z.string().default("fastbike"),
+  ROUTING_PROFILE_MTB: z.string().default("mtb"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -303,6 +314,8 @@ export const env = {
   PROFILE_IMAGES_DIR: resolveProfileImagesDir(data.PROFILE_IMAGES_DIR, data.NODE_ENV),
   RIDE_IMAGES_DIR: resolveRideImagesDir(data.RIDE_IMAGES_DIR, data.NODE_ENV),
   ROUTE_VIDEOS_DIR: resolveRouteVideosDir(data.ROUTE_VIDEOS_DIR, data.NODE_ENV),
+  /** No trailing slash; null when unset — routing off, straight lines only. */
+  ROUTING_URL: data.ROUTING_URL?.trim() ? data.ROUTING_URL.trim().replace(/\/+$/, "") : null,
   ASSETS_DIR: path.resolve(
     data.ASSETS_DIR && data.ASSETS_DIR.trim() !== ""
       ? data.ASSETS_DIR.trim()
@@ -314,6 +327,13 @@ export const env = {
     "",
   ),
 };
+
+if (!env.ROUTING_URL) {
+  console.warn(
+    "ROUTING_URL is not set — the Route Builder cannot route (riders see an error, not a route). " +
+      "Production: run scripts/brouter/install-brouter.sh and set ROUTING_URL=http://127.0.0.1:17777.",
+  );
+}
 
 if (env.GOOGLE_CLIENT_IDS.length === 0) {
   console.warn("GOOGLE_CLIENT_IDS is not set — Google sign-in will reject every request.");

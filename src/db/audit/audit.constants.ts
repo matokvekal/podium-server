@@ -22,7 +22,7 @@ export const AUDIT_EVENT_TYPES = [
   /**
    * A genuinely new route row was stored. `details.source` carries the real
    * `routes.source` value (db/types.ts ROUTE_SOURCES = gpx | tcx | geojson | json | drawn |
-   * copied):
+   * copied | builder):
    *   - routeLibrary.service.ts::createRoute (POST /routes)          -> whatever the client sent
    *   - eventRoute.service.ts::setEventRouteFromPoints (the create   -> always 'drawn': that
    *     form's GPX/CSV import + hand-drawn line share one endpoint       endpoint's body has no
