@@ -2,17 +2,22 @@
 # READ-ONLY pre-flight check for the Route Builder's BRouter. Installs nothing, starts nothing,
 # changes nothing — safe to run on production at any time:
 #
-#   sudo bash scripts/brouter/preflight-brouter.sh
+#   bash scripts/brouter/preflight-brouter.sh        (as the app user; no root needed)
 #
 # Ends with GO or NO-GO and the reasons. install-brouter.sh runs the same checks itself.
 
 set -uo pipefail
 
 PORT="${BROUTER_PORT:-17777}"
-DIR="${BROUTER_DIR:-/opt/brouter}"
 APP_USER="${APP_USER:-elnino}"
+DIR="${BROUTER_DIR:-$(eval echo "~$APP_USER")/brouter}"
 NEED_MEM_MB=600     # BRouter measured ~450 MB peak at -Xmx256M under 6 parallel 120 km routes
 NEED_DISK_MB=300    # ~75 MB map data + ~25 MB release + headroom; + ~200 MB if Java must be installed
+
+# pm2 of the app user's own daemon (never the root one that runs commissaire-api).
+pm2u() {
+  if [ "$(id -un)" = "$APP_USER" ]; then bash -lc "pm2 $*"; else sudo -n -u "$APP_USER" -H bash -lc "pm2 $*"; fi
+}
 
 problems=()
 warnings=()
@@ -44,7 +49,7 @@ if command -v java >/dev/null 2>&1; then
   say "java" "$jv"
   [ "${jmajor:-0}" -lt 11 ] && problems+=("installed Java is too old (${jmajor}); BRouter needs 11+ — install would NOT replace it automatically")
 else
-  say "java" "not installed (install-brouter.sh adds openjdk-21-jre-headless; nothing else uses it)"
+  say "java" "not installed (install-brouter.sh puts a private JRE in $DIR/jre; nothing system-wide)"
 fi
 
 if id "$APP_USER" >/dev/null 2>&1; then
@@ -53,18 +58,18 @@ else
   problems+=("user $APP_USER does not exist")
 fi
 
-if sudo -u "$APP_USER" -H bash -lc 'command -v pm2' >/dev/null 2>&1; then
-  procs=$(sudo -u "$APP_USER" -H bash -lc 'pm2 jlist 2>/dev/null' | node -e '
+if pm2u -v >/dev/null 2>&1; then
+  procs=$(pm2u jlist 2>/dev/null | node -e '
     let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const l=JSON.parse(s);
     console.log(l.map(p=>`${p.name}:${p.pm2_env.status}:${Math.round((p.monit?.memory||0)/1048576)}MB`).join(" "))}catch{console.log("?")}})' 2>/dev/null)
   say "pm2 ($APP_USER)" "${procs:-none}"
   case " $procs " in *" brouter:"*) warnings+=("a pm2 process named 'brouter' already exists (install will refuse unless --reinstall)") ;; esac
 else
-  problems+=("pm2 not found for $APP_USER")
+  problems+=("cannot reach the pm2 of $APP_USER from user $(id -un)")
 fi
 
 if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN; then
-  problems+=("port $PORT is already in use: $(ss -ltnp "sport = :$PORT" 2>/dev/null | tail -1)")
+  problems+=("port $PORT is already in use")
 else
   say "port $PORT (127.0.0.1)" "free"
 fi

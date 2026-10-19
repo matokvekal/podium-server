@@ -5,7 +5,7 @@ name: Ops - BRouter and deployment backup
 # database, nginx, the video worker, or the root pm2 daemon (commissaire-api).
 #
 #   status            read-only: BRouter preflight + elnino pm2 list + whether ROUTING_URL is set
-#   backup            tar of /opt/elnino (dist, .env, package*.json) + /var/www/elnino → /opt/elnino-backups
+#   backup            tar of /opt/elnino (dist, .env, package*.json) + /var/www/elnino → ~/elnino-backups
 #   install           scripts/brouter/install-brouter.sh (runs the preflight; stops on NO-GO)
 #   check             scripts/brouter/check-brouter.sh (Road + Off-road routing test)
 #   set-routing-url   ROUTING_URL=http://127.0.0.1:17777 in /opt/elnino/.env (.env backed up), restart API
@@ -64,48 +64,50 @@ jobs:
             set -euo pipefail
             S=/tmp/elnino-brouter-ops
             ENVF=/opt/elnino/.env
-            BK=/opt/elnino-backups
+            BK="$HOME/elnino-backups"
             URL=http://127.0.0.1:17777
+            # Same rule as deploy-prod.yml: the elnino user's own pm2, never root's.
+            pm2u() { if [ "$(id -un)" = "elnino" ]; then pm2 "$@"; else sudo -n -u elnino -H pm2 "$@"; fi; }
             restart_api() {
-              sudo -u elnino -H pm2 restart elnino-server --update-env
-              sudo -u elnino -H pm2 save
+              pm2u restart elnino-server --update-env
+              pm2u save
               sleep 4
               echo "API: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6500/api/v1/routes) (401 = up)"
             }
-            backup_env() { sudo cp -p "$ENVF" "$ENVF.bak-$(date +%Y%m%d-%H%M%S)"; }
+            backup_env() { cp -p "$ENVF" "$ENVF.bak-$(date +%Y%m%d-%H%M%S)"; }
             echo "host $(hostname) · user $(id -un) · action $ACTION"
             case "$ACTION" in
               status)
-                sudo bash "$S/preflight-brouter.sh" || true
-                echo "--- elnino pm2"; sudo -u elnino -H pm2 ls
-                echo "--- ROUTING_URL in .env: $(sudo grep -c '^ROUTING_URL=' "$ENVF" || true)"
+                bash "$S/preflight-brouter.sh" || true
+                echo "--- elnino pm2"; pm2u ls
+                echo "--- ROUTING_URL in .env: $(grep -c '^ROUTING_URL=' "$ENVF" || true)"
                 echo "--- deployed: dist $(stat -c %y /opt/elnino/dist 2>/dev/null) · client $(ls /var/www/elnino/assets 2>/dev/null | grep -m1 '^index-.*\.js$')"
-                sudo ls -la "$BK" 2>/dev/null || echo "no backups yet"
+                ls -la "$BK" 2>/dev/null || echo "no backups yet"
                 ;;
               backup)
-                sudo mkdir -p "$BK"
+                mkdir -p "$BK"
                 F="$BK/elnino-$(date +%Y%m%d-%H%M%S).tgz"
-                sudo tar -czf "$F" -C / opt/elnino/dist opt/elnino/.env opt/elnino/package.json opt/elnino/package-lock.json var/www/elnino
-                sudo ls -la "$F"; echo "BACKUP=$(basename "$F")"
+                tar -czf "$F" -C / opt/elnino/dist opt/elnino/.env opt/elnino/package.json opt/elnino/package-lock.json var/www/elnino
+                ls -la "$F"; echo "BACKUP=$(basename "$F")"
                 ;;
-              install)   sudo bash "$S/install-brouter.sh" ;;
+              install)   bash "$S/install-brouter.sh" ;;
               check)     bash "$S/check-brouter.sh" ;;
-              uninstall) sudo bash "$S/uninstall-brouter.sh" ;;
+              uninstall) bash "$S/uninstall-brouter.sh" ;;
               set-routing-url)
                 backup_env
-                sudo sed -i '/^ROUTING_URL=/d' "$ENVF"
-                echo "ROUTING_URL=$URL" | sudo tee -a "$ENVF" >/dev/null
-                sudo grep '^ROUTING_URL=' "$ENVF"
+                sed -i '/^ROUTING_URL=/d' "$ENVF"
+                echo "ROUTING_URL=$URL" >> "$ENVF"
+                grep '^ROUTING_URL=' "$ENVF"
                 restart_api
                 ;;
               unset-routing-url)
                 backup_env
-                sudo sed -i '/^ROUTING_URL=/d' "$ENVF"
+                sed -i '/^ROUTING_URL=/d' "$ENVF"
                 restart_api
                 ;;
               restore)
-                [ -n "$BACKUP" ] && [ -f "$BK/$BACKUP" ] || { echo "backup '$BACKUP' not found in $BK"; sudo ls "$BK"; exit 1; }
-                sudo tar -xzf "$BK/$BACKUP" -C /
+                [ -n "$BACKUP" ] && [ -f "$BK/$BACKUP" ] || { echo "backup '$BACKUP' not found in $BK"; ls "$BK"; exit 1; }
+                tar -xzf "$BK/$BACKUP" -C /
                 cd /opt/elnino && npm ci --omit=dev
                 restart_api
                 ;;
