@@ -24,6 +24,7 @@ import { authRouter } from "./routes/auth.routes.js";
 import { eventRouter } from "./routes/event.routes.js";
 import { profileImagesRouter } from "./routes/profileImages.routes.js";
 import { rideImagesRouter } from "./routes/rideImages.routes.js";
+import { routeBuilderRouter } from "./routes/routeBuilder.routes.js";
 import { routeLibraryRouter } from "./routes/routeLibrary.routes.js";
 import { teamRouter } from "./routes/team.routes.js";
 import { userRouter } from "./routes/user.routes.js";
@@ -206,6 +207,7 @@ export function createApp(): Express {
   app.use("/api/v1/ride-images", rideImagesRouter);
   app.use("/api/v1/events", eventRouter);
   app.use("/api/v1/routes", routeLibraryRouter);
+  app.use("/api/v1/route-builder", routeBuilderRouter);
   app.use("/api/v1/teams", teamRouter);
   app.use("/api/v1/admin", adminAnalyticsRouter);
   app.use("/api/v1/admin/ride-images", adminRideImagesRouter);

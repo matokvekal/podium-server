@@ -90,7 +90,7 @@ export async function createRoute(
     "route created",
   );
   // Analytics — a new library route (POST /routes). `input.source` is the real routes.source
-  // value the client sent (ROUTE_SOURCES: gpx | tcx | geojson | json | drawn | copied).
+  // value the client sent (ROUTE_SOURCES: gpx | tcx | geojson | json | drawn | copied | builder).
   // Non-fatal. No rideId — a library route is not attached to a ride at this point.
   void trackAuditEvent({
     type: "ROUTE_CREATED",

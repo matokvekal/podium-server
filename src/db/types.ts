@@ -89,7 +89,16 @@ export type TrailShade = (typeof TRAIL_SHADES)[number];
 export const ROUTE_TYPES = ["road", "gravel", "mtb", "mixed"] as const;
 export type RouteType = (typeof ROUTE_TYPES)[number];
 
-export const ROUTE_SOURCES = ["gpx", "tcx", "geojson", "json", "drawn", "copied"] as const;
+export const ROUTE_SOURCES = [
+  "gpx",
+  "tcx",
+  "geojson",
+  "json",
+  "drawn",
+  "copied",
+  // Drawn in the Route Builder (/build) and saved to the rider's library.
+  "builder",
+] as const;
 export type RouteSource = (typeof ROUTE_SOURCES)[number];
 
 export interface User {
