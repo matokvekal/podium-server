@@ -157,7 +157,11 @@ const envSchema = z.object({
   ROUTING_URL: z.string().optional(),
   // BRouter profile names for the builder's two modes. Profiles live on the BRouter server, so
   // these are config, not code: a self-hosted instance may name them differently.
-  ROUTING_PROFILE_ROAD: z.string().default("fastbike"),
+  // A comma list is tried in order, the next only when the one before finds no route. Road is
+  // "moped" — the roads a car uses, minus motorways — because "fastbike" wanders onto cycle
+  // paths, dirt tracks and footpaths beside the road; "fastbike" stays as the fallback for a
+  // point only a bike path reaches (e.g. inside a moshav whose gate road is closed to traffic).
+  ROUTING_PROFILE_ROAD: z.string().default("moped,fastbike"),
   ROUTING_PROFILE_MTB: z.string().default("mtb"),
 });
 

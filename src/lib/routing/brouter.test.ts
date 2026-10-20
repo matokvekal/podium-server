@@ -90,6 +90,32 @@ describe("BrouterProvider", () => {
     expect(new URL(String(fetchImpl.mock.calls[1][0])).searchParams.get("profile")).toBe("mtb");
   });
 
+  it("tries a comma list in order: the next profile only when the one before finds no route", async () => {
+    const noRoute = () => new Response("target island detected for section 0", { status: 400 });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(noRoute())
+      .mockResolvedValueOnce(jsonResponse(GEOJSON))
+      .mockResolvedValueOnce(jsonResponse(GEOJSON));
+    const profiles = { road: "moped, fastbike", mtb: "mtb" };
+    const provider = new BrouterProvider({ baseUrl: "https://b", profiles, fetchImpl });
+    await expect(provider.calculateSegment(PEDAYA, SOUTH, "road")).resolves.toMatchObject({ distanceM: 9343 });
+    const used = fetchImpl.mock.calls.map((c) => new URL(String(c[0])).searchParams.get("profile"));
+    expect(used).toEqual(["moped", "fastbike"]);
+
+    // A road the first profile does reach never asks the second.
+    await provider.calculateSegment(SOUTH, PEDAYA, "road");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not fall back on an outage — a 503 from the first profile is the answer", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("boom", { status: 500 }));
+    const profiles = { road: "moped,fastbike", mtb: "mtb" };
+    const provider = new BrouterProvider({ baseUrl: "https://b", profiles, fetchImpl });
+    await expect(provider.calculateSegment(PEDAYA, SOUTH, "road")).rejects.toMatchObject({ status: 503 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("maps a no-route 400 to a 422", async () => {
     const fetchImpl = vi
       .fn()

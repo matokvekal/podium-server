@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Routing test for the self-hosted BRouter: the same start/end in Road (fastbike) and Off-road
+# Routing test for the self-hosted BRouter: the same start/end in Road (moped, falling back to fastbike) and Off-road
 # (mtb), with distance, climb, time and how much of each route is paved road vs dirt/track/path.
 # Read-only. Exit 1 if any route fails.
 #
@@ -39,9 +39,9 @@ route() { # name lonlats profile
 }
 
 echo "== BRouter routing test ($BASE)"
-for p in fastbike mtb; do route "Pedaya -> Beit Shemesh" "34.948,31.853|34.99,31.75" $p; done
+for p in moped fastbike mtb; do route "Pedaya -> Beit Shemesh" "34.948,31.853|34.99,31.75" $p; done
 for p in fastbike mtb; do route "Ben Shemen forest" "34.94,31.95|34.99,31.92" $p; done
-for p in fastbike mtb; do route "Tel Aviv -> Jerusalem" "34.78,32.08|35.21,31.77" $p; done
+for p in moped fastbike mtb; do route "Tel Aviv -> Jerusalem" "34.78,32.08|35.21,31.77" $p; done
 route "Eilat (south edge)" "34.95,29.56|35.02,29.70" fastbike
 route "Golan (north edge)" "35.69,32.98|35.75,33.10" mtb
 [ "$fail" -eq 0 ] && echo "OK — both profiles route" || echo "FAILED"
