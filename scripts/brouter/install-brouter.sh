@@ -79,7 +79,7 @@ if [ ! -f "$DIR/brouter-$VERSION/brouter-$VERSION-all.jar" ]; then
   if command -v unzip >/dev/null; then unzip -q -o "$TMP/brouter.zip" -d "$DIR"
   else python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$TMP/brouter.zip" "$DIR"; fi
 fi
-for p in fastbike mtb; do
+for p in moped fastbike mtb; do
   [ -f "$DIR/brouter-$VERSION/profiles2/$p.brf" ] || { echo "profile $p.brf missing from the release"; exit 1; }
 done
 for t in $TILES; do

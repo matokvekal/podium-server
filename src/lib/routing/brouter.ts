@@ -84,7 +84,26 @@ export class BrouterProvider implements RoutingProvider {
     profile: RoutingProfile,
     signal?: AbortSignal,
   ): Promise<RoutedSegment> {
-    const url = brouterUrl(this.options.baseUrl, from, to, this.options.profiles[profile]);
+    // "moped,fastbike": the first profile that finds a route wins; any other failure stops.
+    const names = this.options.profiles[profile].split(",").map((s) => s.trim()).filter(Boolean);
+    for (const [i, name] of names.entries()) {
+      try {
+        return await this.fetchSegment(from, to, name, signal);
+      } catch (err) {
+        const noRoute = err instanceof ApiError && err.status === 422;
+        if (!noRoute || i === names.length - 1) throw err;
+      }
+    }
+    throw new ApiError(503, ROUTING_UNAVAILABLE_MESSAGE);
+  }
+
+  private async fetchSegment(
+    from: GeoPoint,
+    to: GeoPoint,
+    profileName: string,
+    signal?: AbortSignal,
+  ): Promise<RoutedSegment> {
+    const url = brouterUrl(this.options.baseUrl, from, to, profileName);
     const timeout = AbortSignal.timeout(TIMEOUT_MS);
     let response: Response;
     try {

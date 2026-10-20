@@ -12,6 +12,8 @@ name: Ops - BRouter and deployment backup
 #   unset-routing-url remove ROUTING_URL from /opt/elnino/.env (.env backed up), restart API
 #   uninstall         scripts/brouter/uninstall-brouter.sh (rollback of install)
 #   restore           put back a backup made by "backup" (input: backup file name), restart API
+#   api-check         read-only: Road + Off-road through the LIVE API (POST /route-builder/segment on
+#                     127.0.0.1:6500) with a 2-minute test token signed by the server's own key
 
 on:
   workflow_dispatch:
@@ -20,7 +22,7 @@ on:
         description: "What to do"
         required: true
         type: choice
-        options: [status, backup, install, check, set-routing-url, unset-routing-url, uninstall, restore]
+        options: [status, backup, install, check, set-routing-url, unset-routing-url, uninstall, restore, api-check]
       backup:
         description: "restore only: backup file name, e.g. elnino-20261019-120000.tgz"
         required: false
@@ -104,6 +106,25 @@ jobs:
                 backup_env
                 sed -i '/^ROUTING_URL=/d' "$ENVF"
                 restart_api
+                ;;
+              api-check)
+                cd /opt/elnino
+                node --input-type=module -e '
+                  const { signAccessToken } = await import("/opt/elnino/dist/lib/jwt.js");
+                  const token = await signAccessToken({ sub: "0", role: "RIDER", sid: "0" });
+                  const cfg = await (await fetch("http://127.0.0.1:6500/api/v1/route-builder/config")).json();
+                  console.log("config", JSON.stringify(cfg));
+                  for (const profile of ["road", "mtb"]) {
+                    const t0 = Date.now();
+                    const r = await fetch("http://127.0.0.1:6500/api/v1/route-builder/segment", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ from: { lat: 31.853, lng: 34.948 }, to: { lat: 31.75, lng: 34.99 }, profile }),
+                    });
+                    const b = await r.json();
+                    console.log(profile, r.status, `${b.data?.points?.length} points`, `${(b.data?.distanceM / 1000).toFixed(1)} km`, `${Date.now() - t0} ms`, r.ok ? "" : JSON.stringify(b));
+                    if (!r.ok) process.exitCode = 1;
+                  }'
                 ;;
               restore)
                 [ -n "$BACKUP" ] && [ -f "$BK/$BACKUP" ] || { echo "backup '$BACKUP' not found in $BK"; ls "$BK"; exit 1; }
